@@ -32,13 +32,6 @@ option(THREEOHTHREE_BUILD_TOOLS "Build the offline render/verification host" ON)
 option(THREEOHTHREE_BUILD_GUI "Build the plugin window (X11+Cairo, or win32+Cairo)" ON)
 option(THREEOHTHREE_BUILD_VST3 "Also build a VST3 through the clap-wrapper" OFF)
 
-# The offline tools are a development aid for the machine doing the building.
-# Cross-compiled they would not run here and are not part of a release anyway.
-if(CMAKE_CROSSCOMPILING AND THREEOHTHREE_BUILD_TOOLS)
-   set(THREEOHTHREE_BUILD_TOOLS OFF)
-   message(STATUS "ThreeOhThree: cross build, offline tools switched off")
-endif()
-
 # CLAP plugins live in ~/.clap on Linux, so default there rather than /usr/local.
 # A cross build has no business guessing a path on the target machine, so it is
 # left to whoever runs cmake --install (release.sh sets it to a staging tree).
@@ -249,16 +242,43 @@ if(THREEOHTHREE_BUILD_TOOLS)
    target_compile_options(threeohthree-render PRIVATE -Wall -Wextra)
    target_link_libraries(threeohthree-render PRIVATE ${CMAKE_DL_LIBS})
 
+   # Cross-built, the renderer has to stand on its own too. Without this it
+   # imports libstdc++-6.dll and libgcc_s_seh-1.dll, which are not in a wine
+   # prefix or on a clean Windows box, and the process dies before main() with
+   # exit code 53 -- ERROR_BAD_NETPATH, Windows' unhelpful way of saying a
+   # dependent DLL was not found. That is worth avoiding, because a renderer
+   # that runs under wine is how the Windows plugin gets the self-test run
+   # against it at all.
+   if(CMAKE_SYSTEM_NAME STREQUAL "Windows")
+      target_link_options(threeohthree-render PRIVATE
+         "-static-libgcc" "-static-libstdc++"
+         "-Wl,-Bstatic,--whole-archive" "-lwinpthread" "-Wl,--no-whole-archive,-Bdynamic"
+      )
+   endif()
+
+   # The standalone GUI host is X11 only, and on a cross build pkg-config would
+   # answer for this machine rather than the target. The renderer is portable --
+   # it is a CLAP host and nothing more -- so a Windows cross build still gets
+   # that one, which is how the Windows plugin gets its self-test run under wine.
    find_package(PkgConfig QUIET)
-   if(PkgConfig_FOUND)
+   if(PkgConfig_FOUND AND NOT CMAKE_SYSTEM_NAME STREQUAL "Windows")
       pkg_check_modules(GUIHOST_X11 QUIET x11)
    endif()
-   if(GUIHOST_X11_FOUND)
+   if(GUIHOST_X11_FOUND OR CMAKE_SYSTEM_NAME STREQUAL "Windows")
+      # guihost.cpp carries both backends: X11 on Linux, a real win32 window on
+      # Windows. Cross-built it runs under wine, which is the only way the
+      # win32 half of the plugin window gets exercised from here at all.
       add_executable(threeohthree-guihost tools/guihost.cpp)
       target_include_directories(threeohthree-guihost PRIVATE
          "${CLAP_INCLUDE_DIR}" ${GUIHOST_X11_INCLUDE_DIRS})
       target_compile_options(threeohthree-guihost PRIVATE -Wall -Wextra)
       target_link_libraries(threeohthree-guihost PRIVATE ${CMAKE_DL_LIBS} ${GUIHOST_X11_LIBRARIES})
+      if(CMAKE_SYSTEM_NAME STREQUAL "Windows")
+         target_link_options(threeohthree-guihost PRIVATE
+            "-static-libgcc" "-static-libstdc++"
+            "-Wl,-Bstatic,--whole-archive" "-lwinpthread" "-Wl,--no-whole-archive,-Bdynamic"
+         )
+      endif()
    endif()
 endif()
 

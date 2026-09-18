@@ -253,8 +253,19 @@ If the checkout lives anywhere else, point CMake at it explicitly with
 ## Windows and VST3
 
 **ThreeOhThree builds for Windows and as a VST3 as of 0.1.0**, so
-`./release.sh <version>` needs no switches. The Windows binaries have been built
-and checked for their imports, but **never loaded by a DAW**.
+`./release.sh <version>` needs no switches.
+
+**The Windows build can be tested from here, and should be.** Cross-build the
+offline tools as well (`-DTHREEOHTHREE_BUILD_TOOLS=ON`) and both run under wine:
+`threeohthree-render.exe --selftest` puts the Windows plugin through the entire
+suite, and `threeohthree-guihost.exe` opens its real window so the win32 backend
+can be driven and photographed exactly as the X11 one is. That found a genuine
+bug in the forked window and would have found more. The tools need the same
+static link options as the plugin or they die before `main()` with exit code 53
+-- `ERROR_BAD_NETPATH`, Windows' unhelpful way of saying a dependent DLL is
+missing.
+
+wine is not a DAW and not Windows. No DAW has loaded any of this yet.
 
 What it takes, and what a new plugin here has to repeat:
 

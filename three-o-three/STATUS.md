@@ -115,10 +115,25 @@ repository sets itself -- validate by ear first, by measurement second -- and it
 is the top item in `TODO.md`. The four numbers most likely to be off are now
 controls, though, so it is a preference rather than a defect.
 
-**Windows and VST3 are built but not played.** All four binaries -- Linux and
-Windows, CLAP and VST3 -- come out of `./release.sh` and are checked as far as
-this machine can check them: the Linux CLAP passes the full self-test from
-inside the release archive, the Linux VST3 loads and hands over its factory, and
-both Windows binaries import nothing but system DLLs, so they need no MinGW
-runtime beside them. **Neither Windows binary has been loaded by a DAW**, and
-until one has, that is the honest status.
+**Four binaries, and the Windows ones have been run.** CLAP and VST3 for Linux
+and Windows all come out of `./release.sh`. What each has been put through:
+
+| | Checked |
+|---|---|
+| Linux CLAP | the full self-test, from inside the release archive |
+| Linux VST3 | loads, exports `ModuleEntry` and `GetPluginFactory` |
+| Windows CLAP | **the full self-test, 103 checks, 0 failures, under wine**; window opens and draws; the collapsible section resizes through `clap_host_gui::request_resize` |
+| Windows VST3 | loads under wine, exports `InitDll` / `ExitDll` / `GetPluginFactory` |
+
+The Windows renders were compared preset by preset against the Linux ones:
+**the largest difference anywhere is 1 LSB of 32768**, and the worst RMS error is
+95 dB below the signal -- which is mingw's libm rounding differently from
+glibc's, not behaviour. `Oscillator` is the worst of them because it
+self-oscillates, so a last-bit difference compounds in a resonant loop.
+
+Both Windows binaries import nothing but system DLLs, so they need no MinGW
+runtime beside them.
+
+**Still not tested: a real Windows machine, and any DAW on either platform.**
+wine is a good emulator of the API, not proof that Bitwig or Ableton will load
+this.

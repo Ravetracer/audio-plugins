@@ -57,11 +57,13 @@ preset, which exists for exactly this.
   schematic -- so Normal is the machine and the other two are the behaviour he
   describes, reached with a time constant and a charge law. If a real one ever
   turns up to measure, that is where to look first.
-- **Nobody has run the Windows build in a DAW.** It compiles, it links against
-  nothing but system DLLs, and the Linux half of the same release passes the
-  self-test -- but a plugin nobody has loaded is not a plugin that works. The
-  window is the part most likely to be wrong, since the win32 backend has never
-  drawn a frame in anger.
+- **Nobody has run either build in a DAW.** The Windows binaries pass the whole
+  self-test under wine and the window draws and resizes there, which is a lot
+  more than nothing -- but wine emulates the API, it does not prove that Bitwig
+  or Ableton will load the file. A real Windows machine has never seen it.
+  `source ./winetest.env` at the repository root sets up the wine environment
+  this was tested with; the file is untracked because its paths are specific to
+  one machine.
 - **The manual note in section 4 was stale and is fixed.** `make-manual.sh`
   derives the namespace from the CMake project name, not the folder, so it does
   work on `three-o-three`; `./shared/tools/make-manual.sh three-o-three` builds

@@ -234,6 +234,24 @@ int main(int argc, char **argv) {
    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(liveSeconds);
    while (std::chrono::steady_clock::now() < deadline) {
 #if defined(_WIN32)
+      // A resize the plugin asked for, taken the way a DAW takes it. The same
+      // job as the X11 branch below, but the host window's frame has to be
+      // added back: SetWindowPos sizes the whole window and the plugin asked
+      // for a client area.
+      if (gResizeWanted.exchange(false)) {
+         const uint32_t nw = gResizeW.load();
+         const uint32_t nh = gResizeH.load();
+         if (nw && nh && (nw != w || nh != h)) {
+            w = nw;
+            h = nh;
+            RECT want{0, 0, static_cast<LONG>(w), static_cast<LONG>(h)};
+            AdjustWindowRect(&want, WS_OVERLAPPEDWINDOW, FALSE);
+            SetWindowPos(hostWindow, nullptr, 0, 0, want.right - want.left,
+                         want.bottom - want.top, SWP_NOMOVE | SWP_NOZORDER);
+            std::printf("host resize %ux%u\n", w, h);
+            std::fflush(stdout);
+         }
+      }
       MSG msg;
       while (PeekMessageW(&msg, nullptr, 0, 0, PM_REMOVE)) {
          TranslateMessage(&msg);
