@@ -2,7 +2,7 @@
 
 *A monophonic acid bass synthesiser for Linux. CLAP.*
 
-Version 0.3.0
+Version 0.3.1
 
 ---
 
@@ -241,10 +241,11 @@ Sixteen steps across, below the panels.
 - The **OCT** row above it moves a step up to **two octaves either way**. Click
   the top half to step up, the bottom half to step down, one octave a click, as
   far as +2 and −2; the right button puts a step straight back to the middle.
-  One octave fills its half of the box, two reach across the seam, so the row
-  can be read at a glance. The machine had one switch position each way; two is
-  a sequencer feature, and it is what lets a line hold a bass note and a lead in
-  the same sixteen steps.
+  **Up is drawn in the accent green and down in amber**, and one octave fills
+  half the box where two fill most of it — so which way is a colour and how far
+  is a length, and neither has to be worked out from the other. The machine had
+  one switch position each way; two is a sequencer feature, and it is what lets
+  a line hold a bass note and a lead in the same sixteen steps.
 - **SLIDE**, **ACCENT** and **VIB** below. Click or drag.
 - Steps past the pattern's length are greyed; the playing step is lit.
 

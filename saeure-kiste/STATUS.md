@@ -1,10 +1,14 @@
 # SäureKiste -- status
 
-Version 0.3.0. Linux and Windows, CLAP and VST3. 51 parameters, 27 presets,
+Version 0.3.1. Linux and Windows, CLAP and VST3. 51 parameters, 27 presets,
 builds clean, self-test passes with no failures across 143 checks.
 
 Six of seven fixes were confirmed by backing the bug out and watching the suite
 fail; the seventh has no contract to assert. See `TODO.md` §3.
+
+0.3.1 makes the octave lane readable: up is the accent green and down is amber,
+where both directions used to be the same colour and, at two octaves, nearly the
+same shape as well.
 
 0.3.0 adds four things to the sequencer: a **note output port**, so the line can
 be recorded onto another track; **dragging a pattern into the host as a MIDI

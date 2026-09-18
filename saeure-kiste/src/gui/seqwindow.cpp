@@ -2068,6 +2068,20 @@ private:
    // a half of it rather than by hitting a row, so they are the one that has to
    // be big enough to aim at.
    static constexpr double kSeqOctH = 26.0;
+   // The octave lane's second colour, and the only place this window uses a
+   // hue the theme does not carry.
+   //
+   // Up is the accent; down is amber. Direction used to be carried by which
+   // edge the bar was anchored to, and at two octaves the bar is most of the
+   // box either way -- four pixels of blank edge, which is not something
+   // anybody can read at a glance. Colour says which way and length says how
+   // far, so neither has to be inferred from the other, and the length still
+   // says it on its own for anybody who cannot tell the two hues apart.
+   //
+   // Amber at hue 31 against the accent's 82: far enough apart to be told
+   // apart instantly, and still a lamp colour on a dark machine rather than a
+   // warning light.
+   static constexpr Rgb kOctaveDown = {0.961, 0.549, 0.129};
    static constexpr double kSeqOctBoxW = 22.0;
    static constexpr double kSeqRowH = 13.0;  // one semitone
    static constexpr double kSeqLaneH = 16.0; // one flag lane
@@ -2280,14 +2294,15 @@ private:
          cairo_set_line_width(cr, 1.0);
          cairo_stroke(cr);
          if (st.note >= 0 && st.octave != 0) {
-            // One octave fills its half; two reaches across the seam, so the
-            // difference between them is a distance rather than a colour and
-            // can be read at a glance down the row.
+            // Which way, in the colour; how far, in the length. One octave
+            // fills its half of the box, two reach across the seam and leave a
+            // clear third of it empty on the other side, so the edge the bar
+            // grows from stays visible at both distances.
+            const bool up = st.octave > 0;
             const int steps = st.octave > 1 || st.octave < -1 ? 2 : 1;
-            const double h = steps == 2 ? boxH * 0.78 : boxH * 0.5 - 1.5;
-            setColor(cr, t.accent, steps == 2 ? 1.0 : 0.85);
-            roundedRect(cr, bx + 1.5, st.octave > 0 ? by + 1.5 : by + boxH - h - 1.5, boxW - 3.0,
-                        h, 2.0);
+            const double h = steps == 2 ? boxH * 0.62 : boxH * 0.5 - 1.5;
+            setColor(cr, up ? t.accent : kOctaveDown, steps == 2 ? 1.0 : 0.85);
+            roundedRect(cr, bx + 1.5, up ? by + 1.5 : by + boxH - h - 1.5, boxW - 3.0, h, 2.0);
             cairo_fill(cr);
          }
          // The seam between the two halves, so both read as targets even on a

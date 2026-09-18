@@ -133,7 +133,8 @@ The grid below the panels is sixteen steps across:
   click it again to clear it, drag to paint. An accented step is drawn bright.
 - an **octave** lane above it, reaching **two octaves either way**: click the top
   half to step up and the bottom half to step down, one octave a click; the
-  right button centres a step.
+  right button centres a step. Up is drawn in the accent green and down in
+  amber, at half the box for one octave and most of it for two.
 - **slide**, **accent** and **vibrato** lanes below. Click or drag.
 - **CLEAR**, two **shift** buttons that walk the pattern sideways under the bar,
   the **seed** with its - and + buttons, **GEN**, and **MIDI**, which drags the
