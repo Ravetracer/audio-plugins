@@ -154,7 +154,7 @@ tool names and an environment variable from the folder name, and
 ./install.sh --no-selftest
 ```
 
-Four binaries: CLAP and VST3, Linux and Windows. `./release.sh 0.1.0` at the
+Four binaries: CLAP and VST3, Linux and Windows. `./release.sh 0.2.0` at the
 repository root builds all of them and packs the archives with the manual.
 
 Windows is cross-compiled with mingw-w64 against a Cairo built by

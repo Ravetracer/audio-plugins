@@ -1,7 +1,7 @@
 # SäureKiste -- status
 
-Version 0.1.0. Linux, CLAP. 51 parameters, 27 presets, builds clean, self-test
-passes with no failures.
+Version 0.2.0. Linux and Windows, CLAP and VST3. 51 parameters, 27 presets,
+builds clean, self-test passes with no failures.
 
 ## What works
 

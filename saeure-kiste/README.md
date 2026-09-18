@@ -51,14 +51,14 @@ Cairo, both of which are already on any machine that runs a DAW.
 
 ### All four binaries
 
-`./release.sh 0.1.0` at the repository root builds CLAP and VST3 for both Linux
+`./release.sh 0.2.0` at the repository root builds CLAP and VST3 for both Linux
 and Windows and packs them with the manual into `dist/`:
 
 ```
-SaeureKiste-0.1.0/
+SaeureKiste-0.2.0/
 ├── linux/    SaeureKiste/SaeureKiste.clap + presets,  SaeureKiste.vst3
 ├── windows/  SaeureKiste/SaeureKiste.clap + presets,  SaeureKiste.vst3
-├── SaeureKiste-0.1.0-Manual.pdf
+├── SaeureKiste-0.2.0-Manual.pdf
 ├── README.md  LICENSE  INSTALL.txt  BUILD-INFO.txt
 ```
 

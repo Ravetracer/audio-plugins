@@ -49,7 +49,7 @@ audio-plugins/
 
 | # | Plugin | Folder | Status | Platforms | Formats | What it is |
 |---|--------|--------|--------|-----------|---------|------------|
-| 1 | **SäureKiste** | `saeure-kiste/` | 0.1.0 | Linux, Windows | CLAP, VST3 | a Roland TB-303 model, from the 1982 service notes, plus Robin Whittle's Devil Fish modification |
+| 1 | **SäureKiste** | `saeure-kiste/` | 0.2.0 | Linux, Windows | CLAP, VST3 | a Roland TB-303 model, from the 1982 service notes, plus Robin Whittle's Devil Fish modification |
 
 Naming follows the plugin, not a pattern: the CMake project, the installed
 artifact and the display name are CamelCase (`SaeureKiste`), the folder is
@@ -252,7 +252,7 @@ If the checkout lives anywhere else, point CMake at it explicitly with
 
 ## Windows and VST3
 
-**SäureKiste builds for Windows and as a VST3 as of 0.1.0**, so
+**SäureKiste builds for Windows and as a VST3 as of 0.2.0**, so
 `./release.sh <version>` needs no switches.
 
 **The Windows build can be tested from here, and should be.** Cross-build the
@@ -306,7 +306,7 @@ Three things to carry over, all easy to undo by accident:
 
 ```sh
 ./setup-winbuild.sh        # once, and only when a plugin builds for Windows
-./release.sh 0.1.0         # -> dist/audio-plugins-0.1.0.{tar.gz,zip}
+./release.sh 0.2.0         # -> dist/audio-plugins-0.2.0.{tar.gz,zip}
 ```
 
 `release.sh` discovers plugins by looking for subdirectories with a
@@ -323,7 +323,7 @@ whole collection.
 The per-plugin archives carry that plugin's **own** version from its `project()`
 line, not the collection's, because they are downloaded and updated separately.
 
-**This script came from Verdalis unchanged**, and as of 0.1.0 this repository
+**This script came from Verdalis unchanged**, and as of 0.2.0 this repository
 delivers everything it assumes: it builds Windows and VST3 for every plugin, and
 SaeureKiste does both. `--linux-only` and `--no-vst3` are still there for a
 machine without the mingw toolchain or the VST3 checkouts.
@@ -348,7 +348,30 @@ skips the PDF manuals. Offline tools are switched off for release builds
    - `kPluginUrl` = `https://github.com/Ravetracer/audio-plugins`
 6. The version appears twice — `project(... VERSION x.y.z)` in `CMakeLists.txt`
    and `kPluginVersion` in `src/<plugin>.h` — and a `static_assert` fails the
-   build when they disagree. Bump both.
+   build when they disagree. Bump both. See *Versioning* below for which part.
+
+## Versioning
+
+Every plugin is versioned `X.Y.Z`, the same scheme Verdalis uses:
+
+| | |
+|---|---|
+| **X** | major — big changes, a complete new DSP engine, anything that makes it a different instrument |
+| **Y** | new features |
+| **Z** | bug fixes |
+
+Each plugin carries its own version; the collection archive carries its own,
+independently, as the argument to `release.sh`.
+
+**Bump it as part of the work that earns it**, not afterwards. The failure mode
+is quiet and it has already happened here: a pattern bank, a collapsible window,
+the Devil Fish controls and the Windows and VST3 builds all landed on SäureKiste
+without the middle number moving, because nothing in the build or the tests has
+an opinion about it. The version has to be bumped by whoever adds the feature.
+
+Remember both sites — `project()` and `kPluginVersion` — plus the `Version x.y.z`
+line at the top of `STATUS.md` and on the manual's cover, which the
+`static_assert` does *not* cover.
 7. Keep the visual language: the window comes from `shared/`, so the layout
    engine and geometry are automatic. What a plugin writes is its own `Theme`
    (a new accent, with the greys tinted towards it), its panel table, and a
