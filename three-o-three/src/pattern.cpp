@@ -113,6 +113,20 @@ void defaultPattern(uint16_t *steps) {
    }
 }
 
+void clearPattern(uint16_t *steps) {
+   const uint16_t rest = Step().pack();
+   for (int i = 0; i < kMaxSteps; ++i)
+      steps[i] = rest;
+}
+
+bool patternEmpty(const uint16_t *steps) {
+   const uint16_t rest = Step().pack();
+   for (int i = 0; i < kMaxSteps; ++i)
+      if (steps[i] != rest && steps[i] != 0)
+         return false;
+   return true;
+}
+
 void generatePattern(const GenSettings &settings, uint16_t *out) {
 
    const uint32_t seed = settings.seed;
@@ -199,13 +213,13 @@ void generatePattern(const GenSettings &settings, uint16_t *out) {
 std::string formatPattern(const uint16_t *steps) {
    // Column-aligned so the five lines read as a grid in a text editor, which is
    // the only reason to write a pattern as text rather than as a number.
-   auto row = [&](const char *key, int which) {
+   auto row = [](const std::string &key, int which, const uint16_t *pat) {
       std::string line = key;
-      while (line.size() < 12)
+      while (line.size() < 13)
          line += ' ';
       line += "=";
       for (int i = 0; i < kMaxSteps; ++i) {
-         const Step s = Step::unpack(steps[i]);
+         const Step s = Step::unpack(pat[i]);
          const char *tok = ".";
          switch (which) {
          case 0:
@@ -228,54 +242,92 @@ std::string formatPattern(const uint16_t *steps) {
       return line;
    };
 
+   static const char *const kFields[5] = {"pitch", "octave", "slide", "accent", "vibrato"};
+   static const int kWhich[5] = {0, 1, 2 + kLaneSlide, 2 + kLaneAccent, 2 + kLaneVibrato};
+
    std::string out = "\n# Sequence\n";
-   out += row("seq_pitch", 0);
-   out += row("seq_octave", 1);
-   out += row("seq_slide", 2 + kLaneSlide);
-   out += row("seq_accent", 2 + kLaneAccent);
-   out += row("seq_vibrato", 2 + kLaneVibrato);
+   for (int p = 0; p < kMaxPatterns; ++p) {
+      const uint16_t *pat = steps + p * kMaxSteps;
+      // Pattern 1 is always written: a preset with no sequence at all would
+      // silently keep whatever the previous one left behind. The other
+      // sixty-three earn their lines by having something in them.
+      if (p > 0 && patternEmpty(pat))
+         continue;
+      char stem[16];
+      if (p == 0)
+         std::snprintf(stem, sizeof(stem), "seq_");
+      else
+         std::snprintf(stem, sizeof(stem), "seq%d_", p + 1);
+      if (p > 0) {
+         char header[32];
+         std::snprintf(header, sizeof(header), "# Pattern %d\n", p + 1);
+         out += header;
+      }
+      for (int f = 0; f < 5; ++f)
+         out += row(std::string(stem) + kFields[f], kWhich[f], pat);
+   }
    return out;
 }
 
 bool parsePatternLine(const std::string &key, const std::string &value, PatternData &out) {
+   // "seq_pitch" is pattern 1; "seq7_pitch" is pattern 7. The number is where a
+   // key stops being the old format and starts being the bank's.
+   if (key.compare(0, 3, "seq") != 0)
+      return false;
+   size_t i = 3;
+   int index = 0;
+   while (i < key.size() && key[i] >= '0' && key[i] <= '9') {
+      index = index * 10 + (key[i] - '0');
+      ++i;
+      if (index > kMaxPatterns)
+         return false;
+   }
+   if (i >= key.size() || key[i] != '_')
+      return false;
+   // A bare "seq_" is pattern 1; "seq1_" says the same thing out loud.
+   const int pattern = index == 0 ? 0 : index - 1;
+   const std::string field = key.substr(i + 1);
+
    int which = -1;
-   if (key == "seq_pitch")
+   if (field == "pitch")
       which = 0;
-   else if (key == "seq_octave")
+   else if (field == "octave")
       which = 1;
-   else if (key == "seq_slide")
+   else if (field == "slide")
       which = 2 + kLaneSlide;
-   else if (key == "seq_accent")
+   else if (field == "accent")
       which = 2 + kLaneAccent;
-   else if (key == "seq_vibrato")
+   else if (field == "vibrato")
       which = 2 + kLaneVibrato;
    else
       return false;
 
-   // The first pattern line seen starts from an empty pattern rather than from
-   // whatever was there, so a preset that gives only some of the five lines
-   // still describes exactly what it means.
+   // The first pattern line seen empties the whole bank rather than only the
+   // pattern it names, so a preset that gives three patterns describes exactly
+   // three and does not inherit the other sixty-one from whatever was loaded
+   // before it.
    if (!out.present) {
-      for (int i = 0; i < kMaxSteps; ++i)
-         out.steps[i] = Step().pack();
+      for (int p = 0; p < kMaxPatterns; ++p)
+         clearPattern(out.pattern(p));
       out.present = true;
    }
 
+   uint16_t *pat = out.pattern(pattern);
    const std::vector<std::string> t = tokens(value);
-   for (int i = 0; i < kMaxSteps && i < static_cast<int>(t.size()); ++i) {
-      Step s = Step::unpack(out.steps[i]);
+   for (int n = 0; n < kMaxSteps && n < static_cast<int>(t.size()); ++n) {
+      Step s = Step::unpack(pat[n]);
       switch (which) {
       case 0:
-         s.note = noteFromToken(t[i]);
+         s.note = noteFromToken(t[n]);
          break;
       case 1:
-         s.octave = octaveFromToken(t[i]);
+         s.octave = octaveFromToken(t[n]);
          break;
       default:
-         s.setFlag(which - 2, flagFromToken(t[i]));
+         s.setFlag(which - 2, flagFromToken(t[n]));
          break;
       }
-      out.steps[i] = s.pack();
+      pat[n] = s.pack();
    }
    return true;
 }

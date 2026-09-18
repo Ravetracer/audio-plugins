@@ -27,6 +27,7 @@
 #include "plugincore/gui/toolkit.h"
 #include "plugincore/params.h"
 
+#include "gui/gui.h"
 #include "pattern.h"
 
 namespace threeohthree {
@@ -66,12 +67,25 @@ struct Theme {
 // One parameter's place in a panel's grid. A cell either holds a knob or, for
 // enum parameters, a chip that is clicked on its left or right half to step
 // through the choices.
+//
+// `half` is how two enum chips share one column: a chip is 22 pixels tall in a
+// 96 pixel cell, so a pair of them fits where one knob goes and a panel that
+// would otherwise be one column too wide for its row does not have to be.
+// 0 is the whole cell, 1 the top half, 2 the bottom.
 struct Cell {
    uint32_t param;
    int col;
    int row;
    int span;
+   int half;
 };
+
+// Set on a parameter in a panel's table to say that it shares its column with
+// the entry beside it. They come in pairs -- the first is drawn in the top half
+// of the cell, the second in the bottom -- and only enum parameters may be
+// stacked, because only a chip is short enough.
+constexpr uint32_t kStacked = 0x80000000u;
+constexpr uint32_t kParamMask = 0x7FFFFFFFu;
 
 struct PanelSpec {
    const char *title;
@@ -98,6 +112,11 @@ constexpr double kMenuPad = 4.0;
 constexpr double kKnobR = 21.0;
 constexpr double kArcStart = 0.75 * 3.14159265358979323846;
 constexpr double kArcSweep = 1.5 * 3.14159265358979323846;
+
+// The step grid's height in design pixels. A plugin has to know it to work out
+// how tall its window is; the window checks this number against the parts the
+// grid is made of, so the two cannot drift apart.
+constexpr int kSeqPaneHeight = 279;
 
 // Compile-time layout checks a plugin can run over its own panel table. Kept
 // here so every plugin gets the same ones; kept constexpr so a layout mistake
@@ -175,11 +194,10 @@ struct WindowSpec {
    const char *subtitle; // e.g. "SYNTHETIC RAIN INSTRUMENT", drawn right-aligned
    const char *version;  // the plugin's kPluginVersion
 
-   // The activity meter counts these, e.g. "droplets", "shocks".
-   const char *voiceNoun;
-   // A second count shown beside it, e.g. "flashes". Null if the plugin has
-   // no discrete events.
-   const char *eventNoun;
+   // This window has no activity meter -- the shared one's two nouns went with
+   // it. What the instrument is doing is in the header's filter curve and in
+   // the sequencer's playhead, and a bar chart of one voice was never telling
+   // anybody anything the rest of the window did not.
 
    Theme theme;
 
@@ -210,6 +228,25 @@ struct WindowSpec {
    // leaves it out and the window is the shared one's layout exactly.
    PatternAccess *pattern;
    int patternSteps;   // how many columns to draw, normally kMaxSteps
+   int patternCount;   // how many patterns the bank grid offers, normally kMaxPatterns
+
+   // The three bank parameters. They are ordinary parameters -- automatable,
+   // saved in presets -- but they are drawn beside the grid rather than on a
+   // panel, because that is where they are used.
+   uint32_t patternParam;
+   uint32_t chainModeParam;
+   uint32_t chainLengthParam;
+
+   // The collapsible section. Rows from `advancedRow` on are drawn below the
+   // preset bar and only while the section is open; the window is `windowH`
+   // tall closed and `windowExpandedH` open.
+   int advancedRow;
+   const char *advancedLabel;
+   int windowExpandedH;
+
+   // How the window asks the host to resize it, and where the open/closed
+   // state is kept. Null means the section cannot be opened at all.
+   WindowHost *host;
 };
 
 // Creates the window. Returns nullptr if no X display could be opened. `spec`

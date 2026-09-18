@@ -21,31 +21,44 @@ namespace {
 //
 // Cell and panel sizes are the suite's (plugincore/gui/window.h). The shape is
 // not: this is the widest-for-its-height window of the lot, because the machine
-// it models is a wide, shallow box with one row of knobs across it, and a
-// fourteen-control instrument has no business being tall.
-constexpr int kContentW = 1100;
-// The panels, then the step grid, then the preset bar. The grid's height is
-// fixed by seqPaneHeight() in the forked window; this has to leave room for it.
-constexpr int kWindowH = 950;
+// it models is a wide, shallow box with one row of knobs across it.
+//
+// The width is set by the widest row, which is the sequencer beside the
+// generator. The height is set twice, because the window has two of them: the
+// ten mods and the three panels that go with them live in a section that opens
+// and closes, and a closed window is the page anybody actually plays from.
+constexpr int kContentW = 1180;
 
 // -------------------------------------------------------------------- panels
 //
 // In signal order, which on this instrument is also the order of the knobs on
 // the original front panel: the oscillator, the filter and its envelope, then
-// the accent that overrides both of them.
+// the drive and the output. What is not on the front panel -- the mods, and the
+// three circuits nobody re-tunes twice in a session -- is in the collapsible
+// half below the preset bar.
 constexpr uint32_t kVcoParams[] = {kParamWaveform, kParamTuning};
-constexpr uint32_t kVcfParams[] = {kParamCutoff, kParamResonance, kParamEnvMod, kParamDecay,
-                                   kParamTracking};
-constexpr uint32_t kAccentParams[] = {kParamAccent, kParamAccentThreshold, kParamAccentDecay};
+constexpr uint32_t kVcfParams[] = {kParamCutoff,  kParamResonance, kParamEnvMod,  kParamDecay,
+                                   kParamTracking, kParamOverdrive, kParamFilterFM};
+// Sweep Speed and Accent Hold are both chips, so they share a column.
+constexpr uint32_t kAccentParams[] = {kParamAccent, kParamAccentThreshold, kParamAccentDecay,
+                                      kParamSweepSpeed | kStacked, kParamAccentHold | kStacked};
 constexpr uint32_t kSlideParams[] = {kParamSlideTime};
-constexpr uint32_t kDriveParams[] = {kParamDrive, kParamTone};
+constexpr uint32_t kDriveParams[] = {kParamDrive, kParamTone, kParamMuffler};
 constexpr uint32_t kOutParams[] = {kParamVolume};
+// The volume envelope. Nothing on the machine reaches it at all -- its decay is
+// fixed by R123 and C42 -- so the whole panel is the Devil Fish's.
+constexpr uint32_t kAmpParams[] = {kParamSoftAttack, kParamAmpDecay, kParamAmpSustain};
 constexpr uint32_t kSeqParams[] = {kParamMode, kParamSeqRate, kParamSeqSteps, kParamGate,
                                    kParamSwing};
 constexpr uint32_t kVibParams[] = {kParamVibDepth, kParamVibRate, kParamVibDelay};
-constexpr uint32_t kRandParams[] = {kParamRandSeed,   kParamRandScale,  kParamRandRoot,
-                                    kParamRandNotes,  kParamRandAccent, kParamRandSlide,
-                                    kParamRandOctave, kParamRandVibrato};
+// Scale and Root are stacked in one column: two chips fit where one knob goes,
+// and without that the generator is one column too wide to sit beside the
+// sequencer on a row this window can afford.
+constexpr uint32_t kRandParams[] = {
+   kParamRandSeed,    kParamRandScale | kStacked, kParamRandRoot | kStacked,
+   kParamRandNotes,   kParamRandAccent,           kParamRandSlide,
+   kParamRandOctave,  kParamRandVibrato,
+};
 // The mods. Ten numbers the schematic does not give, in the order they act:
 // the filter's envelope first, then the accent, then the two shapes and the
 // two limits, then the machine's own unsteadiness.
@@ -57,29 +70,32 @@ constexpr uint32_t kModParams[] = {
 #define PANEL(title, cols, rows, arr)                                                              \
    { title, cols, rows, arr, static_cast<int>(sizeof(arr) / sizeof(arr[0])) }
 
-// The order here is the order the rows are cut out of, so MODS sits in the
-// middle: the activity meter fills whatever is left of the *last* row, and a
-// last row of ten knobs leaves it a sliver with its two labels drawn on top of
-// each other.
+// The first four panels are the window that opens with the plugin; the last
+// four are the section behind the ADVANCED button.
 constexpr PanelSpec kPanelSpecs[] = {
-   PANEL("VCO", 2, 1, kVcoParams),         PANEL("VCF", 5, 1, kVcfParams),
-   PANEL("ACCENT", 3, 1, kAccentParams),   PANEL("SLIDE", 1, 1, kSlideParams),
-   PANEL("MODS", 10, 1, kModParams),       PANEL("DRIVE", 2, 1, kDriveParams),
-   PANEL("SEQUENCER", 5, 1, kSeqParams),   PANEL("VIBRATO", 3, 1, kVibParams),
-   PANEL("OUTPUT", 1, 1, kOutParams),      PANEL("GENERATOR", 8, 1, kRandParams),
+   PANEL("VCO", 2, 1, kVcoParams),        PANEL("VCF", 7, 1, kVcfParams),
+   PANEL("DRIVE", 3, 1, kDriveParams),    PANEL("OUTPUT", 1, 1, kOutParams),
+   PANEL("SEQUENCER", 5, 1, kSeqParams),  PANEL("GENERATOR", 7, 1, kRandParams),
+   PANEL("MODS", 10, 1, kModParams),      PANEL("SLIDE", 1, 1, kSlideParams),
+   PANEL("ACCENT", 4, 1, kAccentParams),  PANEL("VIBRATO", 3, 1, kVibParams),
+   PANEL("AMP", 3, 1, kAmpParams),
 };
 #undef PANEL
 
 constexpr int kNumPanels = static_cast<int>(sizeof(kPanelSpecs) / sizeof(kPanelSpecs[0]));
 
-// Which panels share a row, in order. The activity meter fills what is left of
-// the last row.
-// Three rows. The mods get one to themselves rather than sharing: crowded in
-// beside the others they left the activity meter a 76 pixel slot and its two
-// labels drew on top of each other.
-constexpr int kRowStart[] = {0, 4, 6, 9};
-constexpr int kRowCount[] = {4, 2, 3, 1};
+// Which panels share a row, in order.
+constexpr int kRowStart[] = {0, 4, 6, 8};
+constexpr int kRowCount[] = {4, 2, 2, 3};
 constexpr int kNumRows = 4;
+// Rows from here on are the collapsible section, drawn below the preset bar.
+constexpr int kAdvancedRow = 2;
+
+// The three bank parameters are not on any panel. They are drawn beside the
+// step grid, where they are used, and they are named here so the check that
+// every parameter has a home still counts them.
+constexpr uint32_t kPaneParams[] = {kParamPattern, kParamChainMode, kParamChainLength};
+constexpr int kNumPaneParams = static_cast<int>(sizeof(kPaneParams) / sizeof(kPaneParams[0]));
 
 // The layout is a table, and a table is easy to break by adding a parameter to
 // a panel that has no room for it, or by forgetting to put it on a panel at
@@ -92,22 +108,52 @@ constexpr int rowWidth(int row) {
    return w;
 }
 
-constexpr int contentBottom() {
-   int y = kHeaderH + kGap;
-   for (int row = 0; row < kNumRows; ++row) {
-      int h = 0;
-      for (int i = 0; i < kRowCount[row]; ++i) {
-         const int ph = panelHeight(kPanelSpecs[kRowStart[row] + i]);
-         h = ph > h ? ph : h;
-      }
-      y += h + kGap;
+constexpr int rowHeight(int row) {
+   int h = 0;
+   for (int i = 0; i < kRowCount[row]; ++i) {
+      const int ph = panelHeight(kPanelSpecs[kRowStart[row] + i]);
+      h = ph > h ? ph : h;
    }
-   return y;
+   return h;
+}
+
+// Mirrors buildLayout() in the window: the always-visible rows, the step grid,
+// the preset bar, then -- only when the section is open -- the rest of the rows,
+// and the help line under all of it.
+constexpr int windowHeight(bool expanded) {
+   int y = kHeaderH + kGap;
+   for (int row = 0; row < kAdvancedRow; ++row)
+      y += rowHeight(row) + kGap;
+   y += kSeqPaneHeight + kGap;
+   y += 2 + kBarH + 6;
+   if (expanded)
+      for (int row = kAdvancedRow; row < kNumRows; ++row)
+         y += rowHeight(row) + kGap;
+   return y - 2 + kHelpH + 8;
+}
+
+constexpr int kWindowH = windowHeight(false);
+constexpr int kWindowExpandedH = windowHeight(true);
+
+// How many columns a panel's parameters take up. A stacked pair shares one.
+constexpr int panelColumnsUsed(const PanelSpec &s) {
+   int n = 0;
+   bool top = false;
+   for (int i = 0; i < s.count; ++i) {
+      const bool stack = (s.params[i] & kStacked) != 0;
+      if (stack && top) {
+         top = false;
+         continue;
+      }
+      top = stack;
+      ++n;
+   }
+   return n;
 }
 
 constexpr bool everyPanelHoldsItsParams() {
    for (int i = 0; i < kNumPanels; ++i)
-      if (kPanelSpecs[i].cols * kPanelSpecs[i].rows < kPanelSpecs[i].count)
+      if (kPanelSpecs[i].cols * kPanelSpecs[i].rows < panelColumnsUsed(kPanelSpecs[i]))
          return false;
    return true;
 }
@@ -128,14 +174,15 @@ constexpr bool everyPanelIsOnARow() {
 
 static_assert(everyPanelIsOnARow(), "kRowStart / kRowCount do not cover every panel");
 static_assert(everyPanelHoldsItsParams(), "a panel has more parameters than it has cells");
-static_assert(placedParams() == static_cast<int>(kNumParams),
-              "every parameter must appear on exactly one panel");
+static_assert(placedParams() + kNumPaneParams == static_cast<int>(kNumParams),
+              "every parameter must be on exactly one panel or in kPaneParams");
 static_assert(rowWidth(0) <= kContentW, "row 0 is wider than the window");
 static_assert(rowWidth(1) <= kContentW, "row 1 is wider than the window");
 static_assert(rowWidth(2) <= kContentW, "row 2 is wider than the window");
 static_assert(rowWidth(3) <= kContentW, "row 3 is wider than the window");
-static_assert(contentBottom() + 2 + kBarH + 24 <= kWindowH,
-              "the window is too short for its panels");
+static_assert(kAdvancedRow > 0 && kAdvancedRow < kNumRows,
+              "the collapsible section must be some but not all of the rows");
+static_assert(kWindowExpandedH > kWindowH, "opening the section has to make the window taller");
 
 // --------------------------------------------------------------------- theme
 //
@@ -334,8 +381,6 @@ const WindowSpec kSpec = {
    /* wordmarkSecond */ "OhThree",
    /* subtitle       */ "MONOPHONIC ACID BASS",
    /* version        */ kPluginVersion,
-   /* voiceNoun      */ "voice",
-   /* eventNoun      */ "notes",
    /* theme          */ kTheme,
    /* panels         */ kPanelSpecs,
    /* panelCount     */ kNumPanels,
@@ -353,14 +398,23 @@ const WindowSpec kSpec = {
    /* ornament       */ &gFilterCurve,
    /* pattern        */ nullptr, // filled in by createGui: it is the plugin
    /* patternSteps   */ kMaxSteps,
+   /* patternCount   */ kMaxPatterns,
+   /* patternParam   */ kParamPattern,
+   /* chainModeParam */ kParamChainMode,
+   /* chainLengthPar */ kParamChainLength,
+   /* advancedRow    */ kAdvancedRow,
+   /* advancedLabel  */ "ADVANCED",
+   /* windowExpandedH*/ kWindowExpandedH,
+   /* host           */ nullptr, // filled in by createGui: it is the plugin too
 };
 
 } // namespace
 
-Gui *createGui(GuiDelegate &delegate, PatternAccess &pattern) {
+Gui *createGui(GuiDelegate &delegate, PatternAccess &pattern, WindowHost &host) {
    static WindowSpec spec = kSpec;
    spec.params = paramTable();
    spec.pattern = &pattern;
+   spec.host = &host;
    return createWindow(delegate, spec);
 }
 

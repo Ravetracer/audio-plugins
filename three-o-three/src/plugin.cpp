@@ -50,22 +50,50 @@ constexpr uint32_t kStateMagic = 0x33303354u; // 'T303' little-endian
 // Version 2 appends the sixteen-step pattern after the parameter block. A
 // version 1 blob simply stops before it, and the pattern keeps its default,
 // which is what a project saved before the sequencer existed should do.
-constexpr uint32_t kStateVersion = 2;
+//
+// Version 3 appends the other sixty-three patterns of the bank and the one bit
+// of window state worth keeping -- whether the collapsible panel section is
+// open. A version 2 blob still loads: its one pattern becomes pattern 1 and the
+// rest of the bank keeps its (empty) default.
+//
+// Version 4 changes no layout at all. It exists because four parameters had
+// their ranges widened for the Devil Fish controls, and a blob stores the *raw*
+// host value of each -- which for a logarithmic parameter is a position on its
+// own curve, not a frequency. Widening the curve therefore moves every saved
+// value unless the old position is converted, and a project saved before this
+// would come back with the wrong cutoff. Preset files are safe either way:
+// they are written in real units. See migrateRanges().
+constexpr uint32_t kStateVersion = 4;
+
+// What those four parameters used to span, so an older blob can be read with
+// the mapping it was written under.
+struct OldRange {
+   uint32_t id;
+   bool logarithmic;
+   double lo;
+   double hi;
+};
 
 } // namespace
 
 #ifdef THREEOHTHREE_WITH_GUI
-class ThreeOhThreePlugin final : public GuiDelegate, public PatternAccess {
+class ThreeOhThreePlugin final : public GuiDelegate, public PatternAccess, public WindowHost {
 #else
 class ThreeOhThreePlugin : public PatternAccess {
 #endif
 public:
    explicit ThreeOhThreePlugin(const clap_host_t *host) : mHost(host) {
       {
+         // Pattern 1 shows what the instrument does; the other sixty-three
+         // start empty, because a bank of sixty-four copies of the same line
+         // would only have to be cleared before it could be used.
          uint16_t seed[kMaxSteps];
          defaultPattern(seed);
-         for (int i = 0; i < kMaxSteps; ++i)
-            mPattern[i].store(seed[i], std::memory_order_relaxed);
+         uint16_t rests[kMaxSteps];
+         clearPattern(rests);
+         for (int p = 0; p < kMaxPatterns; ++p)
+            for (int i = 0; i < kMaxSteps; ++i)
+               mPattern[p][i].store(p == 0 ? seed[i] : rests[i], std::memory_order_relaxed);
       }
       for (uint32_t i = 0; i < kNumParams; ++i) {
          mValues[i].store(paramTable()[i].def, std::memory_order_relaxed);
@@ -180,6 +208,19 @@ private:
       p.vibratoCents = static_cast<float>(realValue(kParamVibDepth));
       p.vibratoHz = static_cast<float>(realValue(kParamVibRate));
       p.vibratoDelaySec = static_cast<float>(realValue(kParamVibDelay)) * 0.001f;
+
+      // The Devil Fish. Overdrive is written in dB about the machine's own
+      // level, so the bottom of its travel is silence rather than a very small
+      // number: at -60 dB the oscillator is gone, which is the setting that
+      // leaves a self-oscillating filter on its own.
+      p.oscDrive = dbToGain(static_cast<float>(realValue(kParamOverdrive)));
+      p.filterFm = static_cast<float>(realValue(kParamFilterFM));
+      p.muffler = static_cast<int>(realValue(kParamMuffler));
+      p.softAttackSec = static_cast<float>(realValue(kParamSoftAttack)) * 0.001f;
+      p.ampDecaySec = static_cast<float>(realValue(kParamAmpDecay)) * 0.001f;
+      p.ampSustain = static_cast<float>(realValue(kParamAmpSustain));
+      p.sweepSpeed = static_cast<int>(realValue(kParamSweepSpeed));
+      p.accentHold = static_cast<int>(realValue(kParamAccentHold)) != 0;
 
       mEngine.setParams(p);
    }
@@ -323,12 +364,18 @@ private:
          blob.append(reinterpret_cast<const char *>(&id), sizeof(id));
          blob.append(reinterpret_cast<const char *>(&v), sizeof(v));
       }
-      // The pattern, which is not in the parameter table: sixteen packed
-      // words after the parameters. See pattern.h for why it is not.
-      for (int i = 0; i < kMaxSteps; ++i) {
-         const uint16_t packed = plug->mPattern[i].load(std::memory_order_relaxed);
-         blob.append(reinterpret_cast<const char *>(&packed), sizeof(packed));
+      // The bank, which is not in the parameter table: sixty-four patterns of
+      // sixteen packed words after the parameters. See pattern.h for why it is
+      // not. Pattern 1 comes first, so the first sixteen words are exactly
+      // what a version 2 blob held.
+      for (int pat = 0; pat < kMaxPatterns; ++pat) {
+         for (int i = 0; i < kMaxSteps; ++i) {
+            const uint16_t packed = plug->mPattern[pat][i].load(std::memory_order_relaxed);
+            blob.append(reinterpret_cast<const char *>(&packed), sizeof(packed));
+         }
       }
+      const uint8_t advanced = plug->mAdvancedOpen.load(std::memory_order_relaxed) ? 1u : 0u;
+      blob.append(reinterpret_cast<const char *>(&advanced), sizeof(advanced));
 
       size_t written = 0;
       while (written < blob.size()) {
@@ -351,6 +398,32 @@ private:
          got += static_cast<size_t>(n);
       }
       return true;
+   }
+
+   // Converts the four widened parameters from the mapping a version 3 or older
+   // blob was written under to the current one, by way of the real value both
+   // agree on. Anything outside the new range is clamped rather than dropped;
+   // none of the four can be, because every old range is inside its new one.
+   static void migrateRanges(ThreeOhThreePlugin *plug) {
+      static const OldRange kOld[] = {
+         {kParamCutoff, true, 100.0, 2500.0},
+         {kParamDecay, true, 200.0, 2500.0},
+         {kParamSlideTime, true, 10.0, 300.0},
+         // Tracking is not in this list on purpose. Its maximum went from 100 %
+         // to 200 %, but it stayed a percent parameter, so the stored value
+         // still means the same thing and converting it would be the bug.
+      };
+      for (const OldRange &o : kOld) {
+         const ParamDesc *d = paramById(o.id);
+         if (!d)
+            continue;
+         const double raw = plug->mValues[o.id].load(std::memory_order_relaxed);
+         const double real = o.logarithmic
+                                ? o.lo * std::pow(o.hi / o.lo, clampv(raw, 0.0, 1.0))
+                                : raw;
+         plug->mValues[o.id].store(clampv(realToParam(*d, real), d->min, d->max),
+                                   std::memory_order_relaxed);
+      }
    }
 
    static bool stateLoad(const clap_plugin_t *p, const clap_istream_t *stream) {
@@ -383,8 +456,27 @@ private:
          uint16_t packed[kMaxSteps];
          if (readExactly(stream, packed, sizeof(packed)))
             for (int i = 0; i < kMaxSteps; ++i)
-               plug->mPattern[i].store(packed[i], std::memory_order_relaxed);
+               plug->mPattern[0][i].store(packed[i], std::memory_order_relaxed);
       }
+      // The rest of the bank, and the window state. A truncated read leaves
+      // everything after it alone rather than failing the load: a project that
+      // opens with the wrong panel collapsed is better than one that does not
+      // open.
+      if (header[1] >= 3) {
+         for (int pat = 1; pat < kMaxPatterns; ++pat) {
+            uint16_t packed[kMaxSteps];
+            if (!readExactly(stream, packed, sizeof(packed)))
+               break;
+            for (int i = 0; i < kMaxSteps; ++i)
+               plug->mPattern[pat][i].store(packed[i], std::memory_order_relaxed);
+         }
+         uint8_t advanced = 0;
+         if (readExactly(stream, &advanced, sizeof(advanced)))
+            plug->mAdvancedOpen.store(advanced != 0, std::memory_order_relaxed);
+      }
+
+      if (header[1] < 4)
+         migrateRanges(plug);
 
       plug->mParamsDirty.store(true, std::memory_order_release);
       plug->notifyParamValuesChanged();
@@ -396,11 +488,21 @@ private:
    void applyPattern(const PatternData &pattern) {
       if (!pattern.present)
          return;
-      for (int i = 0; i < kMaxSteps; ++i)
-         mPattern[i].store(pattern.steps[i], std::memory_order_relaxed);
+      for (int p = 0; p < kMaxPatterns; ++p)
+         for (int i = 0; i < kMaxSteps; ++i)
+            mPattern[p][i].store(pattern.pattern(p)[i], std::memory_order_relaxed);
    }
 
+   // A preset describes the whole instrument, so anything it does not mention
+   // goes back to its default rather than keeping whatever the last preset left
+   // behind. That matters the moment a parameter is added: the twenty-six
+   // factory presets were written before the pattern bank existed and say
+   // nothing about it, and without this, loading one while pattern 12 was
+   // selected would leave the sequencer pointed at a pattern the preset had
+   // just emptied.
    void applyPreset(const PresetData &preset) {
+      for (uint32_t i = 0; i < kNumParams; ++i)
+         mValues[i].store(paramTable()[i].def, std::memory_order_relaxed);
       for (const auto &kv : preset.values) {
          const ParamDesc *d = paramById(kv.first);
          if (!d)
@@ -607,6 +709,7 @@ private:
       mSeqKeyA = -1;
       mSeqKeyB = -1;
       mPlayhead.store(-1, std::memory_order_relaxed);
+      mPlayingPattern.store(-1, std::memory_order_relaxed);
       if (hadNotes)
          mEngine.releaseAll();
    }
@@ -614,13 +717,22 @@ private:
    void seqStartStep(double onsetPos) {
       const long k = static_cast<long>(std::floor(onsetPos + 1.0e-6));
       const int len = seqLength();
-      long idx = k % len;
-      if (idx < 0)
-         idx += len;
+      // How many times round the pattern we are, which is what the chain
+      // advances on, and where in it. Floor division rather than C's truncating
+      // one, so a negative position -- a host that lets the playhead run before
+      // bar one -- counts backwards instead of mirroring around zero.
+      long cycle = k / len;
+      if (k < 0 && k % len != 0)
+         --cycle;
+      const long idx = k - cycle * len;
+      const int pattern = chainPatternAt(static_cast<int>(realValue(kParamChainMode)),
+                                         seqPattern(), static_cast<int>(realValue(kParamChainLength)),
+                                         cycle);
       mLastFired = onsetPos;
       mPlayhead.store(static_cast<int>(idx), std::memory_order_relaxed);
+      mPlayingPattern.store(pattern, std::memory_order_relaxed);
 
-      const Step st = seqStep(static_cast<int>(idx));
+      const Step st = seqStep(pattern, static_cast<int>(idx));
       if (st.note < 0)
          return; // a rest. Whatever was sounding still ends at its own gate.
 
@@ -798,17 +910,35 @@ private:
 
    // --------------------------------------------------------- PatternAccess
 
-   Step seqStep(int index) const override {
-      if (index < 0 || index >= kMaxSteps)
+   Step seqStep(int pattern, int index) const override {
+      if (pattern < 0 || pattern >= kMaxPatterns || index < 0 || index >= kMaxSteps)
          return Step();
-      return Step::unpack(mPattern[index].load(std::memory_order_relaxed));
+      return Step::unpack(mPattern[pattern][index].load(std::memory_order_relaxed));
    }
 
-   void seqSetStep(int index, const Step &step) override {
-      if (index < 0 || index >= kMaxSteps)
+   void seqSetStep(int pattern, int index, const Step &step) override {
+      if (pattern < 0 || pattern >= kMaxPatterns || index < 0 || index >= kMaxSteps)
          return;
-      mPattern[index].store(step.pack(), std::memory_order_relaxed);
+      mPattern[pattern][index].store(step.pack(), std::memory_order_relaxed);
       mPresetEdited = true;
+   }
+
+   // Zero based; the parameter counts from one, because that is how a pattern
+   // is named on every machine that has ever had more than one.
+   int seqPattern() const override {
+      const int n = static_cast<int>(realValue(kParamPattern)) - 1;
+      return n < 0 ? 0 : (n >= kMaxPatterns ? kMaxPatterns - 1 : n);
+   }
+
+   int seqPlayingPattern() const override { return mPlayingPattern.load(std::memory_order_relaxed); }
+
+   bool seqPatternEmpty(int pattern) const override {
+      if (pattern < 0 || pattern >= kMaxPatterns)
+         return true;
+      uint16_t packed[kMaxSteps];
+      for (int i = 0; i < kMaxSteps; ++i)
+         packed[i] = mPattern[pattern][i].load(std::memory_order_relaxed);
+      return patternEmpty(packed);
    }
 
    int seqLength() const override {
@@ -870,8 +1000,9 @@ private:
 
       uint16_t steps[kMaxSteps];
       generatePattern(g, steps);
+      const int pattern = seqPattern();
       for (int i = 0; i < kMaxSteps; ++i)
-         mPattern[i].store(steps[i], std::memory_order_relaxed);
+         mPattern[pattern][i].store(steps[i], std::memory_order_relaxed);
       mPresetEdited = true;
    }
 
@@ -1240,8 +1371,8 @@ private:
       }
       PatternData pattern;
       pattern.present = true;
-      for (int i = 0; i < kMaxSteps; ++i)
-         pattern.steps[i] = mPattern[i].load(std::memory_order_relaxed);
+      for (int i = 0; i < kMaxPatterns * kMaxSteps; ++i)
+         pattern.steps[i] = mPattern[i / kMaxSteps][i % kMaxSteps].load(std::memory_order_relaxed);
 
       if (!writePresetFile(path, formatPreset(data, &pattern), error))
          return false;
@@ -1277,6 +1408,34 @@ private:
                                 nullptr);
    }
 
+   // -------------------------------------------------------------- WindowHost
+
+   // The window changed height because its collapsible section opened or
+   // closed. A CLAP editor cannot resize itself, so this asks: the hints go
+   // first because the aspect ratio the host is holding the window to has just
+   // changed, and a request measured against the old one would be snapped
+   // straight back.
+   void windowRequestResize(uint32_t width, uint32_t height) override {
+      if (!mHost)
+         return;
+      auto *hostGui =
+         static_cast<const clap_host_gui_t *>(mHost->get_extension(mHost, CLAP_EXT_GUI));
+      if (!hostGui)
+         return;
+      if (hostGui->resize_hints_changed)
+         hostGui->resize_hints_changed(mHost);
+      if (hostGui->request_resize)
+         hostGui->request_resize(mHost, width, height);
+   }
+
+   bool windowAdvancedOpen() const override {
+      return mAdvancedOpen.load(std::memory_order_relaxed);
+   }
+
+   void windowSetAdvancedOpen(bool open) override {
+      mAdvancedOpen.store(open, std::memory_order_relaxed);
+   }
+
    // ----------------------------------------------------------- gui extension
 
    static bool guiIsApiSupported(const clap_plugin_t *, const char *api, bool isFloating) {
@@ -1298,7 +1457,7 @@ private:
       if (plug->mGui)
          return true;
       plug->ensurePresetList();
-      plug->mGui = threeohthree::createGui(*plug, *plug);
+      plug->mGui = threeohthree::createGui(*plug, *plug, *plug);
       if (!plug->mGui)
          return false;
       plug->startGuiClock();
@@ -1510,8 +1669,17 @@ private:
 
    // The sequencer. The pattern is read by the audio thread and written by the
    // window, one relaxed atomic word per step.
-   std::atomic<uint16_t> mPattern[kMaxSteps];
+   std::atomic<uint16_t> mPattern[kMaxPatterns][kMaxSteps];
    std::atomic<int> mPlayhead{-1};
+   // Which pattern is sounding. Written by the audio thread when a step fires
+   // and read by the window, which draws the bank grid from it; -1 when the
+   // sequencer is not running.
+   std::atomic<int> mPlayingPattern{-1};
+   // Whether the window's collapsible panel section is open. Not a parameter
+   // and not part of a preset -- it is how the editor was left, nothing about
+   // the sound -- but it belongs in the plugin's state so a reopened project
+   // looks the way it was closed.
+   std::atomic<bool> mAdvancedOpen{false};
    bool mSeqRunning = false;
    double mStepPos = 0.0;      // absolute position, in steps
    double mNextOn = 0.0;

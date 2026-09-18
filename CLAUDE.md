@@ -365,10 +365,15 @@ and `guiEventCounter()` is an optional monotonic count of discrete events,
 defaulting to zero. The meter's wording comes from the spec's `voiceNoun` and
 `eventNoun`.
 
-**A plugin may add a window of its own.** ThreeOhThree's `src/gui/seqwindow.*`
-is a second window for the step sequencer, built on the same toolkit but not on
-the shared layout engine. That is allowed and expected; what is not allowed is
-forking `shared/src/gui/window.cpp`.
+**ThreeOhThree is the exception, and it is a fork.** `src/gui/seqwindow.*` is
+`shared/src/gui/window.cpp` copied, with the namespace changed and the step grid,
+the pattern bank and the collapsible panel section added — it is not a second
+window beside the shared one, it replaces it for that plugin. A step grid cannot
+be expressed as panels of knobs, and the plugin did not get to change what every
+other window looks like in order to have one. Diff the two files to see exactly
+what was added. **This is not a precedent.** A new plugin describes itself with a
+`WindowSpec` and calls `createWindow()`; forking is the last resort, and the cost
+of it is that every fix to the shared window has to be ported by hand.
 
 ## The manuals
 
@@ -423,14 +428,28 @@ prints. A website wants a sentence a musician can read. So a plugin carries
 the script prefers it, falling back to the preset's own description and warning
 about every preset it had to fall back on.
 
-ThreeOhThree instead keeps plain WAV renders in `demos/`, which are gitignored.
-A `demo-descriptions.txt` and a proper MP3 run are open work.
+`--render-arg` passes one argument straight through to the plugin's renderer and
+may be repeated. Nothing in the script knows what the argument means, which is
+how a plugin asks for something only its own renderer has:
+
+```sh
+shared/tools/make-demos.sh three-o-three --render-arg --demo-moves
+```
+
+ThreeOhThree's `--demo-moves` sweeps the cutoff and rides the resonance and the
+drive across the take, relative to whatever each preset sets, so a demo is a
+recording of somebody playing the preset rather than a photograph of it. Without
+it every knob holds still for sixteen seconds.
+
+ThreeOhThree instead keeps plain WAV renders in `demos/`, which are gitignored
+and are made with that flag. A `demo-descriptions.txt` and a proper MP3 run are
+open work.
 
 ## Working notes
 
 - `!dev/` is large and gitignored. **Never `git add -A` without checking.**
-  ThreeOhThree's `!dev/` holds the Roland TB-303 service-note PDFs, which are
-  Roland's and not ours to redistribute.
+  ThreeOhThree's `!dev/` holds the Roland TB-303 service-note PDFs and Robin
+  Whittle's Devil Fish manuals. Neither set is ours to redistribute.
 - The self-test runs as part of `install.sh` — do not skip it when changing DSP.
 - `STATUS.md` and `TODO.md` in each plugin are the current source of truth for
   that plugin's state; read them before starting work there.

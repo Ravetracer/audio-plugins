@@ -19,6 +19,10 @@ const char *const kScaleNames[] = {"Minor",  "Major",    "Minor Pent", "Major Pe
                                    "Dorian", "Phrygian", "Blues",      "Chromatic"};
 const char *const kRootNames[] = {"C",  "C#", "D",  "D#", "E",  "F",
                                   "F#", "G",  "G#", "A",  "A#", "B"};
+const char *const kChainNames[] = {"Stay", "Next", "First", "Random"};
+const char *const kMufflerNames[] = {"Off", "Soft", "Hard"};
+const char *const kSweepSpeedNames[] = {"Normal", "Fast", "Slow"};
+const char *const kOnOffNames[] = {"Off", "On"};
 
 // Where the numbers come from.
 //
@@ -45,13 +49,16 @@ const ParamDesc kParams[kNumParams] = {
        "is the range here. Zero is concert pitch."),
 
    // ------------------------------------------------------------------- vcf
-   LOG(kParamCutoff, "cutoff", "Cutoff", "VCF", 0.5, 100.0, 2500.0, "Hz",
+   LOG(kParamCutoff, "cutoff", "Cutoff", "VCF", 0.5499243591, 30.0, 5000.0, "Hz",
        "VR3. The range is pinned by the service notes' own alignment procedure: with "
        "cutoff centred and resonance full clockwise, TM3 is trimmed until the filter "
        "rings with a period of 2 ms plus or minus 0.5 ms. A 2 ms ring is 500 Hz, so "
        "the centre of this knob is 500 Hz -- and 100 Hz to 2.5 kHz is the decade and "
-       "a bit around it. The filter reaches far higher than 2.5 kHz in use; that is "
-       "what Env Mod and Accent are for."),
+       "a bit around it. The filter reaches far higher in use; that is what Env Mod and "
+       "Accent are for. The travel either side of that decade is the Devil Fish's: "
+       "Whittle widened the pot so the filter goes both higher and lower, and 5 kHz is "
+       "about an octave above where a stock machine's resonant peak stops. The middle "
+       "of the knob is still 500 Hz."),
    PCT(kParamResonance, "resonance", "Resonance", "VCF", 0.35,
        "VR4, the feedback around the ladder. It stops just short of oscillation on "
        "purpose, because the machine does: the waveform the service notes print for "
@@ -65,18 +72,29 @@ const ParamDesc kParams[kNumParams] = {
        "that a deeper sweep also starts from further down, so the sweep stays inside "
        "the range where it is audible instead of running off the top. Turning this up "
        "therefore darkens the note it is not sweeping and brightens the one it is."),
-   LOG(kParamDecay, "decay", "Decay", "VCF", 0.4350, 200.0, 2500.0, "ms",
+   LOG(kParamDecay, "decay", "Decay", "VCF", 0.6505149978, 30.0, 3000.0, "ms",
        "VR6, the filter envelope's decay. The range is printed on the schematic beside "
        "the envelope curve: DECAY VR MAX T = 2.5 sec, MIN T = 200 ms. The envelope has "
        "no attack worth the name and no sustain at all -- it is triggered and it falls, "
        "which is why every unaccented note on a 303 drops the same way. An accented "
-       "note ignores this knob; see Accent."),
-   PCT(kParamTracking, "tracking", "Tracking", "VCF", 0.0,
+       "note ignores this knob; see Accent. The range runs past the schematic's at both "
+       "ends, to the 30 ms to 3 s of the Devil Fish's Normal Decay pot; the printed "
+       "200 ms to 2.5 s is the middle of the travel."),
+   // Written out rather than through PCT, which fixes the maximum at 100 %.
+   // The kind stays Percent, so the stored value still means what it always
+   // meant and a preset or a project written before this loads unchanged --
+   // only the top of the travel is new.
+   {kParamTracking, "tracking", "Tracking", "VCF", 0.0, 2.0, 0.0, ParamKind::Percent, 0, 0, "%",
+    nullptr, 0,
        "How much the cutoff follows the note. The machine has none: the pitch CV goes "
        "to the VCO and nowhere else, so a bass note and a note two octaves up meet the "
        "same filter. Zero is therefore the hardware, and it is the default. It is here "
        "because a line written across three octaves in a piano roll is not a line "
-       "anybody wrote on the machine, and at 100 % the filter follows the key exactly."),
+       "anybody wrote on the machine, and at 100 % the filter follows the key exactly. "
+       "Past 100 % is the Devil Fish's over-tracking, where the filter climbs faster "
+       "than the note does. Whittle's use for it is the other end: a low note drags the "
+    "filter below the oscillator's own first harmonic and the note stops sounding "
+    "almost entirely."},
 
    // ---------------------------------------------------------------- accent
    PCT(kParamAccent, "accent", "Accent", "Accent", 0.6,
@@ -98,7 +116,7 @@ const ParamDesc kParams[kNumParams] = {
        "each accent stands alone; lengthen it and a run of them builds."),
 
    // ----------------------------------------------------------------- slide
-   LOG(kParamSlideTime, "slide_time", "Slide Time", "Slide", 0.5268, 10.0, 300.0, "ms",
+   LOG(kParamSlideTime, "slide_time", "Slide Time", "Slide", 0.5, 10.0, 360.0, "ms",
        "How long a slide takes. Overlap two notes in the host and the second slides "
        "from the first instead of restarting it -- which is exactly what the machine "
        "does, because a slid step holds the gate high and never fires a new trigger, "
@@ -182,7 +200,7 @@ const ParamDesc kParams[kNumParams] = {
        "gets its growl at high resonance rather than a clean whistle, and it is also "
        "what stops the resonance running away. Down, and the filter is cleaner and "
        "rings harder. Up, and it fights back."),
-   LIN(kParamResRange, "res_range", "Res Range", "Mods", 50.0, 130.0, 100.0, "%",
+   LIN(kParamResRange, "res_range", "Res Range", "Mods", 50.0, 200.0, 100.0, "%",
        "How much feedback the Resonance knob can ask for. 100 % is the machine: the "
        "top of the knob sits just below the point where the loop would oscillate, "
        "which is why a stock 303 rings and dies rather than singing -- the damped "
@@ -222,10 +240,12 @@ const ParamDesc kParams[kNumParams] = {
        "hardware had none of this; its steps were exactly even."),
 
    // --------------------------------------------------------------- vibrato
-   LIN(kParamVibDepth, "vib_depth", "Vib Depth", "Vibrato", 0.0, 100.0, 25.0, "cents",
+   LIN(kParamVibDepth, "vib_depth", "Vib Depth", "Vibrato", 0.0, 200.0, 25.0, "cents",
        "How far a vibrato step bends. Nothing on the machine does this -- a vibrato "
        "per step is a modification, and a common one, because a line of identical "
-       "notes is a line of identical notes."),
+       "notes is a line of identical notes. The top of the range is a whole tone "
+       "either way, which is past vibrato and into something the note is doing on "
+       "purpose; the useful part is still the bottom quarter of the travel."),
    LOG(kParamVibRate, "vib_rate", "Vib Rate", "Vibrato", 0.673617, 0.5, 20.0, "Hz",
        "How fast it bends."),
    LIN(kParamVibDelay, "vib_delay", "Vib Delay", "Vibrato", 0.0, 400.0, 60.0, "ms",
@@ -273,6 +293,89 @@ const ParamDesc kParams[kNumParams] = {
    PCT(kParamRandVibrato, "rand_vibrato", "Vibrato", "Generator", 0.06,
        "How often a note gets a vibrato. Nothing on the machine does this at all, so "
        "the default is sparing."),
+
+   // ------------------------------------------------------------ the bank
+   //
+   // Sixty-four patterns, and the three controls that say which of them is
+   // being edited and what order they play in. The steps inside a pattern are
+   // still not parameters; these are, because a pattern change is exactly the
+   // kind of thing an arrangement automates.
+   STEP(kParamPattern, "pattern", "Pattern", "Sequencer", 1.0, 64.0, 1.0, "",
+        "Which of the sixty-four patterns the grid edits, and the one the chain "
+        "starts from. The machine had far fewer and a mode switch to reach them; this "
+        "is the same idea with the switch replaced by a grid you can click."),
+   ENUM(kParamChainMode, "chain_mode", "Chain", "Sequencer", 0.0, kChainNames,
+        "What happens when a pattern has played through. Stay repeats it, which is the "
+        "hardware's behaviour and the default. Next steps to the following pattern and "
+        "wraps round at Chain Length, so a chain of four patterns is a sixty-four step "
+        "line. First plays the selected pattern once and then stays on pattern 1. "
+        "Random picks one from inside the chain each time. Every one of them is worked "
+        "out from the host's beat position rather than counted up, so looping and "
+        "scrubbing land on the pattern they should."),
+   STEP(kParamChainLength, "chain_length", "Chain Length", "Sequencer", 1.0, 64.0, 4.0, "",
+        "How many patterns the chain covers, counting from pattern 1. Only Next and "
+        "Random use it; Stay and First ignore it."),
+
+   // -------------------------------------------------------- the Devil Fish
+   //
+   // Robin Whittle's modification, from his own manual. Every default here is
+   // the setting his "Limiting the Devil Fish to TB-303 sounds" table gives, so
+   // a preset that says nothing about any of them is the stock machine and
+   // renders exactly as it did before these existed.
+   LIN(kParamOverdrive, "overdrive", "Overdrive", "VCF", -60.0, 36.5, 0.0, "dB",
+       "How hard the oscillator is driven into the filter, which is not the same knob "
+       "as Drive: this one is in front of the ladder and Drive is behind it. The "
+       "machine has no control here at all -- the level is fixed -- and 0 dB is that "
+       "level. Up from there the ladder's input pair stops being linear and starts "
+       "switching, which is Whittle's \"the filter operates under duress\"; the top of "
+       "the range is his 66.6 times normal. Down at the bottom the oscillator is gone "
+       "altogether, which is only interesting with Res Range past 100 %: the filter "
+       "sings on its own and this knob reintroduces the oscillator by hand."),
+   PCT(kParamFilterFM, "filter_fm", "Filter FM", "VCF", 0.0,
+       "The amplifier's own output fed back into the filter's frequency, at audio rate. "
+       "Nothing on the machine does this. It is loudest where the signal is loudest, so "
+       "it bites hardest on accented notes and wherever Overdrive is up, and it needs "
+       "resonance to have anything to work with. A little is edge. A lot is what "
+       "Whittle calls a spluttering chaotic mess, and he is right. The filter "
+       "coefficients are recomputed every sample while this is up, rather than every "
+       "eighth, because that is what audio-rate modulation costs."),
+   ENUM(kParamMuffler, "muffler", "Muffler", "Drive", 0.0, kMufflerNames,
+        "A clipper on the amplifier's output, after everything else. It is not a fuzz: "
+        "it only touches signals that are already loud -- an accent, a high Overdrive, "
+        "a hot external level -- and it leaves the bottom of the spectrum alone, so "
+        "what it takes off is the top of the loudest peaks rather than the weight of "
+        "the note. Two kinds, because the modification offers two. Off is the machine."),
+   LOG(kParamSoftAttack, "soft_attack", "Soft Attack", "Amp", 0.4326507131, 0.3, 30.0, "ms",
+       "How fast the amplifier opens on an unaccented note. The machine's is fixed by "
+       "C41 and R134 at 2.2 ms, which is the default and is as good as instant; an "
+       "accented note always uses it whatever this says. Turned up, the note swells "
+       "instead of starting, which is the one thing a 303 cannot do and the reason "
+       "Whittle put a pot on it."),
+   LOG(kParamAmpDecay, "amp_decay", "Amp Decay", "Amp", 0.8647887373, 16.0, 8000.0, "ms",
+       "How long the amplifier takes to fall away under a held note, to a tenth. On the "
+       "machine this is not a control: R123 and C42 fix it at 1.5 s, which reaches a "
+       "tenth in about 3.45 s, and that is the default. It is long enough that over a "
+       "sixteenth note nothing happens -- the 303's amplifier holds while the filter "
+       "falls, and that is why the instrument sounds the way it does. Shorten it and "
+       "the notes start closing on their own."),
+   PCT(kParamAmpSustain, "amp_sustain", "Amp Sustain", "Amp", 0.0,
+       "Where Amp Decay falls to instead of silence. At zero -- the machine -- a held "
+       "note dies away on its own. Turned up it stops falling partway and holds there "
+       "for as long as the gate is open, so a note can run indefinitely. There is "
+       "nothing in the schematic that does this."),
+   ENUM(kParamSweepSpeed, "sweep_speed", "Sweep Speed", "Accent", 0.0, kSweepSpeedNames,
+        "How the accent circuit answers accents in quick succession. Normal is the "
+        "machine: charge left in C62 from one accent makes the next one bigger, which "
+        "is the thing people mean when they say a 303 gets worked up. Fast is the "
+        "opposite -- the first accent is the strongest and the ones behind it are "
+        "smaller, because each pulse is what is added rather than what has "
+        "accumulated. Slow takes longer to rise, rises about twice as far, and takes "
+        "longer to cool, so it is still settling through the notes after it."),
+   ENUM(kParamAccentHold, "accent_hold", "Accent Hold", "Accent", 0.0, kOnOffNames,
+        "Accents every note, whatever the step's accent bit or the note's velocity "
+        "says. Whittle's front panel has a pushbutton for it. Useful for hearing what "
+        "the accent circuit is actually doing, and for a bar that has to lean on "
+        "everything at once."),
 };
 
 #undef LIN
@@ -302,6 +405,35 @@ double stepsPerBeat(int rate) {
    case kRate16:
    default:
       return 4.0;
+   }
+}
+
+// Which pattern the `cycle`-th time round the chain plays. See params.h for why
+// this is a function of the cycle rather than a counter the sequencer bumps.
+int chainPatternAt(int mode, int start, int chainLength, long cycle) {
+   const int span = chainLength < 1 ? 1 : (chainLength > 64 ? 64 : chainLength);
+   const int from = start < 0 ? 0 : (start > 63 ? 63 : start);
+   if (cycle <= 0 || mode == kChainStay)
+      return from;
+   switch (mode) {
+   case kChainFirst:
+      return 0;
+   case kChainRandom: {
+      // A hash of the cycle rather than a running generator: the same bar of
+      // the song always picks the same pattern, however it was reached.
+      uint32_t x = static_cast<uint32_t>(cycle) * 2654435761u + 0x9E3779B9u;
+      x ^= x >> 16;
+      x *= 0x7FEB352Du;
+      x ^= x >> 15;
+      return static_cast<int>(x % static_cast<uint32_t>(span));
+   }
+   case kChainNext:
+   default: {
+      // A pattern selected from outside the chain is where the chain starts;
+      // after that it runs inside it.
+      const int base = from < span ? from : 0;
+      return static_cast<int>((base + cycle) % span);
+   }
    }
 }
 

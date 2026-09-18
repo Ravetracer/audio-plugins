@@ -20,6 +20,8 @@
 
 #include "seqwindow.h"
 
+#include "params.h"
+
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
@@ -57,6 +59,10 @@ public:
       : mDelegate(delegate), mSpec(spec),
         mWindowW(spec.contentW + 2 * kMargin) {
       mShown.assign(mSpec.paramCount, -1.0e9);
+      // The section remembers whether it was open, so reopening the editor or
+      // reloading the project finds the window the way it was left.
+      if (mSpec.host)
+         mAdvancedOpen = mSpec.host->windowAdvancedOpen();
       const size_t strips = mSpec.mixer ? static_cast<size_t>(mSpec.mixerCount) : 0;
       mMuted.assign(strips, 0);
       mSoloed.assign(strips, 0);
@@ -196,19 +202,19 @@ public:
 
    double scaleFor(uint32_t width, uint32_t height) const {
       const double s = std::min(width / static_cast<double>(mWindowW),
-                                height / static_cast<double>(mSpec.windowH));
+                                height / static_cast<double>(currentH()));
       return std::min(kMaxScale, std::max(kMinScale, s));
    }
 
    void designSize(uint32_t *width, uint32_t *height) const override {
       *width = mWindowW;
-      *height = mSpec.windowH;
+      *height = currentH();
    }
 
    void fitSize(uint32_t *width, uint32_t *height) const override {
       const double s = scaleFor(*width, *height);
       *width = static_cast<uint32_t>(mWindowW * s + 0.5);
-      *height = static_cast<uint32_t>(mSpec.windowH * s + 0.5);
+      *height = static_cast<uint32_t>(currentH() * s + 0.5);
    }
 
    bool resize(uint32_t width, uint32_t height) override {
@@ -220,6 +226,13 @@ public:
       if (scale < kMinScale || scale > kMaxScale || std::fabs(scale - mScale) < 0.001)
          return;
       mScale = scale;
+      applySize();
+   }
+
+   // Takes the window to whatever pixelW() x pixelH() currently is. Called for
+   // a scale change and for the collapsible section, which changes the height
+   // at a fixed scale; both are the same job once the numbers have moved.
+   void applySize() {
       if (!mWindow)
          return;
 #if defined(_WIN32)
@@ -265,6 +278,7 @@ public:
    }
 
    void tick() override {
+      syncAdvanced();
 #if defined(_WIN32)
       if (!mWindow)
          return;
@@ -289,7 +303,7 @@ public:
 
 private:
    uint32_t pixelW() const { return static_cast<uint32_t>(mWindowW * mScale + 0.5); }
-   uint32_t pixelH() const { return static_cast<uint32_t>(mSpec.windowH * mScale + 0.5); }
+   uint32_t pixelH() const { return static_cast<uint32_t>(currentH() * mScale + 0.5); }
 
    void allocateBuffer() {
       if (mBufferCr) {
@@ -346,46 +360,63 @@ private:
       Rect rect;
    };
 
-   void buildLayout() {
-      int y = kHeaderH + kGap;
-      for (int row = 0; row < mSpec.rowCount; ++row) {
-         int x = kMargin;
-         int rowH = 0;
-         for (int i = 0; i < mSpec.rowLength[row]; ++i) {
-            const PanelSpec &spec = mSpec.panels[mSpec.rowStart[row] + i];
-            Panel p;
-            p.spec = &spec;
-            p.rect.x = x;
-            p.rect.y = y;
-            p.rect.w = spec.cols * kCellW + 2 * kPanelPad;
-            p.rect.h = kPanelTitleH + spec.rows * kCellH + kPanelPad;
-            // Rows hold different numbers of panels and so carry different
-            // amounts of padding. The last panel of a row without the activity
-            // meter takes up the difference, which keeps every row flush with
-            // the right-hand edge instead of ending raggedly.
-            if (row != mSpec.rowCount - 1 && i == mSpec.rowLength[row] - 1)
-               p.rect.w = kMargin + mSpec.contentW - p.rect.x;
-            rowH = std::max(rowH, static_cast<int>(p.rect.h));
+   // The window is two stacks of panel rows with the sequencer and the preset
+   // bar between them: rows 0 to advancedRow-1 always, then the step grid and
+   // its bank, then the bar, then -- only while the section is open -- the
+   // rest of the rows. The collapsible half holds the ten mods and the three
+   // panels nobody reaches for twice in a session, which is what makes the
+   // window that opens with the plugin a page of controls rather than two.
+   bool hasAdvanced() const {
+      return mSpec.host && mSpec.advancedRow > 0 && mSpec.advancedRow < mSpec.rowCount;
+   }
 
-            for (const Cell &cell : flowCells(spec)) {
-               mCells.push_back(cell);
-               mCellRects.push_back(cellRect(p, cell));
-            }
-            mPanels.push_back(p);
-            x += static_cast<int>(p.rect.w) + kGap;
+   int visibleRowCount() const { return hasAdvanced() ? mSpec.advancedRow : mSpec.rowCount; }
+
+   int currentH() const {
+      return mAdvancedOpen && mSpec.windowExpandedH > 0 ? mSpec.windowExpandedH : mSpec.windowH;
+   }
+
+   // Lays one row of panels out at `y` and returns where the next row starts.
+   // The last panel of a row takes up whatever padding is left over, which
+   // keeps every row flush with the right-hand edge instead of ending raggedly.
+   int layoutRow(int row, int y) {
+      int x = kMargin;
+      int rowH = 0;
+      for (int i = 0; i < mSpec.rowLength[row]; ++i) {
+         const PanelSpec &spec = mSpec.panels[mSpec.rowStart[row] + i];
+         Panel p;
+         p.spec = &spec;
+         p.rect.x = x;
+         p.rect.y = y;
+         p.rect.w = spec.cols * kCellW + 2 * kPanelPad;
+         p.rect.h = kPanelTitleH + spec.rows * kCellH + kPanelPad;
+         if (i == mSpec.rowLength[row] - 1)
+            p.rect.w = kMargin + mSpec.contentW - p.rect.x;
+         rowH = std::max(rowH, static_cast<int>(p.rect.h));
+
+         for (const Cell &cell : flowCells(spec)) {
+            mCells.push_back(cell);
+            mCellRects.push_back(cellRect(p, cell));
          }
-         // The activity meter takes whatever is left of the bottom row.
-         if (row == mSpec.rowCount - 1) {
-            mMeter.x = x;
-            mMeter.y = y;
-            mMeter.w = kMargin + mSpec.contentW - x;
-            mMeter.h = rowH;
-         }
-         y += rowH + kGap;
+         mPanels.push_back(p);
+         x += static_cast<int>(p.rect.w) + kGap;
       }
+      return y + rowH + kGap;
+   }
 
-      // The step grid, below the panels and above the preset bar.
+   void buildLayout() {
+      mPanels.clear();
+      mCells.clear();
+      mCellRects.clear();
+
+      int y = kHeaderH + kGap;
+      const int visible = visibleRowCount();
+      for (int row = 0; row < visible; ++row)
+         y = layoutRow(row, y);
+
+      // The step grid and, beside it, the bank of sixty-four patterns.
       mSeqRect = {0, 0, 0, 0};
+      mBankRect = {0, 0, 0, 0};
       mSeqClearRect = {0, 0, 0, 0};
       mSeqGenRect = {0, 0, 0, 0};
       mSeqSeedDownRect = {0, 0, 0, 0};
@@ -394,10 +425,17 @@ private:
       mSeqLeftRect = {0, 0, 0, 0};
       mSeqRightRect = {0, 0, 0, 0};
       if (hasPattern()) {
+         const double bankW = hasBank() ? kBankW + kGap : 0.0;
          mSeqRect.x = kMargin;
          mSeqRect.y = y;
-         mSeqRect.w = mSpec.contentW;
+         mSeqRect.w = mSpec.contentW - bankW;
          mSeqRect.h = seqPaneHeight();
+         if (hasBank()) {
+            mBankRect.x = mSeqRect.x + mSeqRect.w + kGap;
+            mBankRect.y = y;
+            mBankRect.w = kBankW;
+            mBankRect.h = mSeqRect.h;
+         }
          // Right to left: GEN, + , the seed, -, then the two shifts and CLEAR.
          const double bh = 14.0;
          const double by = y + 4.0;
@@ -424,18 +462,27 @@ private:
       mNextRect = {mNameRect.x + mNameRect.w + 4, static_cast<double>(barY), 26, kBarH};
       mSaveRect = {mNextRect.x + mNextRect.w + 14, static_cast<double>(barY), 58, kBarH};
       mMixerRect = {mSaveRect.x + mSaveRect.w + 8, static_cast<double>(barY), 62, kBarH};
+      // The switch for the collapsible section, on the bar because that is the
+      // one row of the window that is neither a panel nor the grid.
+      mAdvancedRect = {mSaveRect.x + mSaveRect.w + (hasMixer() ? 78.0 : 8.0),
+                       static_cast<double>(barY), 104, kBarH};
       // Where the window says that a mute or a solo is holding a level down.
       // Only drawn while one is, and drawn in the accent so it cannot be
       // mistaken for part of the furniture: a forced-down layer that looks
       // like a saved one is the whole trap this chip exists to close.
-      mHoldRect = {mMixerRect.x + mMixerRect.w + 10, static_cast<double>(barY), 104, kBarH};
+      mHoldRect = {mAdvancedRect.x + mAdvancedRect.w + 10, static_cast<double>(barY), 104, kBarH};
       // The version label, right-aligned in the header at baseline 44. The box
       // is a fixed size anchored to the right edge rather than measured from
       // the text, because the layout runs without a cairo context to measure
       // with. Nothing else is drawn there, so it cannot catch a stray click.
       mVersionRect = {static_cast<double>(kMargin + mSpec.contentW) - 56.0, 33.0, 56.0, 14.0};
       mBarY = barY;
-      mHelpY = barY + kBarH + 4;
+
+      y = barY + kBarH + 6;
+      if (hasAdvanced() && mAdvancedOpen)
+         for (int row = visible; row < mSpec.rowCount; ++row)
+            y = layoutRow(row, y);
+      mHelpY = y - 2;
    }
 
    Rect cellRect(const Panel &p, const Cell &cell) const {
@@ -444,23 +491,50 @@ private:
       r.y = p.rect.y + kPanelTitleH + cell.row * kCellH;
       r.w = kCellW * cell.span;
       r.h = kCellH;
+      if (cell.half) {
+         r.h = kCellH * 0.5;
+         if (cell.half == 2)
+            r.y += kCellH * 0.5;
+      }
       return r;
    }
 
    // Lays a panel's parameters out left to right, wrapping to the next row when
    // a cell no longer fits. Kept in one place so drawing and hit testing can
    // never disagree about where a control is.
+   //
+   // A pair of parameters marked kStacked shares one column, one chip above the
+   // other. Only enum parameters are ever marked, and they are marked in pairs;
+   // an unpaired one simply takes the top half and leaves the bottom empty.
    std::vector<Cell> flowCells(const PanelSpec &spec) const {
       std::vector<Cell> cells;
       int col = 0, row = 0;
+      bool topTaken = false;
       for (int c = 0; c < spec.count; ++c) {
-         const uint32_t id = spec.params[c];
+         const uint32_t raw = spec.params[c];
+         const uint32_t id = raw & kParamMask;
+         const bool stack = (raw & kStacked) != 0;
+         if (stack && topTaken) {
+            cells.push_back({id, col, row, 1, 2});
+            topTaken = false;
+            if (++col >= spec.cols) {
+               col = 0;
+               ++row;
+            }
+            continue;
+         }
+         topTaken = false;
          const int span = cellSpan(id);
          if (col + span > spec.cols) {
             col = 0;
             ++row;
          }
-         cells.push_back({id, col, row, span});
+         if (stack) {
+            cells.push_back({id, col, row, 1, 1});
+            topTaken = true;
+            continue;
+         }
+         cells.push_back({id, col, row, span, 0});
          col += span;
          if (col >= spec.cols) {
             col = 0;
@@ -480,10 +554,8 @@ private:
          if (std::fabs(v - mShown[i]) > 1.0e-9)
             return true;
       }
-      const uint32_t drops = mDelegate.guiVoiceCount();
-      if (drops != mLastVoiceCount || mMeterFill > 0.001 || mDecayFrames > 0)
-         return true;
-      if (hasPattern() && mSpec.pattern->seqPlayhead() != mLastPlayhead)
+      if (hasPattern() && (mSpec.pattern->seqPlayhead() != mLastPlayhead ||
+                           mSpec.pattern->seqPlayingPattern() != mLastPlayingPattern))
          return true;
       return mSpec.ornament && mSpec.ornament->animating(mDelegate.guiEventCounter());
    }
@@ -522,8 +594,8 @@ private:
       drawHeader(cr);
       for (const Panel &p : mPanels)
          drawPanel(cr, p);
-      drawMeter(cr);
       drawSequencer(cr);
+      drawBank(cr);
       drawPresetBar(cr);
       drawHelpLine(cr);
       if (mBrowserOpen)
@@ -546,11 +618,11 @@ private:
    }
 
    void drawBackground(cairo_t *cr) {
-      cairo_pattern_t *grad = cairo_pattern_create_linear(0, 0, 0, mSpec.windowH);
+      cairo_pattern_t *grad = cairo_pattern_create_linear(0, 0, 0, currentH());
       cairo_pattern_add_color_stop_rgb(grad, 0.0, mSpec.theme.bgTop.r, mSpec.theme.bgTop.g, mSpec.theme.bgTop.b);
       cairo_pattern_add_color_stop_rgb(grad, 1.0, mSpec.theme.bgBottom.r, mSpec.theme.bgBottom.g, mSpec.theme.bgBottom.b);
       cairo_set_source(cr, grad);
-      cairo_rectangle(cr, 0, 0, mWindowW, mSpec.windowH);
+      cairo_rectangle(cr, 0, 0, mWindowW, currentH());
       cairo_fill(cr);
       cairo_pattern_destroy(grad);
    }
@@ -653,6 +725,13 @@ private:
    enum class KeyCommand { NoCommand, Escape, Accept, Backspace, Up, Down };
 
    Rect valueRect(const Rect &cell) const { return {cell.x + 6, cell.y + 74, cell.w - 12, 22}; }
+
+   // Where an enum chip sits inside its cell. A stacked pair gets half the
+   // height each, so the chip moves up and the dropdown has to follow it.
+   Rect chipRect(const Rect &cell) const {
+      const bool half = cell.h < kCellH - 1.0;
+      return {cell.x + 5, cell.y + (half ? 17.0 : 34.0), cell.w - 10, 22.0};
+   }
 
    void openEntry(uint32_t id) {
       const ParamDesc &d = mSpec.params[id];
@@ -773,10 +852,11 @@ private:
          std::snprintf(text, sizeof(text), "--");
 
       if (isChip(d)) {
-         const double cw = r.w - 10;
-         const double ch = 22;
-         const double cx = r.x + 5;
-         const double cy = r.y + 34;
+         const Rect chip = chipRect(r);
+         const double cw = chip.w;
+         const double ch = chip.h;
+         const double cx = chip.x;
+         const double cy = chip.y;
          setColor(cr, mSpec.theme.knobFace);
          roundedRect(cr, cx, cy, cw, ch, 3);
          cairo_fill_preserve(cr);
@@ -831,133 +911,6 @@ private:
       }
       setColor(cr, hot ? mSpec.theme.accent : mSpec.theme.text, hot ? 1.0 : 0.85);
       drawText(cr, cx, r.y + 86, text, 9.5, false, Align::Center);
-   }
-
-   void drawMeter(cairo_t *cr) {
-      setColor(cr, mSpec.theme.panelFill);
-      roundedRect(cr, mMeter.x, mMeter.y, mMeter.w, mMeter.h, 5);
-      cairo_fill_preserve(cr);
-      setColor(cr, mSpec.theme.panelEdge);
-      cairo_set_line_width(cr, 1.0);
-      cairo_stroke(cr);
-      setColor(cr, mSpec.theme.accent, 0.85);
-      drawText(cr, mMeter.x + kPanelPad + 2, mMeter.y + 16, "ACTIVITY", 10, true, Align::Left);
-
-      const uint32_t drops = mDelegate.guiVoiceCount();
-      const uint32_t limit = std::max<uint32_t>(1, mDelegate.guiVoiceLimit());
-      mLastVoiceCount = drops;
-      // Compressed rather than linear: a texture that uses 3% of the droplet
-      // ceiling is perfectly normal rain, and a linear meter would show nothing
-      // at all for it.
-      const double load = std::min(1.0, static_cast<double>(drops) / static_cast<double>(limit));
-      mHistory[mHistoryHead] = static_cast<float>(std::pow(load, 0.45));
-      mHistoryHead = (mHistoryHead + 1) % kHistory;
-      mMeterFill = load;
-      if (load > 0.0001)
-         mDecayFrames = kHistory;
-      else if (mDecayFrames > 0)
-         --mDecayFrames;
-
-      const double gx = mMeter.x + kPanelPad;
-      const double gy = mMeter.y + kPanelTitleH + 4;
-      // The right-hand strip of the panel is the output meter; the droplet
-      // history gets what is left.
-      const double outW = 54;
-      const double gw = mMeter.w - 2 * kPanelPad - outW;
-      const double gh = mMeter.h - kPanelTitleH - 30;
-
-      setColor(cr, mSpec.theme.knobFace);
-      roundedRect(cr, gx, gy, gw, gh, 3);
-      cairo_fill(cr);
-
-      setColor(cr, mSpec.theme.track, 0.5);
-      cairo_set_line_width(cr, 1.0);
-      for (int i = 1; i < 4; ++i) {
-         const double ly = std::floor(gy + gh * (i / 4.0)) + 0.5;
-         cairo_move_to(cr, gx + 3, ly);
-         cairo_line_to(cr, gx + gw - 3, ly);
-      }
-      cairo_stroke(cr);
-
-      const double barW = gw / kHistory;
-      for (int i = 0; i < kHistory; ++i) {
-         const int idx = (mHistoryHead + i) % kHistory;
-         const double v = mHistory[idx];
-         if (v <= 0.0)
-            continue;
-         const double h = std::max(1.0, v * (gh - 4));
-         setColor(cr, mSpec.theme.accent, 0.30 + 0.55 * (static_cast<double>(i) / kHistory));
-         cairo_rectangle(cr, gx + i * barW, gy + gh - 2 - h, std::max(1.0, barW - 0.5), h);
-         cairo_fill(cr);
-      }
-
-      char info[64];
-      std::snprintf(info, sizeof(info), "%u %s", drops, mSpec.voiceNoun);
-      setColor(cr, mSpec.theme.textDim);
-      drawText(cr, gx, mMeter.y + mMeter.h - 10, info, 9, false, Align::Left);
-      // The right-hand figure is the plugin's discrete-event count where it has
-      // one -- thunder counts flashes -- and otherwise the size of the voice
-      // pool, which is the only other number worth the space.
-      if (mSpec.eventNoun)
-         std::snprintf(info, sizeof(info), "%u %s", mDelegate.guiEventCounter(), mSpec.eventNoun);
-      else
-         std::snprintf(info, sizeof(info), "max %u", limit);
-      drawText(cr, gx + gw, mMeter.y + mMeter.h - 10, info, 9, false, Align::Right);
-
-      drawOutputMeter(cr, gx + gw + kPanelPad, gy, outW - kPanelPad, gh);
-   }
-
-   // Two vertical bars for the output peak. Scaled in dB, because a linear peak
-   // meter spends nine tenths of its travel on the top 20 dB and tells you
-   // nothing about a quiet drizzle.
-   void drawOutputMeter(cairo_t *cr, double x, double y, double w, double h) {
-      float peakL = 0.0f;
-      float peakR = 0.0f;
-      mDelegate.guiOutputPeaks(peakL, peakR);
-
-      auto toBar = [](float peak) {
-         if (peak <= 1.0e-5f)
-            return 0.0;
-         const double db = 20.0 * std::log10(static_cast<double>(peak));
-         return std::min(1.0, std::max(0.0, (db + 60.0) / 60.0));
-      };
-
-      const double barW = (w - 4) * 0.5;
-      const double values[2] = {toBar(peakL), toBar(peakR)};
-      const float peaks[2] = {peakL, peakR};
-      for (int ch = 0; ch < 2; ++ch) {
-         const double bx = x + ch * (barW + 4);
-         setColor(cr, mSpec.theme.knobFace);
-         roundedRect(cr, bx, y, barW, h, 3);
-         cairo_fill(cr);
-
-         const double fh = values[ch] * (h - 4);
-         if (fh > 0.5) {
-            // Over -3 dBFS is worth seeing before the soft clipper is doing the
-            // work for you.
-            const bool hot = peaks[ch] > 0.708f;
-            setColor(cr, hot ? mSpec.theme.text : mSpec.theme.accent, hot ? 0.95 : 0.85);
-            roundedRect(cr, bx + 2, y + h - 2 - fh, barW - 4, fh, 2);
-            cairo_fill(cr);
-         }
-      }
-
-      // -12 dBFS, the only gridline worth the ink at this size.
-      setColor(cr, mSpec.theme.track, 0.6);
-      cairo_set_line_width(cr, 1.0);
-      const double ly = std::floor(y + h - 2 - ((-12.0 + 60.0) / 60.0) * (h - 4)) + 0.5;
-      cairo_move_to(cr, x, ly);
-      cairo_line_to(cr, x + w, ly);
-      cairo_stroke(cr);
-
-      setColor(cr, mSpec.theme.textDim);
-      const double loudest = std::max(values[0], values[1]);
-      char label[32];
-      if (loudest <= 0.0)
-         std::snprintf(label, sizeof(label), "-inf");
-      else
-         std::snprintf(label, sizeof(label), "%.0f", 20.0 * std::log10(std::max(peakL, peakR)));
-      drawText(cr, x + w * 0.5, y + h + 14, label, 9, false, Align::Center);
    }
 
    const char *presetLabel(char *buf, size_t size) const {
@@ -1016,6 +969,39 @@ private:
       setColor(cr, saveHot ? mSpec.theme.accent : mSpec.theme.textDim);
       drawText(cr, mSaveRect.x + mSaveRect.w * 0.5, mSaveRect.y + 20, "SAVE", 10, true,
                Align::Center);
+
+      if (hasAdvanced()) {
+         const bool advHot = mHoverWidget == Widget::Advanced;
+         const bool on = mAdvancedOpen;
+         setColor(cr, on ? mSpec.theme.accent : mSpec.theme.panelFill, on ? 0.16 : 1.0);
+         roundedRect(cr, mAdvancedRect.x, mAdvancedRect.y, mAdvancedRect.w, mAdvancedRect.h, 4);
+         cairo_fill_preserve(cr);
+         setColor(cr, (advHot || on) ? mSpec.theme.accent : mSpec.theme.panelEdge,
+                  advHot ? 0.7 : 1.0);
+         cairo_set_line_width(cr, 1.0);
+         cairo_stroke(cr);
+         setColor(cr, (advHot || on) ? mSpec.theme.accent : mSpec.theme.textDim);
+         drawText(cr, mAdvancedRect.x + mAdvancedRect.w * 0.5 - 7, mAdvancedRect.y + 20,
+                  mSpec.advancedLabel ? mSpec.advancedLabel : "ADVANCED", 10, true, Align::Center);
+         // The triangle points the way the window is about to move, which is
+         // the only part of a disclosure control anybody actually reads. The
+         // toolkit draws left, right and down; up is this, because a chevron
+         // that never turns round is worse than none.
+         const double tx = mAdvancedRect.x + mAdvancedRect.w - 14;
+         const double ty = mAdvancedRect.y + mAdvancedRect.h * 0.5;
+         cairo_new_path(cr);
+         if (on) {
+            cairo_move_to(cr, tx - 4, ty + 2.8);
+            cairo_line_to(cr, tx + 4, ty + 2.8);
+            cairo_line_to(cr, tx, ty - 2.8);
+         } else {
+            cairo_move_to(cr, tx - 4, ty - 2.8);
+            cairo_line_to(cr, tx + 4, ty - 2.8);
+            cairo_line_to(cr, tx, ty + 2.8);
+         }
+         cairo_close_path(cr);
+         cairo_fill(cr);
+      }
 
       if (!hasMixer())
          return;
@@ -1187,7 +1173,7 @@ private:
 
    void drawSaveDialog(cairo_t *cr) {
       setColor(cr, mSpec.theme.bgBottom, 0.88);
-      cairo_rectangle(cr, 0, 0, mWindowW, mSpec.windowH);
+      cairo_rectangle(cr, 0, 0, mWindowW, currentH());
       cairo_fill(cr);
 
       const Rect p = savePanel();
@@ -1314,6 +1300,8 @@ private:
       const char *msg = nullptr;
       if (mHover >= 0 && mHover < static_cast<int>(mSpec.paramCount))
          msg = mSpec.params[mHover].tip;
+      if (!msg && mPaneHover >= 0 && mPaneHover < static_cast<int>(mSpec.paramCount))
+         msg = mSpec.params[mPaneHover].tip;
       if (!msg) {
          const auto &list = mDelegate.guiPresets();
          const int cur = mDelegate.guiCurrentPreset();
@@ -1340,7 +1328,7 @@ private:
    }
 
    Rect browserPanel() const {
-      const double maxH = mSpec.windowH - kHeaderH - 90;
+      const double maxH = currentH() - kHeaderH - 90;
       Rect r;
       r.x = kMargin + 40;
       r.w = mSpec.contentW - 80;
@@ -1417,11 +1405,12 @@ private:
       Rect r;
       r.w = std::max(c.w - 10.0, 96.0);
       r.h = d.enumCount * kMenuRowH + 2 * kMenuPad;
-      r.x = c.x + 5;
-      r.y = c.y + 58; // just under the chip
+      const Rect chip = chipRect(c);
+      r.x = chip.x;
+      r.y = chip.y + chip.h + 2; // just under the chip
       // Flip above the chip rather than run off the bottom of the window.
-      if (r.y + r.h > mSpec.windowH - 8)
-         r.y = c.y + 32 - r.h;
+      if (r.y + r.h > currentH() - 8)
+         r.y = chip.y - 2 - r.h;
       if (r.y < kHeaderH + 4)
          r.y = kHeaderH + 4;
       return r;
@@ -1480,7 +1469,7 @@ private:
 
    void drawBrowser(cairo_t *cr) {
       setColor(cr, mSpec.theme.bgBottom, 0.88);
-      cairo_rectangle(cr, 0, 0, mWindowW, mSpec.windowH);
+      cairo_rectangle(cr, 0, 0, mWindowW, currentH());
       cairo_fill(cr);
 
       const Rect p = browserPanel();
@@ -1897,7 +1886,7 @@ private:
 
    void drawMixer(cairo_t *cr) {
       setColor(cr, mSpec.theme.bgBottom, 0.88);
-      cairo_rectangle(cr, 0, 0, mWindowW, mSpec.windowH);
+      cairo_rectangle(cr, 0, 0, mWindowW, currentH());
       cairo_fill(cr);
 
       const Rect p = mixerPanel();
@@ -2007,30 +1996,50 @@ private:
    // ------------------------------------------------------------- step grid
    //
    // Sixteen steps across, twelve semitones up, and three lanes of flags under
-   // them. This is the only part of the window that is not in the shared one,
-   // and the reason the file is a fork.
+   // them, with the bank of sixty-four patterns beside it. This is the only
+   // part of the window that is not in the shared one, and the reason the file
+   // is a fork.
    //
    // The pattern is the plugin's, reached through PatternAccess: every read is
    // one relaxed atomic load of a packed word, so the window can draw while the
-   // audio thread plays and an edit lands on the next step boundary.
+   // audio thread plays and an edit lands on the next step boundary. The grid
+   // edits whichever pattern the Pattern parameter selects, which is not
+   // necessarily the one sounding -- a running chain moves on without the
+   // editor following it.
 
    static constexpr double kSeqTitleH = 22.0;
    static constexpr double kSeqNumH = 14.0;
-   static constexpr double kSeqOctH = 15.0;
+   // The octave cells are the one control in the grid that is set by aiming at
+   // a half of it rather than by hitting a row, so they are the one that has to
+   // be big enough to aim at.
+   static constexpr double kSeqOctH = 26.0;
+   static constexpr double kSeqOctBoxW = 22.0;
    static constexpr double kSeqRowH = 13.0;  // one semitone
    static constexpr double kSeqLaneH = 16.0; // one flag lane
    static constexpr double kSeqLabelW = 46.0;
    static constexpr double kSeqPad = 8.0;
    static constexpr double kSeqLaneGap = 5.0;
 
-   bool hasPattern() const { return mSpec.pattern && mSpec.patternSteps > 0; }
+   // The bank: eight by eight, and the two chain controls under it.
+   static constexpr double kBankW = 232.0;
+   static constexpr int kBankCols = 8;
+   static constexpr double kBankCellH = 24.0;
+   static constexpr double kBankRowGap = 8.0;
+   static constexpr double kBankCtlH = 20.0;
+   static constexpr double kBankCtlLabelW = 50.0;
 
-   static double seqPaneHeight() {
-      return kSeqTitleH + kSeqNumH + kSeqOctH + 12.0 * kSeqRowH + kSeqLaneGap +
-             kNumLanes * kSeqLaneH + kSeqPad;
-   }
+   bool hasPattern() const { return mSpec.pattern && mSpec.patternSteps > 0; }
+   bool hasBank() const { return hasPattern() && mSpec.patternCount > 1; }
+
+   static double seqPaneHeight() { return kSeqPaneHeight; }
+   static_assert(kSeqTitleH + kSeqNumH + kSeqOctH + 12.0 * kSeqRowH + kSeqLaneGap +
+                       kNumLanes * kSeqLaneH + kSeqPad ==
+                    static_cast<double>(kSeqPaneHeight),
+                 "kSeqPaneHeight no longer matches the parts of the grid");
 
    int seqCols() const { return mSpec.patternSteps > kMaxSteps ? kMaxSteps : mSpec.patternSteps; }
+   // Which pattern the grid is editing.
+   int editPattern() const { return hasPattern() ? mSpec.pattern->seqPattern() : 0; }
    double seqCellW() const {
       return (mSeqRect.w - 2.0 * kSeqPad - kSeqLabelW) / static_cast<double>(seqCols());
    }
@@ -2049,8 +2058,40 @@ private:
    void seqEdit(int col, const Step &step) {
       if (col < 0 || col >= seqCols())
          return;
-      mSpec.pattern->seqSetStep(col, step);
+      mSpec.pattern->seqSetStep(editPattern(), col, step);
       mDirty = true;
+   }
+
+   // ----------------------------------------------------------- bank layout
+
+   int bankCount() const {
+      const int n = mSpec.patternCount;
+      return n > kMaxPatterns ? kMaxPatterns : n;
+   }
+   int bankRows() const { return (bankCount() + kBankCols - 1) / kBankCols; }
+   double bankCellW() const { return (mBankRect.w - 2.0 * kSeqPad) / kBankCols; }
+   double bankGridY() const { return mBankRect.y + kSeqTitleH; }
+
+   Rect bankCellRect(int index) const {
+      const double w = bankCellW();
+      return {mBankRect.x + kSeqPad + (index % kBankCols) * w,
+              bankGridY() + (index / kBankCols) * kBankCellH, w - 2.0, kBankCellH - 2.0};
+   }
+
+   int bankCellAt(double x, double y) const {
+      for (int i = 0; i < bankCount(); ++i)
+         if (bankCellRect(i).contains(x, y))
+            return i;
+      return -1;
+   }
+
+   double bankCtlY(int row) const {
+      return bankGridY() + bankRows() * kBankCellH + kBankRowGap + row * (kBankCtlH + 4.0);
+   }
+
+   Rect bankCtlRect(int row) const {
+      return {mBankRect.x + kSeqPad + kBankCtlLabelW, bankCtlY(row),
+              mBankRect.w - 2.0 * kSeqPad - kBankCtlLabelW, kBankCtlH};
    }
 
    // ------------------------------------------------------------ pane paint
@@ -2062,8 +2103,15 @@ private:
       const int cols = seqCols();
       const int length = mSpec.pattern->seqLength();
       const int head = mSpec.pattern->seqPlayhead();
+      const int pat = editPattern();
       mLastPlayhead = head;
+      mLastPlayingPattern = mSpec.pattern->seqPlayingPattern();
       const bool live = mSpec.pattern->seqEnabled();
+      // The playhead only belongs on this grid while the pattern it is in is
+      // the one on screen. A chain that has moved on leaves the editor showing
+      // a pattern nothing is playing, and a cursor running through it would be
+      // a lie.
+      const bool headHere = live && mLastPlayingPattern == pat;
       const double cw = seqCellW();
       const double gx = seqGridX();
 
@@ -2074,11 +2122,13 @@ private:
       cairo_set_line_width(cr, 1.0);
       cairo_stroke(cr);
 
+      char title[32];
+      std::snprintf(title, sizeof(title), "PATTERN %d", pat + 1);
       setColor(cr, live ? t.accent : t.textMute);
-      drawText(cr, mSeqRect.x + kSeqPad, mSeqRect.y + 15, "PATTERN", 9.5, true, Align::Left);
+      drawText(cr, mSeqRect.x + kSeqPad, mSeqRect.y + 15, title, 9.5, true, Align::Left);
       if (!live) {
          setColor(cr, t.textMute);
-         drawText(cr, mSeqRect.x + kSeqPad + 62, mSeqRect.y + 15,
+         drawText(cr, mSeqRect.x + kSeqPad + 76, mSeqRect.y + 15,
                   "- Mode is set to MIDI, the host is playing it", 9.0, false, Align::Left);
       }
 
@@ -2102,7 +2152,7 @@ private:
 
       // The playhead, behind everything, so the column it marks reads as lit
       // rather than as covered over.
-      if (live && head >= 0 && head < cols) {
+      if (headHere && head >= 0 && head < cols) {
          setColor(cr, t.accent, 0.13);
          cairo_rectangle(cr, gx + head * cw, seqOctY() - 2,
                          cw, mSeqRect.y + mSeqRect.h - kSeqPad - (seqOctY() - 2));
@@ -2128,7 +2178,7 @@ private:
       for (int c = 0; c <= cols; ++c) {
          const bool bar = (c % 4) == 0;
          setColor(cr, t.panelEdge, bar ? 1.0 : 0.45);
-         cairo_set_line_width(cr, bar ? 1.0 : 1.0);
+         cairo_set_line_width(cr, 1.0);
          cairo_move_to(cr, gx + c * cw, gridTop);
          cairo_line_to(cr, gx + c * cw, gridBottom);
          cairo_stroke(cr);
@@ -2142,28 +2192,37 @@ private:
          cairo_fill(cr);
       }
 
-      // ---- the octave row
+      // ---- the octave row. Two halves of one box: the top is up, the bottom
+      // is down, and the half that is set is filled. Big enough to aim at,
+      // which the fourteen-by-ten box it replaced was not.
       setColor(cr, t.textMute);
-      drawText(cr, gx - 6, seqOctY() + 11, "OCT", 8.0, false, Align::Right);
+      drawText(cr, gx - 6, seqOctY() + 17, "OCT", 8.0, false, Align::Right);
+      const double boxH = kSeqOctH - 6.0;
+      const double boxW = std::min(kSeqOctBoxW, cw - 6.0);
       for (int c = 0; c < cols; ++c) {
-         const Step st = mSpec.pattern->seqStep(c);
-         const double bx = gx + c * cw + cw * 0.5 - 7.0;
-         const double by = seqOctY() + 2.0;
-         roundedRect(cr, bx, by, 14.0, kSeqOctH - 5.0, 2.5);
+         const Step st = mSpec.pattern->seqStep(pat, c);
+         const double bx = gx + c * cw + (cw - boxW) * 0.5;
+         const double by = seqOctY() + 3.0;
+         roundedRect(cr, bx, by, boxW, boxH, 3.0);
          setColor(cr, t.knobFace);
          cairo_fill_preserve(cr);
          setColor(cr, t.panelEdge);
          cairo_set_line_width(cr, 1.0);
          cairo_stroke(cr);
          if (st.note >= 0 && st.octave != 0) {
-            // Filled towards the top for +1 and the bottom for -1, which is
-            // where the eye expects an octave to go.
-            const double h = (kSeqOctH - 5.0) * 0.45;
+            const double h = boxH * 0.5 - 1.5;
             setColor(cr, t.accent, 0.85);
-            cairo_rectangle(cr, bx + 1.5, st.octave > 0 ? by + 1.5 : by + (kSeqOctH - 5.0) - h - 1.5,
-                            11.0, h);
+            roundedRect(cr, bx + 1.5, st.octave > 0 ? by + 1.5 : by + boxH - h - 1.5, boxW - 3.0,
+                        h, 2.0);
             cairo_fill(cr);
          }
+         // The seam between the two halves, so both read as targets even on a
+         // step that has no octave set.
+         setColor(cr, t.panelEdge, 0.7);
+         cairo_set_line_width(cr, 1.0);
+         cairo_move_to(cr, bx + 3.0, std::floor(by + boxH * 0.5) + 0.5);
+         cairo_line_to(cr, bx + boxW - 3.0, std::floor(by + boxH * 0.5) + 0.5);
+         cairo_stroke(cr);
       }
 
       // ---- the pitch grid. B at the top, C at the bottom, like a keyboard
@@ -2186,7 +2245,7 @@ private:
          drawText(cr, gx - 6, ry + kSeqRowH - 3.5, kNames[note], 8.0, note == 0, Align::Right);
 
          for (int c = 0; c < cols; ++c) {
-            const Step st = mSpec.pattern->seqStep(c);
+            const Step st = mSpec.pattern->seqStep(pat, c);
             if (st.note != note)
                continue;
             // An accented step is drawn bright, because an accent is the one
@@ -2205,7 +2264,7 @@ private:
          setColor(cr, t.textMute);
          drawText(cr, gx - 6, ly + kSeqLaneH - 5.0, kLaneNames[lane], 8.0, false, Align::Right);
          for (int c = 0; c < cols; ++c) {
-            const Step st = mSpec.pattern->seqStep(c);
+            const Step st = mSpec.pattern->seqStep(pat, c);
             const bool on = st.flag(lane);
             const double bx = gx + c * cw + cw * 0.5 - 5.0;
             const double by = ly + (kSeqLaneH - 10.0) * 0.5;
@@ -2222,6 +2281,106 @@ private:
             }
          }
       }
+   }
+
+   // -------------------------------------------------------------- the bank
+   //
+   // Sixty-four patterns as an eight by eight grid, and under it the two
+   // controls that say what order they play in. Three ordinary parameters --
+   // automated and saved like any other -- drawn here rather than on a panel
+   // because this is where they are used.
+
+   void drawBank(cairo_t *cr) {
+      if (!hasBank())
+         return;
+      const Theme &t = mSpec.theme;
+      const int selected = editPattern();
+      const int playing = mSpec.pattern->seqPlayingPattern();
+      const int chainLen = paneValue(mSpec.chainLengthParam, 1);
+      const int chainMode = paneValue(mSpec.chainModeParam, 0);
+      // Stay never leaves the selected pattern, so shading a chain it does not
+      // use would only claim something untrue.
+      const bool chained = chainMode != kChainStay;
+
+      roundedRect(cr, mBankRect.x, mBankRect.y, mBankRect.w, mBankRect.h, 6);
+      setColor(cr, t.panelFill);
+      cairo_fill_preserve(cr);
+      setColor(cr, t.panelEdge);
+      cairo_set_line_width(cr, 1.0);
+      cairo_stroke(cr);
+
+      setColor(cr, t.accent, 0.85);
+      drawText(cr, mBankRect.x + kSeqPad, mBankRect.y + 15, "PATTERNS", 9.5, true, Align::Left);
+
+      for (int i = 0; i < bankCount(); ++i) {
+         const Rect r = bankCellRect(i);
+         const bool sel = i == selected;
+         const bool live = i == playing;
+         const bool used = !mSpec.pattern->seqPatternEmpty(i);
+         const bool inChain = chained && i < chainLen;
+         const bool hot = r.contains(mMouseX, mMouseY);
+
+         roundedRect(cr, r.x, r.y, r.w, r.h, 3.0);
+         // A used pattern is filled, an empty one is not, and the ones the
+         // chain will reach are lit a little either way: the grid answers
+         // "what is written" and "what will play" at the same glance.
+         if (sel)
+            setColor(cr, t.accent, 0.30);
+         else if (used)
+            setColor(cr, t.track, inChain ? 0.95 : 0.65);
+         else
+            setColor(cr, t.knobFace, inChain ? 1.0 : 0.6);
+         cairo_fill_preserve(cr);
+         setColor(cr, sel ? t.accent : (live ? t.highlight : t.panelEdge),
+                  hot && !sel ? 0.8 : 1.0);
+         cairo_set_line_width(cr, sel || live ? 1.6 : 1.0);
+         cairo_stroke(cr);
+
+         char num[8];
+         std::snprintf(num, sizeof(num), "%d", i + 1);
+         setColor(cr, sel ? t.text : (used ? t.textDim : t.textMute), used || sel ? 1.0 : 0.75);
+         drawText(cr, r.x + r.w * 0.5, r.y + r.h - 7.0, num, 8.0, sel, Align::Center);
+      }
+
+      drawBankControl(cr, 0, mSpec.chainModeParam, "CHAIN");
+      drawBankControl(cr, 1, mSpec.chainLengthParam, "LENGTH");
+   }
+
+   // One of the two chain controls: a label, a value, and an arrow at each end
+   // that steps it. The value is also dragged like a knob, which is the only
+   // civilised way to reach 64 from 1.
+   void drawBankControl(cairo_t *cr, int row, uint32_t id, const char *label) {
+      if (!hasParam(id))
+         return;
+      const Theme &t = mSpec.theme;
+      const Rect r = bankCtlRect(row);
+      const bool hot = r.contains(mMouseX, mMouseY) || mDrag == static_cast<int>(id);
+
+      setColor(cr, t.textMute);
+      drawText(cr, mBankRect.x + kSeqPad, r.y + r.h - 6.0, label, 8.0, true, Align::Left);
+
+      roundedRect(cr, r.x, r.y, r.w, r.h, 3.0);
+      setColor(cr, t.knobFace);
+      cairo_fill_preserve(cr);
+      setColor(cr, hot ? t.accent : t.panelEdge, hot ? 0.7 : 1.0);
+      cairo_set_line_width(cr, 1.0);
+      cairo_stroke(cr);
+
+      setColor(cr, t.textMute);
+      drawTriangle(cr, r.x + 9, r.y + r.h * 0.5, 7, -1);
+      drawTriangle(cr, r.x + r.w - 9, r.y + r.h * 0.5, 7, 1);
+
+      char text[64];
+      if (!paramValueToText(mSpec.params[id], mDelegate.guiParamValue(id), text, sizeof(text)))
+         std::snprintf(text, sizeof(text), "--");
+      setColor(cr, t.text);
+      drawText(cr, r.x + r.w * 0.5, r.y + r.h - 6.0, text, 9.5, false, Align::Center);
+   }
+
+   int paneValue(uint32_t id, int fallback) const {
+      if (!hasParam(id))
+         return fallback;
+      return static_cast<int>(std::floor(mDelegate.guiParamValue(id) + 0.5));
    }
 
    void drawSeqButton(cairo_t *cr, const Rect &r, const char *label) {
@@ -2242,8 +2401,9 @@ private:
    // The three buttons that change a whole pattern at once. None of them is
    // undoable, which is the same deal a hardware sequencer offers.
    void seqClear() {
+      const int pat = editPattern();
       for (int c = 0; c < seqCols(); ++c)
-         mSpec.pattern->seqSetStep(c, Step());
+         mSpec.pattern->seqSetStep(pat, c, Step());
       mDirty = true;
    }
 
@@ -2251,22 +2411,89 @@ private:
       const int len = mSpec.pattern->seqLength();
       if (len <= 1)
          return;
+      const int pat = editPattern();
       Step kept[kMaxSteps];
       for (int c = 0; c < len; ++c)
-         kept[c] = mSpec.pattern->seqStep(c);
+         kept[c] = mSpec.pattern->seqStep(pat, c);
       for (int c = 0; c < len; ++c) {
          int from = (c - by) % len;
          if (from < 0)
             from += len;
-         mSpec.pattern->seqSetStep(c, kept[from]);
+         mSpec.pattern->seqSetStep(pat, c, kept[from]);
       }
       mDirty = true;
+   }
+
+   // Returns true when the click was the bank's.
+   bool onBankDown(double x, double y, unsigned button) {
+      if (!hasBank() || !mBankRect.contains(x, y))
+         return false;
+
+      const int cell = bankCellAt(x, y);
+      if (cell >= 0) {
+         if (!hasParam(mSpec.patternParam))
+            return true;
+         // The wheel steps through the bank rather than jumping to whichever
+         // cell happens to be under the pointer, which is what a wheel is for
+         // and what stops a scroll over the window changing the pattern by
+         // accident.
+         if (button == kWheelUp || button == kWheelDown)
+            nudge(mSpec.patternParam, button == kWheelUp ? 1 : -1, false);
+         else
+            setParamThroughHost(mSpec.patternParam, cell + 1);
+         mDirty = true;
+         return true;
+      }
+
+      for (int row = 0; row < 2; ++row) {
+         const uint32_t id = row == 0 ? mSpec.chainModeParam : mSpec.chainLengthParam;
+         if (!hasParam(id))
+            continue;
+         const Rect r = bankCtlRect(row);
+         if (!r.contains(x, y))
+            continue;
+         if (button == kButtonRight) {
+            setParamThroughHost(id, mSpec.params[id].def);
+            return true;
+         }
+         if (button == kWheelUp || button == kWheelDown) {
+            nudge(id, button == kWheelUp ? 1 : -1, false);
+            return true;
+         }
+         if (button != kButtonLeft)
+            return true;
+         if (x < r.x + 18.0) {
+            nudge(id, -1, false);
+         } else if (x > r.x + r.w - 18.0) {
+            nudge(id, 1, false);
+         } else {
+            // The middle of the field is a knob lying on its side: the shared
+            // drag machinery does not care that this one has no cell.
+            mDrag = static_cast<int>(id);
+            mDragStartY = y;
+            mDragStartValue = mDelegate.guiParamValue(id);
+            mDelegate.guiBeginEdit(id);
+         }
+         mDirty = true;
+         return true;
+      }
+      return true; // inside the panel but on nothing: swallow it
+   }
+
+   // A parameter written as a complete gesture, so the host records it as one
+   // edit rather than as a value that appeared from nowhere.
+   void setParamThroughHost(uint32_t id, double value) {
+      mDelegate.guiBeginEdit(id);
+      mDelegate.guiSetParam(id, value);
+      mDelegate.guiEndEdit(id);
    }
 
    // Returns true when the click was the pane's.
    bool onSeqDown(double x, double y, unsigned button) {
       if (!hasPattern())
          return false;
+      if (onBankDown(x, y, button))
+         return true;
       if (mSeqClearRect.contains(x, y)) {
          seqClear();
          return true;
@@ -2301,7 +2528,7 @@ private:
       if (col < 0)
          return true; // inside the pane but off the grid: swallow it
 
-      Step st = mSpec.pattern->seqStep(col);
+      Step st = mSpec.pattern->seqStep(editPattern(), col);
 
       // The octave row: the top half is up, the bottom half is down, and
       // clicking the one that is already set puts it back to the middle.
@@ -2350,7 +2577,7 @@ private:
       const int col = seqColAt(x);
       if (col < 0)
          return;
-      Step st = mSpec.pattern->seqStep(col);
+      Step st = mSpec.pattern->seqStep(editPattern(), col);
       if (mSeqDragMode == 0) {
          if (y < seqPitchY() || y >= seqPitchY() + 12.0 * kSeqRowH)
             return;
@@ -2365,7 +2592,7 @@ private:
    // ----------------------------------------------------------------- events
 
    // `None` is taken: X11 defines it as a macro.
-   enum class Widget { NoWidget, Prev, Next, Name, Save, Mixer, Hold };
+   enum class Widget { NoWidget, Prev, Next, Name, Save, Mixer, Hold, Advanced };
 
 #if defined(_WIN32)
    void pumpEvents() {
@@ -2650,6 +2877,10 @@ private:
          openMixer();
          return;
       }
+      if (be.button == kButtonLeft && hasAdvanced() && mAdvancedRect.contains(x, y)) {
+         toggleAdvanced();
+         return;
+      }
       if (be.button == kButtonLeft && holdsActive() && mHoldRect.contains(x, y)) {
          clearHolds();
          return;
@@ -2684,9 +2915,9 @@ private:
       if (isChip(d)) {
          // The two arrows still step by one; the name between them opens the
          // full list.
-         const Rect &r = cellRectFor(static_cast<uint32_t>(id));
-         const double chipX = r.x + 5;
-         const double chipW = r.w - 10;
+         const Rect chip = chipRect(cellRectFor(static_cast<uint32_t>(id)));
+         const double chipX = chip.x;
+         const double chipW = chip.w;
          if (x < chipX + 18.0) {
             nudge(static_cast<uint32_t>(id), -1, false);
          } else if (x > chipX + chipW - 18.0) {
@@ -2728,10 +2959,11 @@ private:
       // pointer and are not parameters, so the shared hover machinery does not
       // know about them.
       if (hasPattern()) {
-         const bool wasOver = mSeqRect.contains(mMouseX, mMouseY);
+         const bool wasOver =
+            mSeqRect.contains(mMouseX, mMouseY) || mBankRect.contains(mMouseX, mMouseY);
          mMouseX = x;
          mMouseY = y;
-         if (wasOver || mSeqRect.contains(x, y))
+         if (wasOver || mSeqRect.contains(x, y) || mBankRect.contains(x, y))
             mDirty = true;
       }
       if (mSeqDragMode >= 0) {
@@ -2799,12 +3031,28 @@ private:
          w = Widget::Save;
       else if (hasMixer() && mMixerRect.contains(x, y))
          w = Widget::Mixer;
+      else if (hasAdvanced() && mAdvancedRect.contains(x, y))
+         w = Widget::Advanced;
       else if (holdsActive() && mHoldRect.contains(x, y))
          w = Widget::Hold;
 
-      if (id != mHover || w != mHoverWidget) {
+      // The bank's two chain controls are parameters with no cell, so the help
+      // line has to be told about them separately.
+      int pane = -1;
+      if (hasBank()) {
+         for (int row = 0; row < 2; ++row) {
+            const uint32_t pid = row == 0 ? mSpec.chainModeParam : mSpec.chainLengthParam;
+            if (hasParam(pid) && bankCtlRect(row).contains(x, y))
+               pane = static_cast<int>(pid);
+         }
+         if (pane < 0 && hasParam(mSpec.patternParam) && bankCellAt(x, y) >= 0)
+            pane = static_cast<int>(mSpec.patternParam);
+      }
+
+      if (id != mHover || w != mHoverWidget || pane != mPaneHover) {
          mHover = id;
          mHoverWidget = w;
+         mPaneHover = pane;
          mDirty = true;
       }
    }
@@ -2860,6 +3108,50 @@ private:
    // mixer is holding down, which would leave the remembered values pointing at
    // the preset before it, so the holds are released while they still mean
    // something and the preset lands on top of the real values.
+   // Opens or closes the collapsible section. The window lays itself out and
+   // resizes first and asks the host second: a host that refuses the request
+   // leaves the editor clipped, which is visibly wrong, where a window that
+   // never relaid itself would be wrong and look fine.
+   void toggleAdvanced() {
+      if (!hasAdvanced())
+         return;
+      mAdvancedOpen = !mAdvancedOpen;
+      if (mSpec.host)
+         mSpec.host->windowSetAdvancedOpen(mAdvancedOpen);
+      closeEntry();
+      closeMenu();
+      mBrowserOpen = false;
+      mMixerOpen = false;
+      mHover = -1;
+      mHoverWidget = Widget::NoWidget;
+      buildLayout();
+      applySize();
+      if (mSpec.host)
+         mSpec.host->windowRequestResize(pixelW(), pixelH());
+   }
+
+   // The plugin owns whether the section is open, and a host can move it under
+   // the window's feet by loading state or a project while the editor is up.
+   // Checked once a frame rather than pushed, because a state load happens on
+   // whatever thread the host chose and relaying out a window is not a thing to
+   // do from there.
+   void syncAdvanced() {
+      if (!hasAdvanced())
+         return;
+      const bool want = mSpec.host->windowAdvancedOpen();
+      if (want == mAdvancedOpen)
+         return;
+      mAdvancedOpen = want;
+      closeEntry();
+      closeMenu();
+      mBrowserOpen = false;
+      mHover = -1;
+      mHoverWidget = Widget::NoWidget;
+      buildLayout();
+      applySize();
+      mSpec.host->windowRequestResize(pixelW(), pixelH());
+   }
+
    void loadPreset(int index) {
       clearHolds();
       mDelegate.guiLoadPreset(index);
@@ -2868,7 +3160,6 @@ private:
 
    // ------------------------------------------------------------------ state
 
-   static constexpr int kHistory = 96;
    static constexpr int kBrowserCols = 3;
    // Mixer geometry, in the same design pixels as everything else. The strip
    // height is built from its rows rather than written down, so moving a row
@@ -2915,10 +3206,10 @@ private:
    std::vector<Panel> mPanels;
    std::vector<Cell> mCells;
    std::vector<Rect> mCellRects;
-   Rect mMeter;
    Rect mPrevRect, mNameRect, mNextRect, mSaveRect, mVersionRect;
-   Rect mMixerRect, mHoldRect;
+   Rect mMixerRect, mHoldRect, mAdvancedRect;
    int mBarY = 0, mHelpY = 0;
+   bool mAdvancedOpen = false;
 
    bool mDirty = true;
    int mHover = -1;
@@ -2948,8 +3239,9 @@ private:
 
    bool mMixerOpen = false;
 
-   // The step grid.
+   // The step grid and the bank beside it.
    Rect mSeqRect{0, 0, 0, 0};
+   Rect mBankRect{0, 0, 0, 0};
    Rect mSeqClearRect{0, 0, 0, 0};
    Rect mSeqGenRect{0, 0, 0, 0};
    Rect mSeqSeedDownRect{0, 0, 0, 0};
@@ -2961,6 +3253,11 @@ private:
    int mSeqDragNote = -1;
    bool mSeqPaintValue = false;
    int mLastPlayhead = -1;
+   int mLastPlayingPattern = -1;
+   // A bank control under the pointer. Those three are parameters but they are
+   // not on a panel, so the shared hover machinery cannot see them and the help
+   // line would have nothing to say about the two that need explaining most.
+   int mPaneHover = -1;
    double mMouseX = -1.0;
    double mMouseY = -1.0;
    MixerHit mMixerHit;
@@ -2974,11 +3271,6 @@ private:
 
    // One entry per parameter; the count is only known at construction.
    std::vector<double> mShown;
-   uint32_t mLastVoiceCount = 0;
-   double mMeterFill = 0.0;
-   int mDecayFrames = 0;
-   float mHistory[kHistory] = {0.0f};
-   int mHistoryHead = 0;
 };
 
 } // namespace

@@ -96,6 +96,40 @@ enum ParamId : uint32_t {
    kParamRandOctave,
    kParamRandVibrato,
 
+   // The pattern bank. The steps themselves are still not parameters -- see
+   // pattern.h -- but which of the sixty-four patterns is selected, what
+   // happens when one has played through, and how many of them the chain
+   // covers all are: a host that can automate a pattern change can arrange a
+   // track with it, and all three travel in presets for free.
+   kParamPattern,
+   kParamChainMode,
+   kParamChainLength,
+
+   // The Devil Fish controls.
+   //
+   // Robin Whittle's modification of the machine, from the manual on his own
+   // site. It is a different kind of source from the service notes -- Whittle
+   // documents what each addition *does*, in numbers, rather than printing a
+   // schematic -- but it is a source, which is what this plugin needs: none of
+   // these is a guess.
+   //
+   // Every one of them defaults to the stock machine, and Whittle makes the
+   // same point himself: a Devil Fish can still sound exactly like a TB-303,
+   // and his manual has a table of where to leave each control to keep it
+   // there. Those are the defaults below, so nothing that already existed
+   // moves.
+   //
+   // Not affiliated with or endorsed by Robin Whittle. *Devil Fish* is his and
+   // is used only to name what was modelled.
+   kParamOverdrive,
+   kParamFilterFM,
+   kParamMuffler,
+   kParamSoftAttack,
+   kParamAmpDecay,
+   kParamAmpSustain,
+   kParamSweepSpeed,
+   kParamAccentHold,
+
    kNumParams
 };
 
@@ -105,6 +139,25 @@ enum WaveformKind { kWaveSawtooth = 0, kWaveSquare, kNumWaveforms };
 
 // Where the notes come from.
 enum PlayMode { kModeMidi = 0, kModeSequencer, kNumPlayModes };
+
+// The muted clipper on the VCA output. Two kinds of clipping rather than one,
+// because the modification offers two.
+enum MufflerKind { kMufflerOff = 0, kMufflerSoft, kMufflerHard, kNumMufflerKinds };
+
+// How the accent sweep responds to accents in quick succession. Normal is the
+// machine: charge left over from one accent makes the next one bigger. See
+// acid_engine.cpp for what the other two do and where they come from.
+enum SweepSpeed { kSweepNormal = 0, kSweepFast, kSweepSlow, kNumSweepSpeeds };
+
+// What happens when a pattern has played through. The chain is patterns 1 to
+// Chain Length; Stay ignores it and repeats the selected pattern for ever.
+enum ChainKind { kChainStay = 0, kChainNext, kChainFirst, kChainRandom, kNumChainModes };
+
+// Which pattern plays on the `cycle`-th time round, counting from the one the
+// Pattern parameter selects. Derived from the cycle rather than counted up, so
+// the sequencer stays a pure function of the host's beat position: a loop, a
+// seek or a scrub lands on exactly the pattern it should.
+int chainPatternAt(int mode, int start, int chainLength, long cycle);
 
 // The sequencer's clock, as a fraction of a beat per step.
 enum RateKind { kRate32 = 0, kRate16T, kRate16, kRate8T, kRate8, kNumRates };

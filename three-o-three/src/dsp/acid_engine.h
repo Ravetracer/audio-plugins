@@ -70,6 +70,19 @@ struct EngineParams {
    float vibratoCents = 25.0f;
    float vibratoHz = 6.0f;
    float vibratoDelaySec = 0.06f;
+
+   // The Devil Fish. Robin Whittle's modification of the machine, taken from
+   // his own manual; see params.cpp for where each number comes from. Every
+   // default here is the stock circuit, so an engine that is handed none of
+   // them behaves exactly as it did before they existed.
+   float oscDrive = 1.0f;          // oscillator level into the ladder, 1 = stock
+   float filterFm = 0.0f;          // the VCA's output back into the cutoff
+   int muffler = 0;                // 0 off, 1 soft, 2 hard
+   float softAttackSec = 0.0022f;  // the VCA's attack on an unaccented note
+   float ampDecaySec = 3.4527f;    // the VCA's sag, to a tenth
+   float ampSustain = 0.0f;        // what the sag falls towards
+   int sweepSpeed = 0;             // 0 normal, 1 fast, 2 slow
+   bool accentHold = false;        // accent every note, whatever it asked for
 };
 
 class AcidEngine {
@@ -140,6 +153,11 @@ private:
    // ------------------------------------------------------------------ helpers
    static float polyBlep(float t, float dt);
    static float softClip(float x);
+   // Linear up to `knee` and compressing above it, so a stage that is not being
+   // driven is left exactly alone. Both the ladder's input pair and the Muffler
+   // want that: they have to be bit-transparent at the settings the machine
+   // itself uses and only bite past them.
+   static float softKnee(float x, float knee);
 
    void updateDerived();
 
@@ -175,7 +193,8 @@ private:
    float mVcfEnvCoef = 0.0f;
    float mVcaEnv = 0.0f;
    float mVcaPeak = 0.0f;         // the slow sag while the gate is held
-   float mVcaAttackCoef = 0.0f;
+   float mVcaAttackCoef = 0.0f;      // an unaccented note: the Soft Attack control
+   float mVcaAttackAccentCoef = 0.0f; // an accented one: always the circuit's 2.2 ms
    float mVcaReleaseCoef = 0.0f;
    float mVcaSagCoef = 0.0f;
    float mAccentLevel = 0.0f;     // the sounding note's accent, for the VCA
@@ -186,6 +205,18 @@ private:
    OnePoleLp mTone;
    float mDrivePre = 1.0f;
    float mDriveMakeup = 1.0f;
+
+   // The Muffler's knee -- the level above which it starts to bite, 0 when it is
+   // off -- and the gain that puts back what the compression took, so the
+   // switch changes the shape of the sound rather than its level.
+   float mMufflerKnee = 0.0f;
+   float mMufflerMakeup = 1.0f;
+
+   // Filter FM reads the amplifier's output, so it reads it one sample late --
+   // which is what makes it a feedback path rather than an impossibility.
+   float mLastOut = 0.0f;
+   float mFmOctaves = 0.0f;       // 0 when Filter FM is off, and then the
+                                  // coefficients stay on the control block
 
    // Vibrato. Per note, because the step carries it.
    float mVibAmount = 0.0f;   // 0..1: the step's bit, or the mod wheel

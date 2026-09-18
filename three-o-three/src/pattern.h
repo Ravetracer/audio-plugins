@@ -25,6 +25,11 @@ namespace threeohthree {
 
 constexpr int kMaxSteps = 16;
 
+// How many patterns the bank holds. The machine had far fewer and a mode
+// switch to reach them; sixty-four is enough to write a whole track into and
+// still fits an eight-by-eight grid beside the step editor.
+constexpr int kMaxPatterns = 64;
+
 enum Lane { kLaneSlide = 0, kLaneAccent, kLaneVibrato, kNumLanes };
 
 struct Step {
@@ -50,11 +55,24 @@ struct Step {
    }
 };
 
-// A whole pattern as it travels through a preset load.
+// The whole bank as it travels through a preset load. Flat rather than
+// two-dimensional, because every path that touches it -- the preset text, the
+// state blob, the plugin's own store -- walks it in one pass.
 struct PatternData {
    bool present = false;
-   uint16_t steps[kMaxSteps] = {0};
+   uint16_t steps[kMaxPatterns * kMaxSteps] = {0};
+
+   uint16_t *pattern(int index) { return steps + index * kMaxSteps; }
+   const uint16_t *pattern(int index) const { return steps + index * kMaxSteps; }
 };
+
+// Sixteen rests. Not the same as sixteen zero words: a zero unpacks to an
+// octave of -1, which is invisible on a rest but writes a "-" into a preset.
+void clearPattern(uint16_t *steps);
+
+// Whether a pattern has anything in it at all. What the bank grid shades and
+// what decides whether a preset bothers to write the pattern out.
+bool patternEmpty(const uint16_t *steps);
 
 // ------------------------------------------------------------------ generator
 //
@@ -94,7 +112,12 @@ void generatePattern(const GenSettings &settings, uint16_t *steps);
 // sequencer looks broken.
 void defaultPattern(uint16_t *steps);
 
-// The five preset lines, ready to append to the shared format's output.
+// The bank's preset lines, ready to append to the shared format's output.
+//
+// Pattern 1 keeps the original five keys -- seq_pitch and friends -- so a
+// preset written before the bank existed still loads and one written now still
+// opens in an older build. Patterns 2 upwards use seq2_pitch, seq3_pitch and so
+// on, and an empty pattern is left out rather than written as sixteen dots.
 std::string formatPattern(const uint16_t *steps);
 
 // How the window reaches the pattern.
@@ -106,14 +129,25 @@ class PatternAccess {
 public:
    virtual ~PatternAccess() = default;
 
-   virtual Step seqStep(int index) const = 0;
-   virtual void seqSetStep(int index, const Step &step) = 0;
+   // Both take a pattern index as well as a step, because the window edits
+   // whichever of the sixty-four the Pattern parameter has selected while the
+   // sequencer may well be playing another one.
+   virtual Step seqStep(int pattern, int index) const = 0;
+   virtual void seqSetStep(int pattern, int index, const Step &step) = 0;
    // How many steps the pattern runs for, from the Steps parameter.
    virtual int seqLength() const = 0;
    // Which step is sounding, or -1 when the sequencer is not running.
    virtual int seqPlayhead() const = 0;
    // Whether Mode is set to Sequencer at all.
    virtual bool seqEnabled() const = 0;
+
+   // Which pattern the grid edits, from the Pattern parameter, zero based.
+   virtual int seqPattern() const = 0;
+   // Which pattern is sounding, or -1 when the sequencer is not running. Only
+   // differs from seqPattern() while a chain is running.
+   virtual int seqPlayingPattern() const = 0;
+   // Whether a pattern has any notes in it, for the bank grid's shading.
+   virtual bool seqPatternEmpty(int pattern) const = 0;
 
    // The generator. The window does not know what a scale is or which
    // parameter holds the seed -- it only has three buttons, and the plugin

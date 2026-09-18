@@ -27,11 +27,19 @@ overdrive after the filter — and it is marked as such everywhere it appears.
 
 It is **monophonic** and it tells the host so.
 
-It plays two ways: from the host, or from its own sixteen-step sequencer. Forty
-parameters, twenty-six presets.
+It plays two ways: from the host, or from its own sixteen-step sequencer, which
+draws on a bank of sixty-four patterns.
+
+It also models **Robin Whittle's Devil Fish** modification of the same machine,
+from his own manual — see §11. Every one of those controls defaults to the stock
+circuit, so the plugin is a TB-303 until you ask it not to be.
+
+Fifty-one parameters, twenty-seven presets.
 
 Not affiliated with or endorsed by Roland Corporation. *TB-303* is their
-trademark, used here only to name what was modelled.
+trademark, used here only to name what was modelled. Not affiliated with or
+endorsed by Robin Whittle; *Devil Fish* is his, and is used only to name the
+modification that was modelled.
 
 ## 2. Playing it
 
@@ -234,6 +242,47 @@ Sixteen steps across, below the panels.
 sideways under the bar, which is the quickest way to find out that a line you
 liked was starting in the wrong place. The rest is the generator.
 
+All of it applies to whichever pattern the bank has selected — which is not
+necessarily the one sounding, because a running chain moves on without the
+editor following it. The playhead is only drawn when the two are the same.
+
+### The pattern bank
+
+Beside the grid, eight by eight: **sixty-four patterns**. Click one to edit it,
+or roll the wheel over the grid to step through them. A pattern with something
+written in it is filled, the selected one is outlined in the accent, the one
+sounding is ringed, and the ones the chain will reach are lit.
+
+The machine had sixty-four too, and a mode switch to reach them.
+
+**CHAIN** is what happens when a pattern has played through.
+
+| Chain | After each time round |
+|---|---|
+| **Stay** | repeat the selected pattern. The hardware's behaviour, and the default. |
+| **Next** | step to the following pattern, wrapping round at **Length**. Four patterns make a sixty-four step line. |
+| **First** | play the selected pattern once, then stay on pattern 1. |
+| **Random** | pick one from inside the chain each time round. |
+
+**LENGTH** is how many patterns the chain covers, counting from pattern 1. Stay
+and First ignore it. A pattern selected from outside the chain is where the
+chain starts, and after that it runs inside it.
+
+Which pattern plays is worked out from the host's beat position — not counted up
+as the sequencer goes — for the same reason the steps are. A loop, a seek or a
+scrub therefore lands on exactly the pattern it should, Random included: the same
+bar of the song always picks the same pattern, however it was reached.
+
+The selected pattern, the chain mode and the chain length are ordinary
+parameters, so a host can automate a pattern change like any other knob. The
+sixteen steps inside a pattern are not, and deliberately so — eighty values per
+pattern would make a mess of any host's parameter list. The consequence is that a
+pattern edit is not automatable and the host's undo does not see it, which is the
+same deal a hardware sequencer offers.
+
+The whole bank travels in the preset file and in the plugin's state. Only the
+patterns with something in them are written out.
+
 | Control | Range | Default | |
 |---|---|---|---|
 | **Mode** | MIDI / Sequencer | MIDI | Where the notes come from. |
@@ -241,12 +290,15 @@ liked was starting in the wrong place. The rest is the generator.
 | **Steps** | 1 – 16 | 16 | How many steps before it repeats. The machine took the same range, and the interesting part of it is the bit that is not 16: fifteen sixteenths against a four-four bar walks the pattern round the beat and comes back after fifteen bars. |
 | **Gate** | 0 – 100 % | 50 % | How much of its step a note holds. It does not apply to a step marked Slide — that one holds past the next step's start on purpose. |
 | **Swing** | 50 – 75 % | 50 % | Delays every second step. 66.7 % is triplet swing. The hardware's steps were exactly even. |
+| **Pattern** | 1 – 64 | 1 | Which pattern the grid edits, and the one the chain starts from. |
+| **Chain** | Stay / Next / First / Random | Stay | What happens when a pattern has played through. |
+| **Chain Length** | 1 – 64 | 4 | How many patterns the chain covers. Only Next and Random use it. |
 
 ### Vibrato *(added)*
 
 | Control | Range | Default | |
 |---|---|---|---|
-| **Vib Depth** | 0 – 100 cents | 25 | How far a vibrato step bends. In MIDI mode the mod wheel (CC1) scales it, since there is no step to carry the bit. |
+| **Vib Depth** | 0 – 200 cents | 25 | How far a vibrato step bends. In MIDI mode the mod wheel (CC1) scales it, since there is no step to carry the bit. The top of the range is a whole tone either way — past vibrato, and into something the note is doing on purpose. |
 | **Vib Rate** | 0.5 – 20 Hz | 6 Hz | How fast. |
 | **Vib Delay** | 0 – 400 ms | 60 ms | How long the note waits first, after which it ramps in over 80 ms. At zero it is already wobbling when the note starts, which sounds like a mistake rather than like playing. A slide does not restart the wait. |
 
@@ -297,7 +349,8 @@ Measured over 400 seeds: the root is **44 %** of all generated notes, rests are
 
 | Preset | |
 |---|---|
-| **Factory Reset** | The machine's own middle position, and the reference the others were built against. |
+| **Factory Reset** | The machine's own middle position, and the reference the others were built against. Leaves the pattern bank alone. |
+| **Blank Slate** | The same, and the sequencer with it: the bank emptied down to one bar of C in pattern 1, no octaves, slides, accents or vibrato anywhere. Where you start when you want to write a line rather than edit one. |
 | **Dry Reference** | Every added stage off: no drive, tone fully open, master at unity. The signal path the schematic draws and nothing else. Start here when comparing against a recording. |
 | **Classic Squelch** | Resonance high, envelope sweeping nearly its whole range, decay short enough that the peak falls back before the next sixteenth. |
 | **Dark Engine** | The square wave, low and almost closed. |
@@ -332,7 +385,8 @@ Measured over 400 seeds: the root is **44 %** of all generated notes, rests are
 ## 9. The window
 
 One row of knobs across a wide, shallow panel, which is the shape of the machine
-it models.
+it models — and a second row of them behind a button, because ten of the
+controls are for tuning the engine rather than for playing it.
 
 - **Drag** a knob to edit it; **double-click** to reset it; **shift-drag** for
   fine control; **click a value** to type one.
@@ -340,6 +394,11 @@ it models.
   for its list.
 - The **preset bar** browses the factory library and anything in your own preset
   directory; **SAVE** writes a new one there.
+- **ADVANCED**, beside SAVE, opens the collapsible half of the window: the ten
+  mods, and the ACCENT, SLIDE and VIBRATO panels. The window grows to make room
+  and shrinks again when you close it, and it remembers which way you left it.
+  A host that will not resize a plugin editor on request will leave it clipped;
+  everything in it is reachable from the host's own parameter list either way.
 - **Clicking the version label** plays one low accented note, so a preset can be
   auditioned without reaching for a keyboard.
 - The curve across the **header** is the ladder's actual response — the same
@@ -353,6 +412,7 @@ it models.
 ./build/threeohthree-render --preset dark_engine --out acid.wav --seconds 16
 ./build/threeohthree-render --all --outdir /tmp/acid --bpm 138
 ./build/threeohthree-render --hold --key 40 --seconds 4
+./build/threeohthree-render --all --demo-moves --outdir demos --seconds 16
 ./build/threeohthree-render --selftest
 ```
 
@@ -365,12 +425,145 @@ that out for itself: a running transport and no notes at all, with the length
 rounded up to a whole number of times round the pattern and never fewer than
 three, so a demo ends where the loop does rather than halfway through a bar.
 
+### Moving knobs while it renders
+
+A demo that holds every control still for sixteen seconds is a photograph of a
+preset. `--demo-moves` makes it a recording of somebody playing one:
+
+```sh
+./build/threeohthree-render --all --demo-moves --outdir demos \
+   --seconds 16 --tail 3 --rate 48000
+```
+
+Three controls move, all three **relative to whatever the preset sets**, so a
+demo shows the instrument's range without losing what makes it that preset:
+
+| | Over the take |
+|---|---|
+| **Cutoff** | down about an octave and a half, up to an octave above where it started, then settling a little under it |
+| **Resonance** | a quarter of its travel, so the sweep gets more vocal as it goes |
+| **Drive** | a third of its travel, starting halfway in, so the end leans into the clipper |
+
+Resonance and Drive **reflect rather than clamp**: a preset already near the top
+travels the same distance downward instead, because a knob sitting against the
+ceiling for sixteen seconds is the thing this exists to avoid. The moves run
+over the held seconds and not the tail, so the last note decays wherever the
+sweep left the filter.
+
+For anything else, `--move` writes one out by hand, in real units, and can be
+given more than once:
+
+```sh
+--move "Cutoff=200 Hz..2 kHz"          # a straight ramp over the take
+--move "Cutoff=800..2400..600"         # there and back
+--move "Drive=20%..90%@8:16"           # only the second half
+```
+
+Interpolation happens in the parameter's own domain, so a Log control like
+Cutoff sweeps evenly **in octaves** rather than crawling through its top one.
+
+Without either flag nothing moves and a render is byte-for-byte what it always
+was.
+
 `--seed 1 --seeds 8` prints what the generator makes, as the grid draws it.
 
 The engine holds no random state, so the same preset at the same sample rate
 renders the same samples every time.
 
-## 11. Where the numbers came from
+## 11. The Devil Fish
+
+Robin Whittle has modified TB-303s as the **Devil Fish** since the early
+nineties. He publishes a manual for it, and it is a good source of a different
+kind from the service notes: it documents what each addition *does*, in numbers,
+rather than printing a schematic. Everything in this chapter comes from it.
+
+**Every control here defaults to the stock circuit.** Whittle's manual has a
+section called *Limiting the Devil Fish to TB-303 sounds*, a table of where to
+leave each control so the machine behaves like an unmodified one; those are the
+defaults. It is checked rather than asserted: all twenty-seven presets render
+byte for byte what they did before any of this existed.
+
+### The controls
+
+**Overdrive** *(VCF)* is the oscillator's level into the filter. It is not
+`Drive` — this one is in front of the ladder and `Drive` is behind it. 0 dB is
+the fixed level the machine has. Above that the ladder's input pair stops being
+linear and starts switching, which is Whittle's "the filter operates under
+duress"; the top of the range is his 66.6 times normal. At the bottom the
+oscillator is gone altogether, and that setting is only interesting with
+`Res Range` past 100 %: the filter sings on its own and Overdrive reintroduces
+the oscillator by hand.
+
+**Filter FM** *(VCF)* feeds the amplifier's own output back into the filter
+frequency, at audio rate. It is loudest where the signal is loudest, so it bites
+hardest on accented notes and wherever Overdrive is up, and it needs resonance
+to have anything to work with. A little is edge. A lot is what Whittle calls a
+spluttering chaotic mess, and he is right. While it is up the filter
+coefficients are recomputed every sample instead of every eighth, which is what
+audio-rate modulation costs and why it is off by default.
+
+**Muffler** *(DRIVE)* is a clipper on the output — Off, Soft, Hard. It only
+touches signals that are already loud, and it leaves the bottom of the spectrum
+alone, so what it takes off is the top of the loudest peaks rather than the
+weight of the note. Measured on a stock line: Soft raises the spectral centroid
+10 %, Hard 34 %, both within 1.5 dB of the same level. That is the buzz, not a
+volume control.
+
+**Soft Attack** *(AMP)* is how fast the amplifier opens on an unaccented note,
+0.3 to 30 ms. The machine's is fixed by C41 and R134 at 2.2 ms, which is the
+default and is as good as instant; an accented note always uses it whatever this
+says. Turned up, the note swells instead of starting — the one thing a 303
+cannot do.
+
+**Amp Decay** and **Amp Sustain** *(AMP)* are the volume envelope, which the
+machine gives you no way to reach: R123 and C42 fix its decay at 1.5 s, reaching
+a tenth in about 3.45 s, and that is the default. It is long enough that over a
+sixteenth note nothing happens, which is why the 303's amplifier holds while the
+filter falls. Shorten it and the notes start closing on their own. Amp Sustain
+is where the decay falls to instead of silence, so a held note can run
+indefinitely.
+
+**Sweep Speed** *(ACCENT)* is how the accent circuit answers accents in quick
+succession.
+
+| | |
+|---|---|
+| **Normal** | The machine. Charge left in C62 from one accent makes the next one bigger — you poke it and it squeals, you poke it again and it squeals more. |
+| **Fast** | The opposite. The output is the pulse that was just added rather than what has accumulated, so a residue makes the next one *smaller* and the first accent of a run is the strongest. |
+| **Slow** | Rises more gently to about twice as far, and takes longer to cool, so it is still settling through the notes that follow. |
+
+Whittle describes what these three do without giving component values — there is
+no Devil Fish schematic — so Normal is the machine and the other two are fitted
+to his description. `Sweep Time` and `Acc Build` remain the controls.
+
+**Accent Hold** *(ACCENT)* accents every note whatever its step or velocity says.
+His front panel has a pushbutton for it.
+
+### The widened ranges
+
+Four controls kept their defaults and grew their travel:
+
+| | Was | Now |
+|---|---|---|
+| **Cutoff** | 100 Hz – 2.5 kHz | 30 Hz – 5 kHz |
+| **Decay** | 200 ms – 2.5 s | 30 ms – 3 s |
+| **Slide Time** | 10 – 300 ms | 10 – 360 ms |
+| **Res Range** | 50 – 130 % | 50 – 200 % |
+| **Tracking** | 0 – 100 % | 0 – 200 % |
+
+A project saved before this converts on load: for a logarithmic control the
+saved value is a position on the curve, not a frequency, so widening the curve
+would otherwise move it. Preset files were never at risk — they are written in
+real units.
+
+### What is not modelled
+
+The part of the modification that is jacks: the external audio input into the
+filter, the audio Filter FM input, the Filter Out tap, and the CV and gate
+sockets. Those want an audio input port and a second output, which is a
+different shape of plugin. Whittle's MIDI retrofits need nothing at all here.
+
+## 12. Where the numbers came from
 
 `tools/analysis/README.md` lists every number in the engine and says whether it
 was read off the schematic, printed in the service notes, derived, or fitted.

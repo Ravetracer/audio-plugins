@@ -48,6 +48,9 @@ seq_rate = 1/16
 seq_steps = 16
 gate = 0.5
 swing = 50
+pattern = 1
+chain_mode = Stay
+chain_length = 4
 
 # Vibrato
 vib_depth = 25

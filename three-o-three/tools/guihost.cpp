@@ -36,7 +36,35 @@ const clap_host_t *gHostPtr = nullptr;
 const clap_plugin_t *gPlugin = nullptr;
 std::atomic<bool> gRunning{true};
 
-const void *hostGetExtension(const clap_host_t *, const char *) { return nullptr; }
+// The plugin asks to be resized when its collapsible panel section opens or
+// closes. A DAW obliges by resizing the window it parented the editor into;
+// this does the same, on the event loop rather than on the calling thread,
+// because that is where the X connection is.
+std::atomic<bool> gResizeWanted{false};
+std::atomic<uint32_t> gResizeW{0};
+std::atomic<uint32_t> gResizeH{0};
+
+void hostGuiResizeHintsChanged(const clap_host_t *) {}
+
+bool hostGuiRequestResize(const clap_host_t *, uint32_t width, uint32_t height) {
+   gResizeW.store(width);
+   gResizeH.store(height);
+   gResizeWanted.store(true);
+   return true;
+}
+
+bool hostGuiRequestShow(const clap_host_t *) { return false; }
+bool hostGuiRequestHide(const clap_host_t *) { return false; }
+void hostGuiClosed(const clap_host_t *, bool) {}
+
+const clap_host_gui_t gHostGui = {hostGuiResizeHintsChanged, hostGuiRequestResize,
+                                  hostGuiRequestShow, hostGuiRequestHide, hostGuiClosed};
+
+const void *hostGetExtension(const clap_host_t *, const char *id) {
+   if (id && std::strcmp(id, CLAP_EXT_GUI) == 0)
+      return &gHostGui;
+   return nullptr;
+}
 void hostRequestRestart(const clap_host_t *) {}
 void hostRequestProcess(const clap_host_t *) {}
 void hostRequestCallback(const clap_host_t *) {}
@@ -217,6 +245,20 @@ int main(int argc, char **argv) {
              plug->get_extension(plug, CLAP_EXT_TIMER_SUPPORT)))
          timer->on_timer(plug, 0);
 #else
+      // A resize the plugin asked for, taken the way a DAW takes it: the host
+      // window follows the editor rather than the other way round.
+      if (gResizeWanted.exchange(false)) {
+         const uint32_t nw = gResizeW.load();
+         const uint32_t nh = gResizeH.load();
+         if (nw && nh && (nw != w || nh != h)) {
+            w = nw;
+            h = nh;
+            XResizeWindow(dpy, win, w, h);
+            XFlush(dpy);
+            std::printf("host resize %ux%u\n", w, h);
+            std::fflush(stdout);
+         }
+      }
       while (XPending(dpy)) {
          XEvent ev;
          XNextEvent(dpy, &ev);

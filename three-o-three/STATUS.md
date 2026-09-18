@@ -1,6 +1,6 @@
 # ThreeOhThree -- status
 
-Version 0.1.0. Linux, CLAP. 40 parameters, 26 presets, builds clean, self-test
+Version 0.1.0. Linux, CLAP. 51 parameters, 27 presets, builds clean, self-test
 passes with no failures.
 
 ## What works
@@ -20,6 +20,27 @@ stage added after.
   machine's own keyboard did. Notes are sample-accurate: the audio block is
   split again at every step boundary.
 
+**A bank of sixty-four patterns**, with a chain: Stay repeats the selected one,
+Next runs the chain and wraps at its length, First comes home after one time
+round, Random picks inside it. Which pattern plays is a function of the host's
+beat position, not a counter the sequencer advances, so looping and scrubbing
+land on the right pattern for the same reason the steps do. The whole bank is in
+the preset file and in the state blob; the selected pattern, the chain mode and
+the chain length are parameters and so are automatable.
+
+**The Devil Fish.** Robin Whittle's modification of the same machine, from his
+own manual: Overdrive into the filter, audio-rate Filter FM, the Muffler, Soft
+Attack, the volume envelope as Amp Decay and Amp Sustain, the three accent Sweep
+Speeds, Accent Hold, and the widened ranges on Cutoff, Decay, Slide Time, Res
+Range and Tracking. **Every one defaults to the stock circuit**, and that is
+checked the hard way: all twenty-seven presets render byte for byte what they
+did before any of it existed. Whittle says a Devil Fish can still sound exactly
+like a TB-303; so does this.
+
+Not modelled: the jacks. External audio into the filter, the audio Filter FM
+input, the Filter Out tap, CV and gate. Those need an audio input port and a
+second output.
+
 **The ten mods.** Every constant in the engine that the schematic does not give
 is a control instead of a hidden guess -- the two Env Mod magnitudes, the three
 accent numbers, the accent decay the hardware forces, the square's droop, the
@@ -30,9 +51,14 @@ defaults are the values the engine shipped with, so nothing moved.
 settings, same sixteen steps, every time -- so a line worth keeping is a number
 rather than a file.
 
-**The window**, 1132 x 950: the panels, the ladder's real response curve
-animating across the header, and a step grid with a twelve-row piano roll, a
-per-step octave lane and three flag lanes.
+**The window**, 1080 x 703, growing to 1080 x 975: the panels, the ladder's real
+response curve animating across the header, a step grid with a twelve-row piano
+roll, a per-step octave lane and three flag lanes, and the pattern bank beside
+it. The ten mods and the three panels that go with them are behind the ADVANCED
+button, which grows the window through `clap_host_gui::request_resize`; the
+window remembers which way it was left in the plugin's state. There is no
+activity meter -- what the instrument is doing is the header's filter curve and
+the sequencer's playhead.
 
 **No random state in the engine at all**, so a preset renders identically every
 time. The self-test checks it across a reset with a different note in between.

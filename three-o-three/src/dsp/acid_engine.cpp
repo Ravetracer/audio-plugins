@@ -113,6 +113,46 @@ constexpr float kSquareLevel = 3.0f / 6.5f;
 
 constexpr float kDcBlockHz = 12.0f;
 
+// ------------------------------------------------------------- the Devil Fish
+//
+// The ladder's input pair is linear over the swing the machine gives it and
+// starts switching above that. 1.5 is comfortably above the oscillator's own
+// peak -- the falling ramp reaches 1.0 and the band-limited step overshoots it
+// a little -- so at the stock Overdrive setting this stage is the identity and
+// the engine is bit-for-bit what it was.
+constexpr float kLadderInputKnee = 1.5f;
+
+// The two positions of the Muffler switch, as the level above which each starts
+// to bite. The amplifier's output peaks around 0.8 and spends its loudest few
+// percent above 0.47, so Soft catches accents and the occasional peak while
+// Hard works over most of the top of the signal -- which is what "affects
+// sounds which are louder than usual" has to mean in numbers.
+//
+// The clipper takes the whole signal and not a split band, which took a wrong
+// turn to establish. Routing the bottom of the spectrum around it -- the
+// literal reading of "allowing the bass to pass largely unaffected" -- makes
+// the Muffler *duller*, because then it only ever shaves the harmonics: the
+// measured spectral centroid fell by two thirds and nothing buzzed. A clipper
+// works on everything, and the bass survives because the knee is soft and the
+// fundamental is what drives the clipping in the first place; the flattened
+// peaks are where Whittle's "square wave clipping buzz" comes from.
+constexpr float kMufflerSoftKnee = 0.45f;
+constexpr float kMufflerHardKnee = 0.22f;
+
+// How far full Filter FM moves the cutoff, at full amplifier output. Whittle
+// gives no number for this -- there is no schematic for the Devil Fish -- so it
+// is chosen to reach the behaviour he describes: edge at a little, and chaos at
+// a lot.
+constexpr float kFilterFmOctaves = 4.0f;
+
+// The accent sweep's three speeds, as multiples of the Sweep Time control and
+// of how far the charge may rise. Normal is the machine and is therefore 1 and
+// 1. Fast and Slow are fitted to Whittle's description of what they do, not to
+// components, because he documents the behaviour rather than the circuit.
+constexpr float kSweepFastScale = 0.33f;
+constexpr float kSweepSlowScale = 3.0f;
+constexpr float kSweepSlowCeiling = 2.0f;
+
 // How often the filter coefficients are recomputed. Every eighth sample is
 // 6 kHz at 48 k, far above anything the envelopes do, and it keeps one tan()
 // out of the per-sample path.
@@ -155,6 +195,24 @@ float AcidEngine::softClip(float x) {
    return x * (27.0f + x2) / (27.0f + 9.0f * x2);
 }
 
+// Linear below the knee and compressing above it, asymptotically towards twice
+// the knee. Continuous in value and in slope at the knee, so there is no edge
+// where it starts working.
+//
+// The point of the knee is that a stage which is not being driven has to be
+// left exactly alone. The ladder's input pair and the Muffler are both like
+// that: the machine's own signal levels have to come through untouched, or
+// turning a Devil Fish control to its stock position would not give back the
+// stock sound.
+float AcidEngine::softKnee(float x, float knee) {
+   const float a = std::fabs(x);
+   if (a <= knee)
+      return x;
+   const float over = a - knee;
+   const float y = knee + over / (1.0f + over / knee);
+   return x < 0.0f ? -y : y;
+}
+
 // The polynomial band-limited step, for the two discontinuities a ramp and a
 // square have. Without it the oscillator folds its harmonics back down the
 // spectrum, which is the one way a digital 303 gives itself away instantly.
@@ -195,6 +253,7 @@ void AcidEngine::reset() {
    mSquareDroop.reset();
    mDcBlock.reset();
    mTone.reset();
+   mLastOut = 0.0f;
    mDcBlock.setCutoff(kDcBlockHz, static_cast<float>(mSampleRate));
    // Seeded here rather than from a clock, so that reset() really does put the
    // engine back where it started and a render stays repeatable to the sample.
@@ -222,11 +281,24 @@ void AcidEngine::updateDerived() {
    mDecayCoefOpen = decayCoef(mParams.decaySec * kDecayToSixtyDb, sr);
    mDecayCoefAccent = decayCoef(mParams.accDecaySec * kDecayToSixtyDb, sr);
 
-   mVcaAttackCoef = onePoleCoef(kVcaAttackSec, sr);
+   // An unaccented note opens at whatever Soft Attack says; an accented one
+   // always uses the circuit's own 2.2 ms, because the modification's pot is
+   // documented as acting on unaccented notes only.
+   mVcaAttackCoef = onePoleCoef(mParams.softAttackSec, sr);
+   mVcaAttackAccentCoef = onePoleCoef(kVcaAttackSec, sr);
    mVcaReleaseCoef = onePoleCoef(kVcaReleaseSec, sr);
-   mVcaSagCoef = rcCoef(kVcaSagSec, sr);
+   // Amp Decay is stated as the time to a tenth, like the filter's Decay knob,
+   // and R123 x C42 is an RC: the two differ by ln(10).
+   mVcaSagCoef = rcCoef(mParams.ampDecaySec / 2.302585093f, sr);
 
-   mAccentSweepCoef = rcCoef(mParams.accentSweepSec, sr);
+   // Sweep Speed changes the time constant as well as the charge law. Normal is
+   // the machine and leaves C62 exactly where the schematic puts it.
+   {
+      const float scale = mParams.sweepSpeed == 1 ? kSweepFastScale
+                        : mParams.sweepSpeed == 2 ? kSweepSlowScale
+                                                  : 1.0f;
+      mAccentSweepCoef = rcCoef(mParams.accentSweepSec * scale, sr);
+   }
 
    mSlideCoef = onePoleCoef(mParams.slideSec, sr);
 
@@ -247,6 +319,19 @@ void AcidEngine::updateDerived() {
    mSquareDroop.setCutoff(clampv(mParams.droopHz, 0.5f, sr * 0.4f), sr);
 
    mTone.setCutoff(clampv(mParams.toneHz, 200.0f, sr * 0.45f), sr);
+
+   mMufflerKnee = mParams.muffler == 1 ? kMufflerSoftKnee
+                : mParams.muffler == 2 ? kMufflerHardKnee
+                                       : 0.0f;
+   // Level-matched at 0.8, the same nominal the drive stage uses, so switching
+   // the Muffler in changes the shape of the sound and not how loud it is.
+   // Without this Hard cost 5 dB and read as a volume control.
+   mMufflerMakeup =
+      mMufflerKnee > 0.0f ? 0.8f / softKnee(0.8f, mMufflerKnee) : 1.0f;
+
+   // Zero switches the per-sample coefficient path off entirely, which is what
+   // keeps a render with no Filter FM identical to one from before it existed.
+   mFmOctaves = mParams.filterFm * kFilterFmOctaves;
 
    // 1 to 24 times into the clipper, level-matched so that turning it up
    // thickens instead of simply getting louder.
@@ -291,7 +376,27 @@ void AcidEngine::startNote(int16_t key, bool accent, bool vibrato, bool slide) {
    // accent bit of the step, and it reaches its own circuit rather than the
    // envelope generator.
    if (accent) {
-      mAccentSweep += (1.0f - mAccentSweep) * mParams.accBuild;
+      // Normal is the machine: the pulse tops C62 up towards full, and whatever
+      // is left over from the last accent means the next one ends higher. That
+      // is the behaviour people describe as the machine getting worked up.
+      //
+      // Fast is the other way round. The output is the pulse that was just
+      // added rather than what has accumulated, so a residue makes the next one
+      // *smaller*: the first accent of a run is the strongest.
+      //
+      // Slow charges more gently towards twice as far, and (through its time
+      // constant) is still settling through the notes that follow.
+      switch (mParams.sweepSpeed) {
+      case 1:
+         mAccentSweep = mParams.accBuild * (1.0f - mAccentSweep);
+         break;
+      case 2:
+         mAccentSweep += (kSweepSlowCeiling - mAccentSweep) * mParams.accBuild * 0.5f;
+         break;
+      default:
+         mAccentSweep += (1.0f - mAccentSweep) * mParams.accBuild;
+         break;
+      }
       mAccentLevel = mParams.accent;
    } else {
       mAccentLevel = 0.0f;
@@ -324,7 +429,8 @@ void AcidEngine::noteOn(int16_t /*port*/, int16_t /*channel*/, int16_t key, int3
                         double velocity) {
    if (key < 0 || key > 127)
       return;
-   const bool accent = velocity * 127.0 >= static_cast<double>(mParams.accentVelocity);
+   const bool accent = mParams.accentHold ||
+                       velocity * 127.0 >= static_cast<double>(mParams.accentVelocity);
    pushHeld(key, noteId);
    // Played from a host there is no per-step vibrato bit, so the mod wheel is
    // it: CC1 is where a vibrato lives on every other instrument.
@@ -335,7 +441,7 @@ void AcidEngine::noteOnStep(int16_t key, bool accent, bool vibrato) {
    if (key < 0 || key > 127)
       return;
    pushHeld(key, -1);
-   startNote(key, accent, vibrato, mHeldBefore);
+   startNote(key, accent || mParams.accentHold, vibrato, mHeldBefore);
 }
 
 void AcidEngine::pushHeld(int16_t key, int32_t noteId) {
@@ -446,27 +552,50 @@ void AcidEngine::process(float *outL, float *outR, uint32_t frames) {
          mParams.tracking * (static_cast<float>(mCurrentKey) - 60.0f) * (1.0f / 12.0f);
       const float octaves = mSweepOct * mVcfEnv +
                             mParams.accSweepOct * mParams.accent * mAccentSweep + trackOct;
-      float fc = mBaseCutoffHz * exp2fast(octaves);
-      fc = clampv(fc, 20.0f, nyquistGuard);
-
-      // Zero-delay one-pole coefficients. The first stage is the .018 uF one.
-      const float w1 = clampv(fc * kInputPoleRatio, 20.0f, nyquistGuard);
-      const float g1 = std::tan(kPi * w1 / sr);
-      const float gr = std::tan(kPi * fc / sr);
-      const float G1 = g1 / (1.0f + g1);
-      const float Gr = gr / (1.0f + gr);
-      const float Gprod = G1 * Gr * Gr * Gr;
+      const float fcBase = clampv(mBaseCutoffHz * exp2fast(octaves), 20.0f, nyquistGuard);
       const float k = mFeedback;
 
+      // Zero-delay one-pole coefficients. The first stage is the .018 uF one.
+      //
+      // With Filter FM off these are the whole block's, as they have always
+      // been: the envelopes move far too slowly for eight samples to matter and
+      // it keeps two tangents out of the inner loop. With Filter FM on the
+      // cutoff moves at audio rate by definition, so they have to be redone
+      // every sample -- that is what the control costs, and why it is off by
+      // default.
+      const bool fmOn = mFmOctaves > 0.0f;
+      float G1 = 0.0f, Gr = 0.0f, Gprod = 0.0f;
+      auto coefficientsFor = [&](float fc) {
+         const float w1 = clampv(fc * kInputPoleRatio, 20.0f, nyquistGuard);
+         const float g1 = std::tan(kPi * w1 / sr);
+         const float gr = std::tan(kPi * fc / sr);
+         G1 = g1 / (1.0f + g1);
+         Gr = gr / (1.0f + gr);
+         Gprod = G1 * Gr * Gr * Gr;
+      };
+      if (!fmOn)
+         coefficientsFor(fcBase);
+
       for (uint32_t s = 0; s < n; ++s) {
+         if (fmOn) {
+            // The amplifier's output from the previous sample, which is what
+            // makes this a feedback path and not an impossibility.
+            const float fc =
+               clampv(fcBase * exp2fast(mFmOctaves * mLastOut), 20.0f, nyquistGuard);
+            coefficientsFor(fc);
+         }
          // ------------------------------------------------------- envelopes
          mVcfEnv *= mAccented ? mDecayCoefAccent : mDecayCoefOpen;
          mAccentSweep *= mAccentSweepCoef;
 
          if (mGate) {
-            mVcaPeak *= mVcaSagCoef;
+            // The sag falls towards Amp Sustain rather than towards nothing. At
+            // zero -- the machine -- this is the bare multiply it always was.
+            mVcaPeak = mParams.ampSustain +
+                       (mVcaPeak - mParams.ampSustain) * mVcaSagCoef;
             const float target = mVcaPeak * (1.0f + mAccentLevel * mParams.accGain);
-            mVcaEnv += (target - mVcaEnv) * mVcaAttackCoef;
+            mVcaEnv += (target - mVcaEnv) *
+                       (mAccented ? mVcaAttackAccentCoef : mVcaAttackCoef);
          } else {
             mVcaEnv += (0.0f - mVcaEnv) * mVcaReleaseCoef;
          }
@@ -510,6 +639,11 @@ void AcidEngine::process(float *outL, float *outR, uint32_t frames) {
             osc = mSquareDroop.tick(osc) * kSquareLevel;
          }
 
+         // Overdrive: the oscillator's level into the ladder. The input pair is
+         // linear over the swing the machine gives it and compresses above
+         // that, so at the stock setting this is the identity.
+         osc = softKnee(osc * mParams.oscDrive, kLadderInputKnee);
+
          // ------------------------------------------------------------- VCF
          //
          // Four one-pole stages with feedback around them, solved for the
@@ -546,8 +680,31 @@ void AcidEngine::process(float *outL, float *outR, uint32_t frames) {
 
          // ------------------------------------------------------- VCA + out
          float out = y * mVcaEnv;
+
          out = softClip(out * mDrivePre) * mDriveMakeup;
          out = mTone.tick(out);
+
+         // The Muffler goes last, after the drive stage, and that is a
+         // deliberate departure from where Whittle draws it.
+         //
+         // On a Devil Fish the Muffler is on the amplifier's output because
+         // that *is* the output -- there is nothing after it. This plugin has a
+         // drive stage the machine does not have, and putting the Muffler in
+         // front of it erased the Muffler completely: the drive's own clipper
+         // is far harder, so it simply re-flattened whatever shape the Muffler
+         // had made. Measured, the spectral centroid moved by 0.0 % at every
+         // setting. Last in the chain, the Muffler is the final clipper, which
+         // is the position it occupies on the hardware.
+         //
+         // It is linear below its knee, so Off and a quiet signal are both
+         // untouched and a stock preset is bit-for-bit what it was.
+         if (mMufflerKnee > 0.0f)
+            out = softKnee(out, mMufflerKnee) * mMufflerMakeup;
+
+         // What Filter FM reads: the amplifier's output after the Muffler, as
+         // Whittle specifies.
+         mLastOut = clampv(out, -4.0f, 4.0f);
+
          out = mDcBlock.tick(out) * mParams.gain;
 
          outL[i + s] = out;

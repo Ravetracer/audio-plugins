@@ -64,6 +64,8 @@ const char *dlerrorCompat() { return "see GetLastError()"; }
 #endif
 
 #include "params.h"
+#include <sstream>
+
 #include "pattern.h"
 #include "threeohthree.h"
 
@@ -417,6 +419,53 @@ clap_event_param_value_t makeParamValue(clap_id id, double value) {
 
 std::vector<std::pair<clap_id, double>> gParamOverrides;
 
+// ---------------------------------------------------------------- automation
+//
+// A parameter that moves while the render runs, which is what turns a demo from
+// a photograph of a preset into a recording of somebody playing it.
+//
+// The points are raw parameter values and they are interpolated linearly in
+// that domain, not in display units. For a Log parameter -- Cutoff is one --
+// the raw domain is already exponential, so a straight line through it is a
+// straight line in octaves, which is what a filter sweep has to be to sound
+// even. Doing this in Hz would spend most of the take crawling through the top
+// octave.
+struct ParamMove {
+   clap_id id = 0;
+   std::vector<double> points; // two or more raw values, evenly spaced in time
+   double startSec = 0.0;
+   double endSec = 0.0;
+};
+
+std::vector<ParamMove> gParamMoves;
+
+double moveValueAt(const ParamMove &m, double t) {
+   if (m.points.empty())
+      return 0.0;
+   if (m.points.size() == 1 || !(m.endSec > m.startSec) || t <= m.startSec)
+      return m.points.front();
+   if (t >= m.endSec)
+      return m.points.back();
+   const double span = static_cast<double>(m.points.size() - 1);
+   const double u = (t - m.startSec) / (m.endSec - m.startSec) * span;
+   const size_t leg = std::min(static_cast<size_t>(u), m.points.size() - 2);
+   const double f = u - static_cast<double>(leg);
+   return m.points[leg] + (m.points[leg + 1] - m.points[leg]) * f;
+}
+
+// One event per move per block, at the block's own start. A block is 512 frames
+// by default, so a sixteen second sweep lands in about 1500 steps -- a few cents
+// each on the cutoff, which is far below anything audible as a stair. Putting
+// them mid-block instead would mean interleaving them with the note events in
+// time order, and CLAP requires the input list sorted; this keeps every
+// parameter event at time 0 and the list sorted by construction.
+void pushMoveEvents(std::vector<clap_event_param_value_t> &out, uint32_t frame,
+                    double sampleRate) {
+   const double t = static_cast<double>(frame) / sampleRate;
+   for (const ParamMove &m : gParamMoves)
+      out.push_back(makeParamValue(m.id, moveValueAt(m, t)));
+}
+
 clap_event_note_t makeNote(uint16_t type, uint32_t time, int16_t key, double velocity,
                            int32_t noteId = 1) {
    clap_event_note_t ev{};
@@ -547,6 +596,7 @@ RenderResult renderPlugin(const clap_plugin_t *plugin, double sampleRate, uint32
          events.notes.push_back(makeNote(CLAP_EVENT_NOTE_ON, 0, key, velocity));
          noteOnSent = true;
       }
+      pushMoveEvents(events.params, frame, sampleRate);
       if (!noteOffSent && frame + n > holdFrames && holdFrames >= frame) {
          events.notes.push_back(
             makeNote(CLAP_EVENT_NOTE_OFF, holdFrames - frame, key, velocity));
@@ -630,6 +680,9 @@ RenderResult renderSequence(const clap_plugin_t *plugin, double sampleRate, uint
             events.params.push_back(makeParamValue(ov.first, ov.second));
          paramsSent = true;
       }
+      // After the overrides, so a move wins over a static value for the same
+      // parameter rather than being overwritten by it on the first block.
+      pushMoveEvents(events.params, frame, sampleRate);
       while (next < schedule.size() && schedule[next].frame < frame + n) {
          const SeqEvent &e = schedule[next];
          const uint32_t at = e.frame > frame ? e.frame - frame : 0;
@@ -761,6 +814,183 @@ bool resolveParamOverrides(const clap_plugin_t *plugin,
          std::fprintf(stderr, "no such parameter: '%s'\n", spec.substr(0, eq).c_str());
          return false;
       }
+   }
+   return true;
+}
+
+// ---------------------------------------------------------- the demo sweep
+//
+// What --demo-moves does. A demo that holds every knob still for sixteen
+// seconds is a photograph of a preset; this is a recording of somebody playing
+// it. Three controls move, and all three move *relative to whatever the preset
+// sets*, so every demo shows the instrument's range without any of them losing
+// the thing that makes it that preset.
+//
+//   Cutoff     down about an octave and a half, up to an octave above where it
+//              started, then settling a little under it. The knob everybody
+//              reaches for, and the one the header's curve is drawn from.
+//   Resonance  a quarter of its travel over the take, so the sweep gets more
+//              vocal as it goes.
+//   Drive      a third of its travel, starting halfway in, so the end of the
+//              take leans into the clipper the hardware does not have.
+//
+// Resonance and Drive reflect rather than clamp: a preset already near the top
+// travels the same distance downwards instead. A demo whose knob sits against
+// the ceiling for sixteen seconds is the thing this exists to avoid, and
+// Screamer and Teeth are both up there.
+double rawAfterOverrides(const clap_plugin_t *plugin, const clap_plugin_params_t *params,
+                         clap_id id) {
+   for (const auto &ov : gParamOverrides)
+      if (ov.first == id)
+         return ov.second;
+   double raw = 0.0;
+   params->get_value(plugin, id, &raw);
+   return raw;
+}
+
+// A move of `travel` (a fraction of the parameter's whole range) from `raw`,
+// upwards if there is room and downwards if there is not.
+double reflectedTarget(const threeohthree::ParamDesc &d, double raw, double travel) {
+   const double step = (d.max - d.min) * travel;
+   if (raw + step <= d.max)
+      return raw + step;
+   return std::max(d.min, raw - step);
+}
+
+void buildDemoMoves(const clap_plugin_t *plugin, double heldSeconds) {
+   using namespace threeohthree;
+   gParamMoves.clear();
+   const auto *params = static_cast<const clap_plugin_params_t *>(
+      plugin->get_extension(plugin, CLAP_EXT_PARAMS));
+   if (!params || !(heldSeconds > 0.0))
+      return;
+
+   auto clampRaw = [](const ParamDesc &d, double v) {
+      return std::min(d.max, std::max(d.min, v));
+   };
+
+   // Cutoff, in octaves about where the preset left it. Written in Hz and
+   // converted back, so the numbers here read the way the knob is labelled;
+   // the interpolation still happens in the raw domain, which is octaves.
+   {
+      const ParamDesc &d = *paramById(kParamCutoff);
+      const double hz = paramToReal(d, rawAfterOverrides(plugin, params, d.id));
+      ParamMove m;
+      m.id = d.id;
+      m.startSec = 0.0;
+      m.endSec = heldSeconds;
+      m.points = {clampRaw(d, realToParam(d, hz / 2.8)),
+                  clampRaw(d, realToParam(d, hz * 2.0)),
+                  clampRaw(d, realToParam(d, hz / 1.4))};
+      gParamMoves.push_back(m);
+   }
+
+   {
+      const ParamDesc &d = *paramById(kParamResonance);
+      const double raw = rawAfterOverrides(plugin, params, d.id);
+      ParamMove m;
+      m.id = d.id;
+      m.startSec = 0.0;
+      m.endSec = heldSeconds;
+      m.points = {raw, reflectedTarget(d, raw, 0.25)};
+      gParamMoves.push_back(m);
+   }
+
+   {
+      const ParamDesc &d = *paramById(kParamDrive);
+      const double raw = rawAfterOverrides(plugin, params, d.id);
+      ParamMove m;
+      m.id = d.id;
+      m.startSec = heldSeconds * 0.5;
+      m.endSec = heldSeconds;
+      m.points = {raw, reflectedTarget(d, raw, 0.33)};
+      gParamMoves.push_back(m);
+   }
+}
+
+// Resolves "<name or id>=<a>..<b>[..<c>][@<start>:<end>]" the same way
+// --param resolves a static value, so the endpoints are written in real units
+// ("Cutoff=200 Hz..2 kHz") and the seconds are optional.
+bool resolveParamMoves(const clap_plugin_t *plugin, const std::vector<std::string> &specs,
+                       double heldSeconds) {
+   if (specs.empty())
+      return true;
+   const auto *params = static_cast<const clap_plugin_params_t *>(
+      plugin->get_extension(plugin, CLAP_EXT_PARAMS));
+   if (!params)
+      return false;
+
+   auto squash = [](const std::string &in) {
+      std::string out;
+      for (char c : in)
+         if (!std::isspace(static_cast<unsigned char>(c)))
+            out += static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+      return out;
+   };
+
+   const uint32_t count = params->count(plugin);
+   for (const auto &spec : specs) {
+      const size_t eq = spec.find('=');
+      if (eq == std::string::npos) {
+         std::fprintf(stderr, "bad --move '%s', expected name=from..to\n", spec.c_str());
+         return false;
+      }
+      const std::string key = squash(spec.substr(0, eq));
+      std::string rest = spec.substr(eq + 1);
+
+      ParamMove m;
+      m.startSec = 0.0;
+      m.endSec = heldSeconds;
+      const size_t at = rest.find('@');
+      if (at != std::string::npos) {
+         const std::string when = rest.substr(at + 1);
+         rest = rest.substr(0, at);
+         const size_t colon = when.find(':');
+         if (colon == std::string::npos) {
+            std::fprintf(stderr, "bad --move timing '%s', expected @start:end\n", when.c_str());
+            return false;
+         }
+         m.startSec = std::atof(when.substr(0, colon).c_str());
+         m.endSec = std::atof(when.substr(colon + 1).c_str());
+      }
+
+      std::vector<std::string> legs;
+      size_t from = 0;
+      for (;;) {
+         const size_t dots = rest.find("..", from);
+         legs.push_back(rest.substr(from, dots == std::string::npos ? dots : dots - from));
+         if (dots == std::string::npos)
+            break;
+         from = dots + 2;
+      }
+      if (legs.size() < 2) {
+         std::fprintf(stderr, "bad --move '%s', expected at least from..to\n", spec.c_str());
+         return false;
+      }
+
+      bool found = false;
+      for (uint32_t i = 0; i < count && !found; ++i) {
+         clap_param_info_t info{};
+         if (!params->get_info(plugin, i, &info))
+            continue;
+         if (squash(info.name) != key && std::to_string(info.id) != key)
+            continue;
+         m.id = info.id;
+         for (const std::string &leg : legs) {
+            double raw = 0.0;
+            if (!params->text_to_value(plugin, info.id, leg.c_str(), &raw)) {
+               std::fprintf(stderr, "cannot parse value '%s' for '%s'\n", leg.c_str(), info.name);
+               return false;
+            }
+            m.points.push_back(std::min(info.max_value, std::max(info.min_value, raw)));
+         }
+         found = true;
+      }
+      if (!found) {
+         std::fprintf(stderr, "no such parameter: '%s'\n", spec.substr(0, eq).c_str());
+         return false;
+      }
+      gParamMoves.push_back(m);
    }
    return true;
 }
@@ -979,6 +1209,10 @@ int main(int argc, char **argv) {
    uint32_t blockSize = 512;
    bool doList = false, doAll = false, doSelfTest = false, doDefaults = false;
    std::vector<std::string> paramSpecs;
+   // Parameters that move while the render runs. --demo-moves is the built-in
+   // sweep; --move is one written out by hand and can be given more than once.
+   std::vector<std::string> moveSpecs;
+   bool demoMoves = false;
 
    for (int i = 1; i < argc; ++i) {
       const std::string a = argv[i];
@@ -1023,6 +1257,10 @@ int main(int argc, char **argv) {
          blockSize = static_cast<uint32_t>(std::atoi(next().c_str()));
       else if (a == "--param")
          paramSpecs.push_back(next());
+      else if (a == "--move")
+         moveSpecs.push_back(next());
+      else if (a == "--demo-moves")
+         demoMoves = true;
       else if (a == "--list")
          doList = true;
       else if (a == "--all")
@@ -1173,6 +1411,23 @@ int main(int argc, char **argv) {
                loops = static_cast<double>(minLoops);
             useSeconds = loops * loop;
          }
+      }
+
+      // Automation is built here rather than with the static overrides, because
+      // both halves of it need numbers that are only settled by now: the demo
+      // sweep is measured from the preset's own values, and a move with no
+      // timing of its own runs for exactly as long as this take is held --
+      // which for a self-driving preset was rounded up to whole patterns a few
+      // lines ago. The tail is deliberately outside it, so the last note decays
+      // at wherever the sweep left the knob.
+      gParamMoves.clear();
+      if (demoMoves)
+         buildDemoMoves(plugin, useSeconds);
+      if (!resolveParamMoves(plugin, moveSpecs, useSeconds)) {
+         plugin->deactivate(plugin);
+         plugin->destroy(plugin);
+         rc = 1;
+         break;
       }
 
       const RenderResult res =
@@ -1400,6 +1655,109 @@ int runSelfTest(const clap_plugin_entry_t *entry, double sampleRate) {
       }
       check(untouched, "raising Slides changes nothing but the slides");
 
+      // --- the demo automation. A move is the only thing in this renderer that
+      // makes a take differ from one moment to the next, so the interpolation
+      // had better hit its endpoints exactly and never leave the range between
+      // them.
+      {
+         ParamMove m;
+         m.id = 0;
+         m.startSec = 2.0;
+         m.endSec = 6.0;
+         m.points = {0.2, 0.8, 0.5};
+         check(moveValueAt(m, 0.0) == 0.2, "a move holds its first value before it starts");
+         check(moveValueAt(m, 2.0) == 0.2, "a move starts on its first value");
+         check(std::fabs(moveValueAt(m, 4.0) - 0.8) < 1e-9, "a move reaches its middle point");
+         check(std::fabs(moveValueAt(m, 3.0) - 0.5) < 1e-9, "a move interpolates its first leg");
+         check(std::fabs(moveValueAt(m, 5.0) - 0.65) < 1e-9, "a move interpolates its second leg");
+         check(moveValueAt(m, 6.0) == 0.5, "a move ends on its last value");
+         check(moveValueAt(m, 99.0) == 0.5, "a move holds its last value through the tail");
+         bool inRange = true;
+         for (int i = 0; i <= 400; ++i) {
+            const double v = moveValueAt(m, i * 0.02);
+            if (v < 0.2 - 1e-12 || v > 0.8 + 1e-12)
+               inRange = false;
+         }
+         check(inRange, "a move never leaves the span of its own points");
+
+         // A parameter at the top of its travel must still move, or the demo
+         // that needed the movement most is the one that does not get it.
+         const ParamDesc &res = *paramById(kParamResonance);
+         check(reflectedTarget(res, res.min, 0.25) > res.min,
+               "a control at the bottom of its range travels upwards");
+         check(reflectedTarget(res, res.max, 0.25) < res.max,
+               "a control at the top of its range travels downwards instead");
+         check(reflectedTarget(res, res.max, 0.25) >= res.min,
+               "a reflected move stays inside the range");
+      }
+
+      // --- the bank. Sixty-four patterns have to survive the preset text, and
+      // the chain has to be a function of the cycle rather than of how the
+      // sequencer got there -- that is what makes looping and scrubbing land
+      // on the right pattern.
+      {
+         PatternData bank;
+         for (int i = 0; i < kMaxPatterns; ++i)
+            clearPattern(bank.pattern(i));
+         // Three patterns with something in them, spread across the bank, and
+         // one of them the last.
+         const int written[3] = {0, 17, kMaxPatterns - 1};
+         for (int w = 0; w < 3; ++w) {
+            GenSettings gs;
+            gs.seed = static_cast<uint32_t>(100 + w);
+            generatePattern(gs, bank.pattern(written[w]));
+         }
+
+         const std::string text = formatPattern(bank.steps);
+         PatternData back;
+         std::istringstream in(text);
+         std::string line;
+         while (std::getline(in, line)) {
+            const size_t eq = line.find('=');
+            if (line.empty() || line[0] == '#' || eq == std::string::npos)
+               continue;
+            std::string key = line.substr(0, eq);
+            std::string value = line.substr(eq + 1);
+            while (!key.empty() && key.back() == ' ')
+               key.pop_back();
+            parsePatternLine(key, value, back);
+         }
+         check(back.present, "a written bank parses back in");
+         bool bankHeld = true;
+         for (int i = 0; i < kMaxPatterns * kMaxSteps; ++i)
+            if (bank.steps[i] != back.steps[i])
+               bankHeld = false;
+         check(bankHeld, "every one of the sixty-four patterns survives the round trip");
+
+         int lines = 0;
+         for (size_t i = 0; i < text.size(); ++i)
+            if (text[i] == '\n')
+               ++lines;
+         // Three patterns of five lines, three headers, the section heading and
+         // the blank line before it. An empty pattern must not cost a line.
+         check(lines <= 3 * 5 + 3 + 2, "an empty pattern is not written out");
+
+         // Stay never moves; Next walks the chain and wraps at its length;
+         // First comes home after one pattern; Random stays inside the chain.
+         check(chainPatternAt(kChainStay, 3, 8, 7) == 3, "Stay repeats the selected pattern");
+         check(chainPatternAt(kChainNext, 0, 4, 1) == 1, "Next steps to the following pattern");
+         check(chainPatternAt(kChainNext, 0, 4, 4) == 0, "Next wraps round at Chain Length");
+         check(chainPatternAt(kChainNext, 2, 4, 3) == 1, "Next starts from the selected pattern");
+         check(chainPatternAt(kChainNext, 9, 4, 1) == 1,
+               "a pattern outside the chain still feeds into it");
+         check(chainPatternAt(kChainFirst, 5, 8, 1) == 0, "First comes back to pattern 1");
+         check(chainPatternAt(kChainFirst, 5, 8, 0) == 5, "First plays the selected one first");
+         bool randomInChain = true;
+         for (long cycle = 1; cycle < 200; ++cycle) {
+            const int got = chainPatternAt(kChainRandom, 0, 5, cycle);
+            if (got < 0 || got >= 5)
+               randomInChain = false;
+            if (got != chainPatternAt(kChainRandom, 0, 5, cycle))
+               randomInChain = false;
+         }
+         check(randomInChain, "Random stays inside the chain and repeats for a given cycle");
+      }
+
       // The musical rules.
       check(Step::unpack(a[0]).note >= 0, "the pattern always starts on a note");
       bool slideIntoRest = false;
@@ -1473,6 +1831,72 @@ int runSelfTest(const clap_plugin_entry_t *entry, double sampleRate) {
          buildPattern(sampleRate, 2.0, 130.0, 36, 0.55, 0.55);
       const RenderResult flatRes = renderSequence(plugin, sampleRate, 512, 2.0, 0.5, flat);
       check(seq.rms > flatRes.rms * 1.02, "accented notes are louder than unaccented ones");
+
+      // --- the Devil Fish controls. Every one of them has to do the thing its
+      // documentation says, and the stock setting has to do nothing at all --
+      // the second half is checked far more strictly elsewhere, by rendering
+      // every preset and comparing it byte for byte against the build before
+      // these existed.
+      {
+         using namespace threeohthree;
+         auto renderWith = [&](uint32_t id, double raw) {
+            gParamOverrides.clear();
+            if (id != kNumParams)
+               gParamOverrides.emplace_back(id, raw);
+            plugin->reset(plugin);
+            const RenderResult r =
+               renderSequence(plugin, sampleRate, 512, 2.0, 0.5, flat);
+            gParamOverrides.clear();
+            return r;
+         };
+
+         const RenderResult stock = renderWith(kNumParams, 0.0);
+
+         // Overdrive at the bottom takes the oscillator away entirely, which is
+         // the setting that leaves a self-oscillating filter on its own.
+         const RenderResult noOsc = renderWith(kParamOverdrive, -60.0);
+         check(noOsc.peak == 0.0f, "Overdrive at its minimum silences the oscillator");
+
+         // And driven hard it squashes: same peak ceiling, more energy under it.
+         const RenderResult driven = renderWith(kParamOverdrive, 24.0);
+         check(driven.rms > stock.rms * 1.1, "Overdrive drives the filter harder");
+         check(!driven.sawNonFinite && driven.peak <= 1.001f,
+               "Overdrive stays finite and bounded");
+
+         // Accent Hold accents a line that asked for no accents at all.
+         const RenderResult held = renderWith(kParamAccentHold, 1.0);
+         check(held.rms > stock.rms * 1.02, "Accent Hold accents every note");
+
+         // The three sweep speeds are three different circuits, not one with a
+         // different time constant, so all three have to differ from each other.
+         const RenderResult fast = renderWith(kParamSweepSpeed, 1.0);
+         const RenderResult slow = renderWith(kParamSweepSpeed, 2.0);
+         check(fast.interleaved != stock.interleaved, "Sweep Speed Fast is not Normal");
+         check(slow.interleaved != stock.interleaved, "Sweep Speed Slow is not Normal");
+         check(fast.interleaved != slow.interleaved, "Sweep Speed Fast is not Slow");
+
+         // The Muffler is a clipper and not a volume control: it must not cost
+         // level, and it has to add harmonics rather than remove them.
+         const RenderResult muffled = renderWith(kParamMuffler, 2.0);
+         check(muffled.rms > stock.rms * 0.9, "the Muffler does not cost level");
+         check(muffled.peak <= stock.peak * 1.2f, "the Muffler softens the extremes");
+
+         // Filter FM is a feedback path from the amplifier back into the filter.
+         // The one thing it must never do is run away.
+         gParamOverrides.clear();
+         gParamOverrides.emplace_back(kParamFilterFM, 1.0);
+         gParamOverrides.emplace_back(kParamResonance, 1.0);
+         gParamOverrides.emplace_back(kParamResRange, 200.0);
+         gParamOverrides.emplace_back(kParamOverdrive, 36.5);
+         plugin->reset(plugin);
+         const RenderResult chaos = renderSequence(plugin, sampleRate, 512, 2.0, 0.5, flat);
+         gParamOverrides.clear();
+         check(!chaos.sawNonFinite, "Filter FM at maximum stays finite");
+         check(chaos.peak <= 1.001f, "Filter FM at maximum stays bounded");
+         check(chaos.interleaved != stock.interleaved, "Filter FM changes the sound");
+
+         plugin->reset(plugin);
+      }
    }
 
    // --- a looping host must not wedge the sequencer.
@@ -1652,6 +2076,108 @@ int runSelfTest(const clap_plugin_entry_t *entry, double sampleRate) {
       };
       state->load(plugin, &is);
       check(snapshotParams(plugin) == original, "state load restores every parameter exactly");
+
+      // The bank is not in the parameter table and so is not in that snapshot.
+      // Saving the restored state and comparing the blobs covers it: the
+      // sixty-four patterns are the bulk of what the blob holds, so two blobs
+      // that match byte for byte are two identical banks.
+      std::string again;
+      clap_ostream_t os2{};
+      os2.ctx = &again;
+      os2.write = [](const clap_ostream_t *s, const void *buf, uint64_t size) -> int64_t {
+         static_cast<std::string *>(s->ctx)->append(static_cast<const char *>(buf), size);
+         return static_cast<int64_t>(size);
+      };
+      state->save(plugin, &os2);
+      check(again == saved, "state load restores the pattern bank as well");
+      check(saved.size() > sizeof(uint32_t) * 3 +
+                              static_cast<size_t>(threeohthree::kNumParams) * 12 +
+                              static_cast<size_t>(threeohthree::kMaxPatterns) *
+                                 threeohthree::kMaxSteps * sizeof(uint16_t),
+            "the state blob carries the whole bank");
+   }
+
+   // --- a state blob written before the ranges were widened.
+   //
+   // Cutoff, Decay and Slide Time are logarithmic, and a blob stores the raw
+   // position on the curve rather than the frequency or the time. Widening a
+   // curve moves every saved value unless the old position is converted, so a
+   // project saved before the Devil Fish controls would come back at the wrong
+   // cutoff -- silently, and sounding almost right, which is the worst kind of
+   // wrong. This builds a version 3 blob by hand and checks what comes out.
+   if (state) {
+      using namespace threeohthree;
+      // The format's own constants, repeated here because that is what a
+      // compatibility test is: it has to know what the old writer wrote.
+      constexpr uint32_t kMagic = 0x33303354u;
+      constexpr uint32_t kOldVersion = 3;
+      struct OldRaw {
+         uint32_t id;
+         double raw;
+         double expectedReal;
+      };
+      // The three defaults as an older build stored them, and the real value
+      // each one has to come back as.
+      const OldRaw kProbe[] = {
+         {kParamCutoff, 0.5, 500.0},
+         {kParamDecay, 0.4350, 600.0},
+         {kParamSlideTime, 0.5268, 60.0},
+      };
+
+      std::string blob;
+      const uint32_t header[3] = {kMagic, kOldVersion, kNumParams};
+      blob.append(reinterpret_cast<const char *>(header), sizeof(header));
+      for (uint32_t i = 0; i < kNumParams; ++i) {
+         const uint32_t id = paramTable()[i].id;
+         double v = paramTable()[i].def;
+         for (const OldRaw &o : kProbe)
+            if (o.id == id)
+               v = o.raw;
+         blob.append(reinterpret_cast<const char *>(&id), sizeof(id));
+         blob.append(reinterpret_cast<const char *>(&v), sizeof(v));
+      }
+      const uint16_t rest = Step().pack();
+      for (int i = 0; i < kMaxPatterns * kMaxSteps; ++i)
+         blob.append(reinterpret_cast<const char *>(&rest), sizeof(rest));
+      const uint8_t advanced = 0;
+      blob.append(reinterpret_cast<const char *>(&advanced), sizeof(advanced));
+
+      struct ReadCtx {
+         const std::string *data;
+         size_t pos;
+      } rc{&blob, 0};
+      clap_istream_t is{};
+      is.ctx = &rc;
+      is.read = [](const clap_istream_t *st, void *buf, uint64_t size) -> int64_t {
+         auto *c = static_cast<ReadCtx *>(st->ctx);
+         const size_t n = std::min<size_t>(size, c->data->size() - c->pos);
+         std::memcpy(buf, c->data->data() + c->pos, n);
+         c->pos += n;
+         return static_cast<int64_t>(n);
+      };
+      check(state->load(plugin, &is), "a version 3 state blob still loads");
+
+      const auto *params = static_cast<const clap_plugin_params_t *>(
+         plugin->get_extension(plugin, CLAP_EXT_PARAMS));
+      for (const OldRaw &o : kProbe) {
+         double raw = 0.0;
+         params->get_value(plugin, o.id, &raw);
+         const double real = paramToReal(*paramById(o.id), raw);
+         char msg[128];
+         std::snprintf(msg, sizeof(msg), "an old blob's %s survives the widened range",
+                       paramById(o.id)->name);
+         // Within a tenth of a percent: the conversion goes through a pow and a
+         // log, so it is not going to be exact to the bit.
+         check(std::fabs(real / o.expectedReal - 1.0) < 0.001, msg);
+      }
+
+      // Tracking is deliberately not converted -- it stayed a percent parameter
+      // and only grew a bigger maximum -- so an old value has to come through
+      // untouched rather than be "fixed".
+      double trackRaw = 0.0;
+      params->get_value(plugin, kParamTracking, &trackRaw);
+      check(std::fabs(trackRaw - paramTable()[kParamTracking].def) < 1e-9,
+            "an old blob's Tracking is left exactly as it was");
    }
 
    // --- a fresh instance must be silent until a note arrives

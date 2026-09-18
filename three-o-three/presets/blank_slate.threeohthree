@@ -1,0 +1,75 @@
+# ThreeOhThree preset
+format = 1
+name = Blank Slate
+author = ThreeOhThree
+description = Factory Reset, and the sequencer as well. Every parameter is the value the table gives it, and the pattern bank is emptied down to one bar of C in pattern 1: sixteen notes on the root, no octaves, no slides, no accents, no vibrato, and nothing at all in the other sixty-three patterns. Factory Reset leaves whatever you had written alone; this one does not, which is the whole difference between them. It is where you start when you want to write a line rather than edit one -- switch Mode to Sequencer and change the notes that are not C.
+
+# VCO
+waveform = Sawtooth
+tuning = 0
+
+# VCF
+cutoff = 500
+resonance = 0.35
+envmod = 0.5
+decay = 600
+tracking = 0
+
+# Accent
+accent = 0.6
+accent_threshold = 100
+accent_decay = 68
+
+# Slide
+slide_time = 60
+
+# Drive
+drive = 0.2
+tone = 8000
+
+# Output
+volume = -6
+
+# Mods
+env_bias = 1.5
+env_depth = 5
+acc_sweep = 3.5
+acc_build = 0.75
+acc_gain = 90
+acc_decay_time = 200
+droop = 25
+ladder = 100
+res_range = 100
+drift = 0
+
+# Sequencer
+mode = MIDI
+seq_rate = 1/16
+seq_steps = 16
+gate = 0.5
+swing = 50
+pattern = 1
+chain_mode = Stay
+chain_length = 4
+
+# Vibrato
+vib_depth = 25
+vib_rate = 6
+vib_delay = 60
+
+# Generator
+rand_seed = 1
+rand_scale = Minor
+rand_root = C
+rand_notes = 0.78
+rand_accent = 0.3
+rand_slide = 0.2
+rand_octave = 0.22
+rand_vibrato = 0.06
+
+# Sequence
+seq_pitch    = C   C   C   C   C   C   C   C   C   C   C   C   C   C   C   C
+seq_octave   = .   .   .   .   .   .   .   .   .   .   .   .   .   .   .   .
+seq_slide    = .   .   .   .   .   .   .   .   .   .   .   .   .   .   .   .
+seq_accent   = .   .   .   .   .   .   .   .   .   .   .   .   .   .   .   .
+seq_vibrato  = .   .   .   .   .   .   .   .   .   .   .   .   .   .   .   .

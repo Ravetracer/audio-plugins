@@ -31,9 +31,18 @@
 #
 #    shared/tools/make-demos.sh <plugin-folder> [--build DIR] [--seed N]
 #                                               [--simulates TEXT] [--text-only]
+#                                               [--render-arg ARG]...
 #
 # --text-only refreshes demos.json and README.md from the preset files and the
 # override without re-rendering anything, which is what a wording change needs.
+#
+# --render-arg passes one argument straight through to the plugin's renderer and
+# may be given more than once. It is how a plugin asks for something only its own
+# renderer knows about -- ThreeOhThree's --demo-moves, which sweeps the cutoff
+# and rides the resonance and the drive across the take so a demo is a recording
+# of somebody playing the preset rather than a photograph of it. Nothing here
+# knows what the argument means, which is the point: this script stays the same
+# for every plugin.
 #
 set -euo pipefail
 
@@ -45,6 +54,7 @@ build_dir=""
 seed=7
 simulates=""
 text_only=0
+render_args=()
 
 while [ $# -gt 0 ]; do
    case "$1" in
@@ -52,12 +62,13 @@ while [ $# -gt 0 ]; do
       --seed)      seed="$2"; shift 2 ;;
       --simulates) simulates="$2"; shift 2 ;;
       --text-only) text_only=1; shift ;;
+      --render-arg) render_args+=("$2"); shift 2 ;;
       -*)          echo "unknown option: $1" >&2; exit 2 ;;
       *)           plugin="$1"; shift ;;
    esac
 done
 
-[ -n "$plugin" ] || { echo "usage: make-demos.sh <plugin-folder> [--build DIR] [--seed N] [--simulates TEXT] [--text-only]" >&2; exit 2; }
+[ -n "$plugin" ] || { echo "usage: make-demos.sh <plugin-folder> [--build DIR] [--seed N] [--simulates TEXT] [--text-only] [--render-arg ARG]..." >&2; exit 2; }
 
 plugin_dir="${suite_dir}/${plugin}"
 [ -d "$plugin_dir" ] || { echo "no such plugin folder: $plugin_dir" >&2; exit 1; }
@@ -118,7 +129,8 @@ else
 
 echo "==> rendering ${name}'s presets"
 "$render" --plugin "$clap" --all --outdir "$work" \
-   --seconds 16 --tail 3 --rate 48000 --param randomseed="$seed" >/dev/null
+   --seconds 16 --tail 3 --rate 48000 --param randomseed="$seed" \
+   ${render_args[@]+"${render_args[@]}"} >/dev/null
 
 shopt -s nullglob
 wavs=("$work"/*.wav)

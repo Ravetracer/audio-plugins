@@ -21,16 +21,42 @@ preset, which exists for exactly this.
   remaining part of the signal path with no control over it.
 - **Filter coefficients update every 8 samples.** Inaudible on the envelopes
   this instrument has, but a fast automated cutoff sweep would show it.
-- **The sequencer has one pattern.** No pattern bank, no chaining, no
-  copy/paste between slots. The machine had sixty-four patterns and a track
-  mode. A bank would need somewhere to put it: the preset carries one pattern
-  as five text lines today, and several would want a different arrangement.
+- **No copy or paste between pattern slots.** The bank holds sixty-four
+  patterns and chains them, but filling slot 12 with a variation on slot 11
+  still means writing it again or generating a new one. A copy, a paste and a
+  clear-all are the obvious next three buttons.
+- **The chain has no per-pattern repeat count.** A pattern plays once before the
+  chain moves on. Playing one twice and the next one once is the arrangement
+  people reach for first, and it would want a number per slot rather than one
+  Chain Length for the lot.
+- **Pattern length is global.** Steps applies to every pattern in the bank, so a
+  chain cannot mix a sixteen-step pattern with a twelve-step one.
 - **No playback direction.** Forward only; the reference plugins offer reverse,
-  ping-pong and random.
+  ping-pong and random. The chain has Random; the steps inside a pattern do not.
 - **Pattern edits are not automatable or undoable.** They live outside the
   parameter table on purpose -- eighty parameters for sixteen steps would make a
   mess of the host's list -- so the host's undo does not see them. A hardware
   sequencer offers the same deal.
+- **The demos are WAVs, not the MP3 set.** `demos/` is rendered straight out of
+  `threeohthree-render --all --demo-moves` and gitignored.
+  `shared/tools/make-demos.sh three-o-three --render-arg --demo-moves` would
+  produce the website set, but it wants a `presets/demo-descriptions.txt` first
+  or every blurb falls back to the preset's own technical description.
+- **The demo sweep is one shape for every preset.** Relative to each preset's
+  own settings, so nothing loses its character, but Teeth only manages a 1.3x
+  brightness swing because it already sits near the top of everything. A
+  per-preset override file -- the same idea as `demo-descriptions.txt` -- would
+  fix the handful that deserve a different move.
+- **The Devil Fish's jacks are not modelled.** External audio into the filter,
+  the audio Filter FM input, the Filter Out tap and the CV/gate sockets. The
+  first two want an audio input port on the plugin and the third wants a second
+  output, so this is a change to what shape of plugin this is rather than more
+  DSP. Whittle's MIDI retrofits need nothing: a plugin has that already.
+- **Fast and Slow sweep speeds are fitted to a description, not a circuit.**
+  Whittle documents what the three modes *do* -- there is no Devil Fish
+  schematic -- so Normal is the machine and the other two are the behaviour he
+  describes, reached with a time constant and a charge law. If a real one ever
+  turns up to measure, that is where to look first.
 - **No VST3 and no Windows build.** Both are wanted, but not yet. The repository
   already carries what they need -- `setup-winbuild.sh` for the cross-built
   Cairo, `shared/cmake/mingw-w64-x86_64.cmake`, and the clap-wrapper patch in
@@ -84,10 +110,39 @@ evidence of anything.
   part of the suite, and lives on an orphan branch of it, does not get to change
   what all the others look like. `src/gui/seqwindow.cpp` is the shared file with
   the namespace changed plus the grid; diff them to see exactly what was added.
-- **The pattern rides in the preset as five extra text lines.** The shared
-  preset reader ignores keys it does not recognise, which is what keeps older
-  presets loadable -- and is exactly the hook needed here. Nothing in `shared/`
-  changed.
+- **The bank rides in the preset as extra text lines.** The shared preset reader
+  ignores keys it does not recognise, which is what keeps older presets loadable
+  -- and is exactly the hook needed here. Nothing in `shared/` changed. Pattern 1
+  keeps the original `seq_pitch` keys so a preset written before the bank existed
+  still loads and one written now still opens in an older build; patterns 2
+  upwards are `seq2_pitch` and so on, and an empty pattern is not written at all.
+- **A preset load starts from the defaults.** Anything a preset file does not
+  mention goes back to its default rather than keeping what the last preset left
+  behind. That is what a preset means, and it is what stops a parameter added
+  later -- the bank's three were -- from inheriting a stale value: loading a
+  factory preset written before the bank, while pattern 12 was selected, would
+  otherwise leave the sequencer on a pattern the preset had just emptied.
+- **The Devil Fish controls default to the stock machine, and that is load
+  bearing.** Whittle's manual has a table of where to leave each control to keep
+  a Devil Fish sounding like a 303, and those are the defaults. It is what lets
+  the whole preset library be compared byte for byte against the build from
+  before the modification existed, which is the only real proof that adding it
+  broke nothing. Do not "improve" a default here.
+- **State version 4 converts four raw parameter values.** Cutoff, Decay and
+  Slide Time are logarithmic and a state blob stores the *position on the
+  curve*, not the frequency -- so widening the curve moves every saved value
+  unless the old position is converted. `migrateRanges()` does that, and the
+  self-test builds a version 3 blob by hand to prove it. Tracking is
+  deliberately *not* in that list: its maximum grew from 100 % to 200 % but it
+  stayed a percent parameter, so the stored value still means what it meant and
+  converting it would be the bug. Preset files were never at risk; they are
+  written in real units. **Widening any log parameter's range in future needs
+  the same treatment.**
+- **The chain is derived, not counted.** Which pattern plays is
+  `chainPatternAt(mode, selected, length, cycle)` where `cycle` comes from the
+  host's beat position, for exactly the reason the steps are re-read every block.
+  A counter bumped at the end of each pattern would be simpler and would come
+  apart the first time somebody looped a bar.
 - **`install.sh` is self-contained** rather than calling
   `shared/tools/install-plugin.sh`, because that script derives a shell variable
   name from the folder and `three-o-three` is not an identifier. The same reason
