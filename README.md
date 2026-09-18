@@ -13,7 +13,7 @@ Vibe coded with Claude.
 
 | Plugin | Version | Platforms | Formats | What it is |
 |--------|---------|-----------|---------|------------|
-| **[ThreeOhThree](three-o-three/)** | 0.1.0 | Linux | CLAP | a monophonic acid bass synthesiser modelled on the Roland TB-303's main board, from the February 1982 service notes |
+| **[ThreeOhThree](three-o-three/)** | 0.1.0 | Linux, Windows | CLAP, VST3 | a monophonic acid bass synthesiser modelled on the Roland TB-303's main board, from the February 1982 service notes, with Robin Whittle's Devil Fish modification |
 
 ## Build
 

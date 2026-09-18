@@ -115,4 +115,10 @@ repository sets itself -- validate by ear first, by measurement second -- and it
 is the top item in `TODO.md`. The four numbers most likely to be off are now
 controls, though, so it is a preference rather than a defect.
 
-No VST3, no Windows build. Both are deliberate.
+**Windows and VST3 are built but not played.** All four binaries -- Linux and
+Windows, CLAP and VST3 -- come out of `./release.sh` and are checked as far as
+this machine can check them: the Linux CLAP passes the full self-test from
+inside the release archive, the Linux VST3 loads and hands over its factory, and
+both Windows binaries import nothing but system DLLs, so they need no MinGW
+runtime beside them. **Neither Windows binary has been loaded by a DAW**, and
+until one has, that is the honest status.

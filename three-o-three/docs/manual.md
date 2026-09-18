@@ -6,14 +6,11 @@ Version 0.1.0
 
 ---
 
-> This manual is written out in full rather than generated. The rest of this
-> repository builds its parameter reference and preset library from the plugin
-> itself with `shared/tools/make-manual.sh`, which passes the plugin's *folder*
-> name as a C++ namespace — and this folder is `three-o-three` while the
-> namespace is `threeohthree`, so the generator cannot be pointed at it. See
-> `TODO.md`. The consequence is that the table below can drift from
-> `src/params.cpp`; it was written against 0.1.0 and should be re-read against
-> the source if a parameter changes.
+> This manual's prose is written out in full rather than generated, unlike the
+> rest of this repository, which builds its parameter reference and preset
+> library from the plugin itself. The consequence is that the parameter table
+> below can drift from `src/params.cpp`; it is maintained by hand and should be
+> re-read against the source when a parameter changes.
 
 ---
 

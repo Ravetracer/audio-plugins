@@ -57,11 +57,15 @@ preset, which exists for exactly this.
   schematic -- so Normal is the machine and the other two are the behaviour he
   describes, reached with a time constant and a charge law. If a real one ever
   turns up to measure, that is where to look first.
-- **No VST3 and no Windows build.** Both are wanted, but not yet. The repository
-  already carries what they need -- `setup-winbuild.sh` for the cross-built
-  Cairo, `shared/cmake/mingw-w64-x86_64.cmake`, and the clap-wrapper patch in
-  `shared/patches/` -- so this is a block of CMake and a test pass, not new
-  groundwork.
+- **Nobody has run the Windows build in a DAW.** It compiles, it links against
+  nothing but system DLLs, and the Linux half of the same release passes the
+  self-test -- but a plugin nobody has loaded is not a plugin that works. The
+  window is the part most likely to be wrong, since the win32 backend has never
+  drawn a frame in anger.
+- **The manual note in section 4 was stale and is fixed.** `make-manual.sh`
+  derives the namespace from the CMake project name, not the folder, so it does
+  work on `three-o-three`; `./shared/tools/make-manual.sh three-o-three` builds
+  the PDF and `release.sh` ships it.
 
 ## 3. Fixed, and worth remembering
 
@@ -145,7 +149,7 @@ evidence of anything.
   apart the first time somebody looped a bar.
 - **`install.sh` is self-contained** rather than calling
   `shared/tools/install-plugin.sh`, because that script derives a shell variable
-  name from the folder and `three-o-three` is not an identifier. The same reason
-  stops `shared/tools/make-manual.sh` working, so `docs/manual.md` is written
-  out in full instead of generated. Renaming the folder to `threeohthree` would
-  fix both; nothing else would change.
+  name from the folder and `three-o-three` is not an identifier. Renaming the
+  folder to `threeohthree` would let it use the shared script; nothing else
+  would change. `shared/tools/make-manual.sh` is *not* affected -- it takes the
+  namespace from the CMake project name -- and works on this folder as it is.

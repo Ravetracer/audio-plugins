@@ -49,7 +49,7 @@ audio-plugins/
 
 | # | Plugin | Folder | Status | Platforms | Formats | What it is |
 |---|--------|--------|--------|-----------|---------|------------|
-| 1 | **ThreeOhThree** | `three-o-three/` | 0.1.0 | Linux | CLAP | a Roland TB-303 model, from the 1982 service notes |
+| 1 | **ThreeOhThree** | `three-o-three/` | 0.1.0 | Linux, Windows | CLAP, VST3 | a Roland TB-303 model, from the 1982 service notes, plus Robin Whittle's Devil Fish modification |
 
 Naming follows the plugin, not a pattern: the CMake project, the installed
 artifact and the display name are CamelCase (`ThreeOhThree`), the folder is
@@ -252,24 +252,27 @@ If the checkout lives anywhere else, point CMake at it explicitly with
 
 ## Windows and VST3
 
-**Nothing here builds for Windows or as a VST3 yet.** ThreeOhThree is
-deliberately Linux-only and CLAP-only, and its `CMakeLists.txt` fails fast on
-any other platform rather than producing something nobody has run.
+**ThreeOhThree builds for Windows and as a VST3 as of 0.1.0**, so
+`./release.sh <version>` needs no switches. The Windows binaries have been built
+and checked for their imports, but **never loaded by a DAW**.
 
-That is a decision about what has been *tested*, not about what is possible.
-Everything needed is already in the repository:
+What it takes, and what a new plugin here has to repeat:
 
-- `setup-winbuild.sh` cross-builds Cairo into `winbuild/cairo-mingw`.
-- `shared/cmake/mingw-w64-x86_64.cmake` is the toolchain file.
-- `shared/cmake/build-windows-cairo.sh` is the Cairo build itself.
-- `shared/patches/` carries the clap-wrapper patch for VST3 3.8.
-- `shared/src/gui/window.cpp` already has the complete win32 window.
+- `./setup-winbuild.sh` once, which cross-builds Cairo into
+  `winbuild/cairo-mingw` using `shared/cmake/build-windows-cairo.sh`.
+- `shared/cmake/mingw-w64-x86_64.cmake` as the toolchain file.
+- `CLAP/clap-wrapper` and `CLAP/vst3sdk` checked out, with
+  `shared/patches/clap-wrapper-vst3-sdk-3.8.patch` applied to the wrapper.
+- The Windows and VST3 CMake blocks **copied from a Verdalis plugin**, not
+  written fresh. `../Verdalis/rainyday/CMakeLists.txt` is the reference.
+  Written from scratch they will build and still be wrong in ways nothing
+  catches: `--exclude-all-symbols` missing so the DLL exports its whole
+  interior, the trailing `-Bdynamic` missing after a `--whole-archive` group,
+  a `FATAL_ERROR` where `release.sh --windows-no-gui` needs a warning, and
+  `PREFIX ""` missing so a mingw VST3 bundle holds `libFoo.vst3`, which no host
+  will load.
 
-Turning it on for a plugin is a block of CMake copied from a Verdalis plugin
-plus a test pass on both platforms. **It is planned, not abandoned.**
-
-Two things to carry over when that happens, both already handled in `shared/`
-but easy to undo by accident:
+Three things to carry over, all easy to undo by accident:
 
 - Cairo must be cross-built with `-Db_ndebug=true`. Meson does not define
   `NDEBUG` for `--buildtype=release`, so without it every `assert()` inside
@@ -277,7 +280,16 @@ but easy to undo by accident:
   takes the host down. `setup-winbuild.sh` checks for this and rebuilds a stale
   library that has them.
 - The window class registration described under *Keeping it in step with
-  Verdalis*.
+  Verdalis*. ThreeOhThree's forked window **had this bug** -- it was copied from
+  `shared/src/gui/window.cpp` before the fix and carried
+  `GetModuleHandle(nullptr)` and a fixed class name until the first Windows
+  build was attempted. Nothing had noticed, because it cannot bite on Linux.
+  That is the cost of a fork, and the reason to check one against its original
+  before trusting it on a new platform.
+- `CAIRO_WIN32_STATIC_BUILD` must be defined for the plugin. Cairo's headers
+  declare every entry point `__declspec(dllimport)` otherwise, and the
+  cross-built one is a static archive, so the link fails on a screenful of
+  `__imp_cairo_*`.
 
 ## Releases
 
@@ -300,14 +312,10 @@ whole collection.
 The per-plugin archives carry that plugin's **own** version from its `project()`
 line, not the collection's, because they are downloaded and updated separately.
 
-**This script came from Verdalis unchanged, and it assumes more than this
-repository currently delivers.** It defaults to building Windows and VST3 for
-every plugin, which nothing here does yet. Until that changes, a release needs
-both switches off:
-
-```sh
-./release.sh 0.1.0 --linux-only --no-vst3
-```
+**This script came from Verdalis unchanged**, and as of 0.1.0 this repository
+delivers everything it assumes: it builds Windows and VST3 for every plugin, and
+ThreeOhThree does both. `--linux-only` and `--no-vst3` are still there for a
+machine without the mingw toolchain or the VST3 checkouts.
 
 Other options: `--tarball` adds `.tar.gz` beside every `.zip`; `--no-manuals`
 skips the PDF manuals. Offline tools are switched off for release builds

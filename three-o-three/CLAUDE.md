@@ -12,7 +12,7 @@ of truth for what works and what does not.
 
 ## What it is, in one paragraph
 
-Linux-only, CLAP-only, 51 parameters, 27 presets. VCO → four-stage transistor
+Linux and Windows, CLAP and VST3, 51 parameters, 27 presets. VCO → four-stage transistor
 ladder → VCA, with the decay envelope, the accent circuit and the slide lag
 around it, and an overdrive stage after all of it. It plays either from the host
 over MIDI or from its own sixteen-step sequencer locked to the host transport,
@@ -149,25 +149,30 @@ tool names and an environment variable from the folder name, and
   `CMakeLists.txt` and `kPluginVersion` in `src/threeohthree.h`. A
   `static_assert` fails the build when they disagree. Bump both.
 
-## Build, and why it refuses to cross-build
+## Build
 
 ```sh
 ./install.sh                     # configure, build, self-test, install to ~/.clap
 ./install.sh --no-selftest
 ```
 
-`CMakeLists.txt` hard-fails on any platform but Linux. Nothing in the plugin is
-Linux-specific beyond the window, so that is a statement about what has been
-*tested*, not what is possible.
+Four binaries: CLAP and VST3, Linux and Windows. `./release.sh 0.1.0` at the
+repository root builds all of them and packs the archives with the manual.
 
-**Windows and VST3 builds are planned.** The repository already carries
-everything they need — `setup-winbuild.sh`, the mingw toolchain file, the Cairo
-cross-build, the clap-wrapper patch, and the complete win32 window in
-`shared/src/gui/window.cpp`. Turning them on is a block of CMake copied from a
-Verdalis plugin plus a test pass. When that happens, read the root `CLAUDE.md`
-sections on the Cairo `-Db_ndebug=true` flag and the per-module window class
-registration first; both are traps that have already cost someone a DAW session
-once.
+Windows is cross-compiled with mingw-w64 against a Cairo built by
+`./setup-winbuild.sh` (once). The VST3 is the same plugin behind free-audio's
+clap-wrapper, which needs `CLAP/clap-wrapper` and `CLAP/vst3sdk` checked out and
+`shared/patches/clap-wrapper-vst3-sdk-3.8.patch` applied.
+
+**The Windows CMake blocks are the Verdalis ones, adapted.** That is what the
+root `CLAUDE.md` says to do and it is worth doing: writing them from scratch
+gets you something that builds while quietly missing `--exclude-all-symbols`,
+the trailing `-Bdynamic` after a `--whole-archive` group, and the graceful
+degrade that `release.sh --windows-no-gui` depends on. Compare against
+`../../Verdalis/<plugin>/CMakeLists.txt` before changing them.
+
+**Nobody has loaded the Windows build in a DAW.** It compiles and it imports
+only system DLLs. That is not the same as working.
 
 ## Trademarks
 
@@ -183,7 +188,7 @@ never `git add -A` without checking.
 
 See `TODO.md` for the full list. The headline items:
 
-- No VST3 and no Windows build yet (above).
+- The Windows binaries have never been run in a DAW (above).
 - No `presets/demo-descriptions.txt`, so the website demo pipeline
   (`shared/tools/make-demos.sh`) has no musician-facing blurbs to use and would
   fall back to the presets' own technical descriptions.

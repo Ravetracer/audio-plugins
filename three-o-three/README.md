@@ -49,7 +49,28 @@ Needs a CLAP SDK checkout; the build looks for `../CLAP/clap/include` first, or
 point it somewhere else with `-DCLAP_INCLUDE_DIR=`. The window needs X11 and
 Cairo, both of which are already on any machine that runs a DAW.
 
-**Linux only, CLAP only.** That is deliberate and it is in the CMakeLists.
+### All four binaries
+
+`./release.sh 0.1.0` at the repository root builds CLAP and VST3 for both Linux
+and Windows and packs them with the manual into `dist/`:
+
+```
+ThreeOhThree-0.1.0/
+├── linux/    ThreeOhThree/ThreeOhThree.clap + presets,  ThreeOhThree.vst3
+├── windows/  ThreeOhThree/ThreeOhThree.clap + presets,  ThreeOhThree.vst3
+├── ThreeOhThree-0.1.0-Manual.pdf
+├── README.md  LICENSE  INSTALL.txt  BUILD-INFO.txt
+```
+
+Windows is cross-compiled with mingw-w64 against a Cairo built once by
+`./setup-winbuild.sh`; both Windows binaries link the runtime in statically and
+import nothing but system DLLs, so nothing has to be copied beside them. The
+VST3 is the same plugin behind free-audio's clap-wrapper and needs
+`CLAP/clap-wrapper` and `CLAP/vst3sdk` checked out — see the repository README.
+
+**The Windows binaries have not been run in a DAW.** They build, they link
+cleanly and they import only what Windows already has. That is not the same as
+working, and the window is the part most likely to surprise.
 
 ## The controls
 
