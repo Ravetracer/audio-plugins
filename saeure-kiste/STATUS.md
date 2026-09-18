@@ -1,10 +1,24 @@
 # SäureKiste -- status
 
-Version 0.2.0. Linux and Windows, CLAP and VST3. 51 parameters, 27 presets,
-builds clean, self-test passes with no failures across 111 checks.
+Version 0.3.0. Linux and Windows, CLAP and VST3. 51 parameters, 27 presets,
+builds clean, self-test passes with no failures across 143 checks.
 
 Six of seven fixes were confirmed by backing the bug out and watching the suite
 fail; the seventh has no contract to assert. See `TODO.md` §3.
+
+0.3.0 adds four things to the sequencer: a **note output port**, so the line can
+be recorded onto another track; **dragging a pattern into the host as a MIDI
+file**; **copy and paste** between pattern slots; and an octave lane that reaches
+**two octaves either way** instead of one.
+
+0.2.1, folded into it, fixed three things about playing the sequencer from a
+keyboard. It could end up playing on its own after browsing presets -- the Mode
+parameter decides whether a MIDI note sounds or transposes, so changing it
+between a note-on and its note-off left the key held on the side that no longer
+receives the release. A key press now starts the pattern over instead of only
+transposing it. And the tempo is read from a stopped host as well as a rolling
+one, so a pattern auditioned off a key follows the project's tempo instead of
+running at whatever the plugin last saw. `TODO.md` §4 has all three accounts.
 
 ## What works
 
@@ -20,8 +34,20 @@ stage added after.
 - *Sequencer*: sixteen steps of its own, locked to the host's beat timeline and
   re-read every block, so scrubbing, looping and tempo changes all land. A held
   MIDI note transposes the pattern instead of sounding, which is what the
-  machine's own keyboard did. Notes are sample-accurate: the audio block is
-  split again at every step boundary.
+  machine's own keyboard did. With no transport running, a key runs the pattern
+  at the host's tempo and starts it again from step one; with one, the position
+  belongs to the song and a key only transposes. Notes are sample-accurate: the audio block is
+  split again at every step boundary. A step can sit two octaves either way of
+  the pattern, and COPY and PASTE move a pattern to another slot.
+
+**The line can leave the plugin as MIDI.** A note output port carries everything
+the sequencer plays, transposition included, so it can be recorded onto another
+track; and the MIDI button above the grid drags the selected pattern into the
+host's arranger as a `.mid` file. Both write an accent as a velocity above the
+accent threshold, a slide as an overlap and a vibrato as CC1 -- the three
+conventions the plugin's own MIDI mode reads, so a recording played back into it
+sounds like what it came from. The X11 half of the drag is verified against a
+test drop target; the Windows half compiles and has never had a real drop.
 
 **A bank of sixty-four patterns**, with a chain: Stay repeats the selected one,
 Next runs the chain and wraps at its length, First comes home after one time

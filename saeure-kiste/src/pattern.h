@@ -13,10 +13,17 @@
 // single relaxed atomic load:
 //
 //   bits 0-3   note + 1   0 = rest, 1..12 = C..B
-//   bits 4-5   octave + 1 0 = -1, 1 = 0, 2 = +1
+//   bits 4-5   octave + 1 0 = -1, 1 = 0, 2 = +1  (the direction)
 //   bit  6     accent
 //   bit  7     slide
 //   bit  8     vibrato
+//   bit  9     wide       the octave is two rather than one, in that direction
+//
+// The octave is split across two fields rather than widened in place, and that
+// is deliberate: a state blob saved by 0.2.x has bits 4-5 and nothing else, and
+// a blob saved by this version is read by 0.2.x as the same step one octave
+// less extreme rather than as nonsense. The alternative -- moving the field --
+// would have made every old project's pattern unreadable.
 
 #include <cstdint>
 #include <string>
@@ -24,6 +31,12 @@
 namespace saeurekiste {
 
 constexpr int kMaxSteps = 16;
+
+// How far a step may be moved from the pattern's own octave, either way. The
+// machine had one switch position up and one down; two is a sequencer feature
+// rather than a hardware one, and it is what makes a line span a bass note and
+// a lead in the same sixteen steps.
+constexpr int kMaxOctave = 2;
 
 // How many patterns the bank holds. The machine had far fewer and a mode
 // switch to reach them; sixty-four is enough to write a whole track into and
@@ -34,7 +47,7 @@ enum Lane { kLaneSlide = 0, kLaneAccent, kLaneVibrato, kNumLanes };
 
 struct Step {
    int note = -1;   // -1 rest, 0..11 = C..B
-   int octave = 0;  // -1, 0, +1
+   int octave = 0;  // -2 .. +2
    bool slide = false;
    bool accent = false;
    bool vibrato = false;
@@ -157,6 +170,13 @@ public:
    // regenerates from it.
    virtual void seqSetSeed(int seed) = 0;
    virtual void seqGenerate() = 0;
+
+   // Writes the selected pattern to a temporary .mid file and returns the path,
+   // or an empty string if there was nothing to write or nowhere to write it.
+   // The window drags that file into the host; what goes in it -- the rate, the
+   // gate, the swing and the tempo -- is the plugin's to know, not the
+   // window's, so the window only asks for a path.
+   virtual std::string seqExportMidi() = 0;
 };
 
 // Feeds one "key = value" line to the pattern parser. Returns true if the key

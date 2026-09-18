@@ -87,6 +87,8 @@ saeure-kiste/
 │   ├── pattern.{h,cpp}      the bank of sixty-four sixteen-step patterns:
 │   │                        steps, gates, slides, accents, the chain and the
 │   │                        seeded generator
+│   ├── midifile.{h,cpp}     a pattern as a standard MIDI file, for the drag
+│   ├── gui/dragfile.{h,cpp} the desktop drag itself: XDND on X11, OLE on win32
 │   ├── gui/seqwindow.{h,cpp} the sequencer's piano-roll window
 │   └── dsp/acid_engine.{h,cpp}  the circuit
 ├── demos/                   plain WAV renders — GITIGNORED
@@ -100,6 +102,11 @@ tool names and an environment variable from the folder name, and
 
 ## Things that are easy to get wrong
 
+- **The octave is split across two bit fields, on purpose.** A step packs into
+  sixteen bits; the octave's *direction* is in bits 4-5 where it always was and
+  its *distance* is in bit 9. Widening the old field in place would have made
+  every state blob written before 0.3.0 unreadable; split, a 0.2.x build reads a
+  new blob as the same step one octave less extreme. Do not tidy this up.
 - **A slid note must not retrigger the envelope.** On the machine the gate never
   goes low across a slide, so the envelope keeps running. This is true for both
   play modes — an overlapping MIDI note and a slid sequencer step. It is the
@@ -135,7 +142,18 @@ tool names and an environment variable from the folder name, and
   advanced by a counter, so scrubbing, looping and tempo changes all land. Notes
   are sample-accurate: the audio block is split again at every step boundary.
 - **A held MIDI note transposes the pattern rather than sounding**, which is
-  what the machine's own keyboard did.
+  what the machine's own keyboard did. With no transport running it also starts
+  the pattern again from step one; with one, it does not, because there the
+  position belongs to the song.
+- **The sequencer's notes go out of a note port as well as into the engine**,
+  and `src/midifile.cpp` writes the same notes to a file for the window to drag
+  out. Three conventions are shared by both and by the plugin's own MIDI input:
+  an accent is a velocity above the accent threshold, a slide is an overlap, a
+  vibrato is CC1. Change one of them and change all three.
+- **A drag runs a nested event loop and the window stops painting until it ends.**
+  That is what both platforms offer -- `DoDragDrop` is modal, and the X11 source
+  has to answer the target while the button is down -- and it is what every
+  other application does.
 - **Widening a logarithmic parameter's range breaks every saved project unless
   it is migrated.** A state blob stores the *raw* value, which for a Log
   parameter is a position on its own curve -- so changing dispMin/dispMax

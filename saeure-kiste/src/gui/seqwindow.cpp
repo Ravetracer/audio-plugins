@@ -20,6 +20,8 @@
 
 #include "seqwindow.h"
 
+#include "dragfile.h"
+
 #include "params.h"
 
 #include <algorithm>
@@ -469,6 +471,7 @@ private:
       mSeqSeedLabelRect = {0, 0, 0, 0};
       mSeqLeftRect = {0, 0, 0, 0};
       mSeqRightRect = {0, 0, 0, 0};
+      mSeqMidiRect = {0, 0, 0, 0};
       if (hasPattern()) {
          const double bankW = hasBank() ? kBankW + kGap : 0.0;
          mSeqRect.x = kMargin;
@@ -498,6 +501,8 @@ private:
          mSeqLeftRect = {bx, by, 22.0, bh};
          bx -= 54.0;
          mSeqClearRect = {bx, by, 46.0, bh};
+         bx -= 48.0;
+         mSeqMidiRect = {bx, by, 42.0, bh};
          y += static_cast<int>(mSeqRect.h) + kGap;
       }
 
@@ -1148,6 +1153,10 @@ private:
    void grabKeyboard() {
       if (!mWindow || mKeyboardGrabbed)
          return;
+      // Said before the keyboard actually moves, because from here on the key
+      // releases for anything the host is playing from its own computer
+      // keyboard go to this window instead of to the host.
+      mDelegate.guiKeyboardTaken();
 #if defined(_WIN32)
       // Windows routes keys to whichever window holds the focus, and a child
       // window is allowed to take it, so there is nothing here to grab. That is
@@ -1359,7 +1368,8 @@ private:
                   ? "Drag a knob to edit, double-click to reset, shift-drag for fine "
                     "control. Click a value to type one. MIXER balances the layers."
                   : "Drag a knob to edit, double-click to reset, shift-drag for fine "
-                    "control. Click a menu to pick from the list, its arrows to step. Click a value to type one.";
+                    "control. Click a menu to pick from the list. Drag MIDI into the host to "
+                    "take the pattern with you.";
 
       setColor(cr, mSpec.theme.textMute);
       drawText(cr, kMargin, mHelpY + kHelpH - 8, msg, 10, false, Align::Left);
@@ -2134,6 +2144,20 @@ private:
       return bankGridY() + bankRows() * kBankCellH + kBankRowGap + row * (kBankCtlH + 4.0);
    }
 
+   // COPY and PASTE sit in the bank's title row, beside the word PATTERNS.
+   // There is no room under the chain controls -- the pane's height is fixed by
+   // the step grid beside it and the eight rows already reach the bottom of it.
+   Rect bankCopyRect() const {
+      return hasBank() ? Rect{mBankRect.x + mBankRect.w - kSeqPad - 94.0, mBankRect.y + 4.0, 44.0,
+                              14.0}
+                       : Rect{0, 0, 0, 0};
+   }
+   Rect bankPasteRect() const {
+      return hasBank() ? Rect{mBankRect.x + mBankRect.w - kSeqPad - 46.0, mBankRect.y + 4.0, 46.0,
+                              14.0}
+                       : Rect{0, 0, 0, 0};
+   }
+
    Rect bankCtlRect(int row) const {
       return {mBankRect.x + kSeqPad + kBankCtlLabelW, bankCtlY(row),
               mBankRect.w - 2.0 * kSeqPad - kBankCtlLabelW, kBankCtlH};
@@ -2180,6 +2204,7 @@ private:
       // Empty it, walk it sideways under the bar, or generate a new one. The
       // seed is shown between its two buttons, because a pattern you like is a
       // number worth writing down.
+      drawSeqButton(cr, mSeqMidiRect, "MIDI");
       drawSeqButton(cr, mSeqClearRect, "CLEAR");
       drawSeqButton(cr, mSeqLeftRect, "<");
       drawSeqButton(cr, mSeqRightRect, ">");
@@ -2255,8 +2280,12 @@ private:
          cairo_set_line_width(cr, 1.0);
          cairo_stroke(cr);
          if (st.note >= 0 && st.octave != 0) {
-            const double h = boxH * 0.5 - 1.5;
-            setColor(cr, t.accent, 0.85);
+            // One octave fills its half; two reaches across the seam, so the
+            // difference between them is a distance rather than a colour and
+            // can be read at a glance down the row.
+            const int steps = st.octave > 1 || st.octave < -1 ? 2 : 1;
+            const double h = steps == 2 ? boxH * 0.78 : boxH * 0.5 - 1.5;
+            setColor(cr, t.accent, steps == 2 ? 1.0 : 0.85);
             roundedRect(cr, bx + 1.5, st.octave > 0 ? by + 1.5 : by + boxH - h - 1.5, boxW - 3.0,
                         h, 2.0);
             cairo_fill(cr);
@@ -2387,6 +2416,9 @@ private:
          drawText(cr, r.x + r.w * 0.5, r.y + r.h - 7.0, num, 8.0, sel, Align::Center);
       }
 
+      drawSeqButton(cr, bankCopyRect(), "COPY");
+      drawSeqButton(cr, bankPasteRect(), "PASTE", mPatternClipHeld);
+
       drawBankControl(cr, 0, mSpec.chainModeParam, "CHAIN");
       drawBankControl(cr, 1, mSpec.chainLengthParam, "LENGTH");
    }
@@ -2428,20 +2460,67 @@ private:
       return static_cast<int>(std::floor(mDelegate.guiParamValue(id) + 0.5));
    }
 
-   void drawSeqButton(cairo_t *cr, const Rect &r, const char *label) {
+   void drawSeqButton(cairo_t *cr, const Rect &r, const char *label, bool enabled = true) {
       const Theme &t = mSpec.theme;
-      const bool hot = r.contains(mMouseX, mMouseY);
+      const bool hot = enabled && r.contains(mMouseX, mMouseY);
       roundedRect(cr, r.x, r.y, r.w, r.h, 3);
-      setColor(cr, hot ? t.track : t.knobFace);
+      setColor(cr, hot ? t.track : t.knobFace, enabled ? 1.0 : 0.5);
       cairo_fill_preserve(cr);
-      setColor(cr, t.panelEdge);
+      setColor(cr, t.panelEdge, enabled ? 1.0 : 0.5);
       cairo_set_line_width(cr, 1.0);
       cairo_stroke(cr);
-      setColor(cr, hot ? t.text : t.textDim);
+      setColor(cr, hot ? t.text : t.textDim, enabled ? 1.0 : 0.45);
       drawText(cr, r.x + r.w * 0.5, r.y + r.h - 5.0, label, 8.0, false, Align::Center);
    }
 
    // ------------------------------------------------------------ pane events
+
+   // Copy and paste between slots. The clipboard is the editor's, not the
+   // plugin's: it is a thing you are in the middle of doing, so it lives as
+   // long as the window does and is not in the preset, the state blob or the
+   // parameter list. Paste writes whichever slot is selected *now*, so the
+   // gesture is copy, click another slot, paste.
+   void patternCopy() {
+      const int pat = editPattern();
+      for (int c = 0; c < kMaxSteps; ++c)
+         mPatternClip[c] = mSpec.pattern->seqStep(pat, c).pack();
+      mPatternClipHeld = true;
+      mDirty = true;
+   }
+
+   void patternPaste() {
+      if (!mPatternClipHeld)
+         return;
+      const int pat = editPattern();
+      for (int c = 0; c < kMaxSteps; ++c)
+         mSpec.pattern->seqSetStep(pat, c, Step::unpack(mPatternClip[c]));
+      mDirty = true;
+   }
+
+   // Drag the selected pattern into the host as a MIDI file.
+   //
+   // The plugin writes the file -- what goes in it is the rate, the gate, the
+   // swing and the tempo, none of which the window knows about -- and the
+   // window hands the path to the desktop's drag protocol. A click that never
+   // moves finds no target and drops nothing, which is the right answer for a
+   // button pressed by accident.
+   //
+   // The drag runs a nested loop and does not come back until the button does,
+   // so the window stops repainting for as long as it lasts. That is what both
+   // platforms offer and what every other application does.
+   void dragPatternAsMidi() {
+      if (!hasPattern())
+         return;
+      const std::string path = mSpec.pattern->seqExportMidi();
+      if (path.empty())
+         return; // an empty pattern, or nowhere to write it
+#if defined(_WIN32)
+      dragFileOut(nullptr, reinterpret_cast<uintptr_t>(mWindow), path);
+#else
+      dragFileOut(mDisplay, static_cast<uintptr_t>(mWindow), path);
+#endif
+      mDirty = true;
+   }
 
    // The three buttons that change a whole pattern at once. None of them is
    // undoable, which is the same deal a hardware sequencer offers.
@@ -2473,6 +2552,15 @@ private:
    bool onBankDown(double x, double y, unsigned button) {
       if (!hasBank() || !mBankRect.contains(x, y))
          return false;
+
+      if (button == kButtonLeft && bankCopyRect().contains(x, y)) {
+         patternCopy();
+         return true;
+      }
+      if (button == kButtonLeft && bankPasteRect().contains(x, y)) {
+         patternPaste();
+         return true;
+      }
 
       const int cell = bankCellAt(x, y);
       if (cell >= 0) {
@@ -2539,6 +2627,11 @@ private:
          return false;
       if (onBankDown(x, y, button))
          return true;
+      if (mSeqMidiRect.contains(x, y)) {
+         if (button == kButtonLeft)
+            dragPatternAsMidi();
+         return true;
+      }
       if (mSeqClearRect.contains(x, y)) {
          seqClear();
          return true;
@@ -2575,11 +2668,19 @@ private:
 
       Step st = mSpec.pattern->seqStep(editPattern(), col);
 
-      // The octave row: the top half is up, the bottom half is down, and
-      // clicking the one that is already set puts it back to the middle.
+      // The octave row: the top half steps up and the bottom half steps down,
+      // one octave a click, as far as two either way. Stepping rather than
+      // setting is what makes five values fit a control with two halves --
+      // clicking back down through the middle is how you clear it, and the
+      // right button clears it outright, the same as it does on the pitch grid.
       if (y >= seqOctY() && y < seqPitchY()) {
-         const int want = y < seqOctY() + kSeqOctH * 0.5 ? 1 : -1;
-         st.octave = st.octave == want ? 0 : want;
+         if (button != kButtonLeft) {
+            st.octave = 0;
+         } else {
+            const int dir = y < seqOctY() + kSeqOctH * 0.5 ? 1 : -1;
+            const int next = st.octave + dir;
+            st.octave = next < -kMaxOctave ? -kMaxOctave : (next > kMaxOctave ? kMaxOctave : next);
+         }
          seqEdit(col, st);
          return true;
       }
@@ -3287,7 +3388,12 @@ private:
    // The step grid and the bank beside it.
    Rect mSeqRect{0, 0, 0, 0};
    Rect mBankRect{0, 0, 0, 0};
+   // The pattern clipboard: sixteen packed steps and whether anything is in it.
+   uint16_t mPatternClip[kMaxSteps] = {0};
+   bool mPatternClipHeld = false;
+
    Rect mSeqClearRect{0, 0, 0, 0};
+   Rect mSeqMidiRect{0, 0, 0, 0};
    Rect mSeqGenRect{0, 0, 0, 0};
    Rect mSeqSeedDownRect{0, 0, 0, 0};
    Rect mSeqSeedUpRect{0, 0, 0, 0};

@@ -68,6 +68,17 @@ public:
    // The version label in the header was clicked. Most plugins have nothing to
    // do with that, which is why it defaults to doing nothing.
    virtual void guiVersionClicked() {}
+
+   // The window has just taken the keyboard for its save field. Whatever the
+   // host had routed to the plugin, the key releases for it now go to the
+   // window instead: on X11 because of the grab, on Windows because the focus
+   // moved. A plugin that keeps its own record of what is held has to assume
+   // that record is about to go stale -- a note played from the host's computer
+   // keyboard gets its note-on and never its note-off.
+   //
+   // Plugins that hold nothing of their own do not need it, which is why it
+   // defaults to doing nothing.
+   virtual void guiKeyboardTaken() {}
 };
 
 class Gui {

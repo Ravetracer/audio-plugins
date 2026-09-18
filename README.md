@@ -13,7 +13,7 @@ Vibe coded with Claude.
 
 | Plugin | Version | Platforms | Formats | What it is |
 |--------|---------|-----------|---------|------------|
-| **[SäureKiste](saeure-kiste/)** | 0.2.0 | Linux, Windows | CLAP, VST3 | a monophonic acid bass synthesiser modelled on the Roland TB-303's main board, from the February 1982 service notes, with Robin Whittle's Devil Fish modification |
+| **[SäureKiste](saeure-kiste/)** | 0.3.0 | Linux, Windows | CLAP, VST3 | a monophonic acid bass synthesiser modelled on the Roland TB-303's main board, from the February 1982 service notes, with Robin Whittle's Devil Fish modification |
 
 ## Build
 

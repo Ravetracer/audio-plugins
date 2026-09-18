@@ -222,7 +222,8 @@ const ParamDesc kParams[kNumParams] = {
         "accent, overlapping notes make a slide, and the mod wheel is the vibrato. In "
         "Sequencer the plugin plays its own sixteen steps, locked to the host's "
         "transport, and a held MIDI note transposes the pattern instead of sounding -- "
-        "C2 plays it as written. The machine only ever worked the second way."),
+        "C2 plays it as written. With no transport running a key runs the pattern and "
+        "starts it again from step one. The machine only ever worked the second way."),
    ENUM(kParamSeqRate, "seq_rate", "Rate", "Sequencer", 2.0, kRateNames,
         "How long one step lasts, as a fraction of a beat. 1/16 is the grid a bass "
         "line is written on and is the default; the triplet settings are not something "

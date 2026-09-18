@@ -13,6 +13,7 @@
 #include "dsp/acid_engine.h"
 #include "entry.h"
 #include "factories.h"
+#include "midifile.h"
 #include "params.h"
 #include "presets_generated.h"
 #include "saeurekiste.h"
@@ -105,9 +106,9 @@ public:
       mPlugin.stop_processing = [](const clap_plugin_t *) {};
       mPlugin.reset = [](const clap_plugin_t *p) {
          SaeureKistePlugin *plug = self(p);
-         plug->seqStopAll();
-         plug->mSeqRunning = false;
-         plug->mLastFired = -1.0e18;
+         // Including the transpose stack: reset() means nothing is held, and a
+         // key left in it would run the sequencer with nothing pressed.
+         plug->forgetHeldNotes();
          plug->mEngine.reset();
       };
       mPlugin.process = [](const clap_plugin_t *p, const clap_process_t *pr) {
@@ -573,19 +574,17 @@ private:
       return true;
    }
 
-   static uint32_t notePortsCount(const clap_plugin_t *, bool isInput) {
-      return isInput ? 1 : 0;
-   }
+   static uint32_t notePortsCount(const clap_plugin_t *, bool) { return 1; }
 
    static bool notePortsGet(const clap_plugin_t *, uint32_t index, bool isInput,
                             clap_note_port_info_t *info) {
-      if (!isInput || index != 0)
+      if (index != 0)
          return false;
       std::memset(info, 0, sizeof(*info));
-      info->id = 0;
+      info->id = isInput ? 0 : 1;
       info->supported_dialects = CLAP_NOTE_DIALECT_CLAP | CLAP_NOTE_DIALECT_MIDI;
       info->preferred_dialect = CLAP_NOTE_DIALECT_CLAP;
-      std::snprintf(info->name, sizeof(info->name), "Note In");
+      std::snprintf(info->name, sizeof(info->name), isInput ? "Note In" : "Note Out");
       return true;
    }
 
@@ -650,6 +649,39 @@ private:
       return onsetOf(k + 6);
    }
 
+   // The sequencer's notes, sent out as well as played.
+   //
+   // What the port carries is exactly what the instrument is doing: the key
+   // after transposition, an accent as a velocity above the accent threshold,
+   // and a slide as a note that is still held when the next one starts --
+   // which is the same convention the plugin's own MIDI mode reads, so a
+   // recording of this port played back into it sounds like what was recorded.
+   //
+   // Only the sequencer emits. In MIDI mode the notes came from the host and
+   // it does not need them back.
+   void emitNote(uint16_t type, int key, bool accent) {
+      if (!mOut || !mOut->try_push)
+         return;
+      clap_event_note_t ev{};
+      ev.header.size = sizeof(ev);
+      ev.header.time = mOutFrame;
+      ev.header.space_id = CLAP_CORE_EVENT_SPACE_ID;
+      ev.header.type = type;
+      ev.header.flags = 0;
+      ev.note_id = -1;
+      ev.port_index = 1;
+      ev.channel = 0;
+      ev.key = static_cast<int16_t>(key);
+      // A plain note stays clear of the accent threshold even when that has
+      // been moved down, so the line's accents survive the round trip.
+      const double threshold = realValue(kParamAccentThreshold);
+      const double plain = threshold - 10.0 < 80.0 ? threshold - 10.0 : 80.0;
+      ev.velocity = type == CLAP_EVENT_NOTE_OFF
+                       ? 0.0
+                       : (accent ? 1.0 : (plain < 1.0 ? 1.0 : plain) / 127.0);
+      mOut->try_push(mOut, &ev.header);
+   }
+
    // Everything the sequencer has sounding, gone -- and gone for certain.
    //
    // Note-offs by key would be enough if the bookkeeping were always right, and
@@ -659,12 +691,30 @@ private:
    // transpose, so there is nothing else to lose.
    void seqStopAll() {
       const bool hadNotes = mSeqKeyA >= 0 || mSeqKeyB >= 0;
+      if (mSeqKeyB >= 0)
+         emitNote(CLAP_EVENT_NOTE_OFF, mSeqKeyB, false);
+      if (mSeqKeyA >= 0)
+         emitNote(CLAP_EVENT_NOTE_OFF, mSeqKeyA, false);
       mSeqKeyA = -1;
       mSeqKeyB = -1;
       mPlayhead.store(-1, std::memory_order_relaxed);
       mPlayingPattern.store(-1, std::memory_order_relaxed);
       if (hadNotes)
          mEngine.releaseAll();
+   }
+
+   // A key press starts the pattern from the top.
+   //
+   // Only when the sequencer is free-running off a held key, never when it is
+   // locked to the host's beat timeline: there the position is the song's, and
+   // a key is a transposition rather than a start button. Pressing one in the
+   // middle of a bar would put the pattern out of step with everything else in
+   // the project and the next block would drag it back anyway.
+   void seqRestart() {
+      seqStopAll(); // releases whatever is sounding; the first step retriggers
+      mStepPos = 0.0;
+      mLastFired = -1.0e18;
+      mNextOn = firstOnsetFrom(0.0);
    }
 
    void seqStartStep(double onsetPos) {
@@ -705,14 +755,17 @@ private:
       // a note that never gets its note-off, and one of those is enough to make
       // every later note look like a slide for ever.
       if (mSeqKeyA >= 0) {
-         if (mSeqKeyB >= 0)
+         if (mSeqKeyB >= 0) {
             mEngine.noteOff(0, 0, static_cast<int16_t>(mSeqKeyB), -1);
+            emitNote(CLAP_EVENT_NOTE_OFF, mSeqKeyB, false);
+         }
          mSeqKeyB = mSeqKeyA;
          mSeqOffB = mSeqOffA;
       }
       mSeqKeyA = key;
       mSeqOffA = off;
       mEngine.noteOnStep(static_cast<int16_t>(key), st.accent, st.vibrato);
+      emitNote(CLAP_EVENT_NOTE_ON, key, st.accent);
    }
 
    // Note-ons before note-offs, always: releasing first would break a slide,
@@ -726,10 +779,12 @@ private:
       }
       if (mSeqKeyB >= 0 && mStepPos >= mSeqOffB - 1.0e-9) {
          mEngine.noteOff(0, 0, static_cast<int16_t>(mSeqKeyB), -1);
+         emitNote(CLAP_EVENT_NOTE_OFF, mSeqKeyB, false);
          mSeqKeyB = -1;
       }
       if (mSeqKeyA >= 0 && mStepPos >= mSeqOffA - 1.0e-9) {
          mEngine.noteOff(0, 0, static_cast<int16_t>(mSeqKeyA), -1);
+         emitNote(CLAP_EVENT_NOTE_OFF, mSeqKeyA, false);
          mSeqKeyA = -1;
       }
    }
@@ -743,7 +798,55 @@ private:
       return b;
    }
 
+   // Everything the plugin remembers about what is pressed, dropped.
+   //
+   // The transpose stack is only maintained while the mode says Sequencer, and
+   // the engine's held stack only while it says MIDI, so a mode change moves
+   // the note stream from one to the other mid-note: the note-on went to one
+   // and the note-off arrives at the other. Whichever side was holding the key
+   // keeps it for ever.
+   //
+   // A stale transpose entry is the worse of the two, because nothing else
+   // notices it: it makes the plugin believe a key is held, and a held key runs
+   // the pattern with no transport. Browsing presets is enough to do it --
+   // nineteen of the twenty-seven factory presets are in MIDI mode and eight
+   // are in Sequencer -- and the result is a sequencer that plays on its own
+   // until the plugin is reloaded.
+   void forgetHeldNotes() {
+      mHeldKeyCount = 0;
+      mTranspose = 0;
+      seqStopAll();
+      mSeqRunning = false;
+      mLastFired = -1.0e18;
+      if (mEngine.heldCount() > 0)
+         mEngine.releaseAll();
+   }
+
+   // Mode decides which side of the plugin a note event goes to, so a change to
+   // it has to be reconciled at the instant it happens -- before the notes that
+   // follow it, and after the ones that came before.
+   //
+   // Called from two places for that reason. A parameter event calls it as the
+   // event is handled, which is where the ordering matters: a host that loads a
+   // preset and plays a note in the same block sends the parameter first, and
+   // reconciling after the whole block would release the note that had just
+   // arrived. The top of process() calls it as well, because the mode also
+   // moves with no event at all -- loading a preset and loading the host's
+   // saved state both write the parameter table directly from the main thread.
+   void syncPlayMode() {
+      const bool seqMode = sequencerMode();
+      if (seqMode == mLastSeqMode)
+         return;
+      mLastSeqMode = seqMode;
+      forgetHeldNotes();
+   }
+
    void updateSequencerClock(const clap_process_t *pr) {
+      if (mForgetHeldKeys.exchange(false, std::memory_order_relaxed)) {
+         mHeldKeyCount = 0;
+         mTranspose = 0;
+      }
+
       if (!sequencerMode()) {
          if (mSeqRunning) {
             seqStopAll();
@@ -756,10 +859,20 @@ private:
       const double perBeat = stepsPerBeat(static_cast<int>(realValue(kParamSeqRate)));
 
       bool playing = false;
+      bool lockedToHost = false;
       const clap_event_transport_t *tr = pr ? pr->transport : nullptr;
+
+      // The tempo, whether or not the host is rolling. A stopped DAW still
+      // says what the project's tempo is, and a pattern running off a held key
+      // is the one case where the plugin has to work it out for itself -- so
+      // reading this only while playing meant the audition ran at whatever
+      // tempo the plugin last saw, or at 120 if the transport had never been
+      // started since it was instantiated. Changing the project tempo then did
+      // nothing at all until the host was put into play.
+      if (tr && (tr->flags & CLAP_TRANSPORT_HAS_TEMPO) && tr->tempo > 1.0)
+         mTempo = tr->tempo;
+
       if (tr && (tr->flags & CLAP_TRANSPORT_IS_PLAYING)) {
-         if ((tr->flags & CLAP_TRANSPORT_HAS_TEMPO) && tr->tempo > 1.0)
-            mTempo = tr->tempo;
          if (tr->flags & CLAP_TRANSPORT_HAS_BEATS_TIMELINE) {
             const double beats =
                static_cast<double>(tr->song_pos_beats) / static_cast<double>(CLAP_BEATTIME_FACTOR);
@@ -794,6 +907,7 @@ private:
                }
             }
             mStepPos = fromSong;
+            lockedToHost = true;
          }
          playing = true;
       } else if (mHeldKeyCount > 0) {
@@ -810,6 +924,7 @@ private:
       if (!playing && mSeqRunning)
          seqStopAll();
       mSeqRunning = playing;
+      mSeqLockedToHost = lockedToHost;
 
       if (mSeqRunning) {
          // A last guarantee, and a cheap one. If the sequencer believes nothing
@@ -835,6 +950,10 @@ private:
          if (behind > mLastFired + 1.0e-9 && mStepPos - behind < 0.5)
             mNextOn = behind;
       }
+
+      // The tempo the window puts in a dragged MIDI file. Published rather than
+      // read across the threads raw.
+      mTempoPublished.store(mTempo, std::memory_order_relaxed);
 
       const double sr = mSampleRate > 0.0 ? mSampleRate : 48000.0;
       mFramesPerStep = 60.0 / (mTempo > 1.0 ? mTempo : 120.0) / perBeat * sr;
@@ -940,6 +1059,34 @@ private:
       seqGenerate();
    }
 
+   // The pattern as a standard MIDI file, for the window to drag into the host.
+   // Main thread: every read here is an atomic the audio thread publishes.
+   std::string seqExportMidi() override {
+      const int pat = seqPattern();
+      uint16_t steps[kMaxSteps];
+      for (int i = 0; i < kMaxSteps; ++i)
+         steps[i] = mPattern[pat][i].load(std::memory_order_relaxed);
+
+      MidiExport spec;
+      spec.steps = steps;
+      spec.length = seqLength();
+      spec.stepsPerBeat = stepsPerBeat(static_cast<int>(realValue(kParamSeqRate)));
+      spec.gate = realValue(kParamGate);
+      spec.swingPercent = realValue(kParamSwing);
+      spec.tempoBpm = mTempoPublished.load(std::memory_order_relaxed);
+      spec.accentVelocity = realValue(kParamAccentThreshold);
+      spec.patternNumber = pat + 1;
+
+      const std::string bytes = patternToMidiFile(spec);
+      if (bytes.empty())
+         return std::string();
+      const std::string path = midiExportPath(spec.patternNumber);
+      std::string error;
+      if (!writeMidiFile(path, bytes, error))
+         return std::string();
+      return path;
+   }
+
    void seqGenerate() override {
       GenSettings g;
       g.seed = static_cast<uint32_t>(realValue(kParamRandSeed));
@@ -972,6 +1119,7 @@ private:
             // The pattern is the player. A note does not sound -- it moves the
             // whole pattern, which is what the machine's own keyboard did.
             pushTranspose(ev->key);
+            mSeqRestartWanted = true;
          } else {
             mEngine.noteOn(ev->port_index, ev->channel, ev->key, ev->note_id, ev->velocity);
          }
@@ -1001,6 +1149,8 @@ private:
          mValues[ev->param_id].store(clampv(ev->value, d->min, d->max),
                                      std::memory_order_relaxed);
          mParamsDirty.store(true, std::memory_order_relaxed);
+         if (ev->param_id == kParamMode)
+            syncPlayMode();
          break;
       }
       case CLAP_EVENT_PARAM_MOD: {
@@ -1020,10 +1170,12 @@ private:
          const int16_t key = static_cast<int16_t>(ev->data[1] & 0x7F);
          const uint8_t vel = ev->data[2] & 0x7F;
          if (status == 0x90 && vel > 0) {
-            if (sequencerMode())
+            if (sequencerMode()) {
                pushTranspose(key);
-            else
+               mSeqRestartWanted = true;
+            } else {
                mEngine.noteOn(ev->port_index, channel, key, -1, vel / 127.0);
+            }
          } else if (status == 0x80 || (status == 0x90 && vel == 0)) {
             if (sequencerMode())
                popTranspose(key);
@@ -1063,6 +1215,16 @@ private:
 
       drainGuiEdits(pr->out_events, 0);
 
+      // The note output port writes into the same list, at whatever frame the
+      // split loop below has reached.
+      mOut = pr->out_events;
+      mOutFrame = 0;
+
+      // Before the block's events, not after them: the main thread can have
+      // moved Mode since the last block, and a note arriving in this one has to
+      // be handled by the mode it is actually played in.
+      syncPlayMode();
+
       // Anything the editor has asked for since the last block. Cleared with a
       // single exchange, so a click landing during this loop is served by the
       // next block rather than lost.
@@ -1097,6 +1259,18 @@ private:
             clockUpdated = true;
          }
 
+         // A key press starts the pattern over. Consumed here rather than in
+         // the clock because the block is already split at every event, so the
+         // restart lands on the sample the key arrived on rather than at the
+         // top of the next block.
+         if (mSeqRestartWanted) {
+            mSeqRestartWanted = false;
+            if (mSeqRunning && !mSeqLockedToHost) {
+               mOutFrame = frame;
+               seqRestart();
+            }
+         }
+
          uint32_t next = numFrames;
          if (eventIndex < numEvents) {
             const clap_event_header_t *hdr = in->get(in, eventIndex);
@@ -1110,6 +1284,7 @@ private:
          // Split the block again at the next step boundary, so a note lands on
          // the sample it is due on rather than on the next buffer.
          if (mSeqRunning) {
+            mOutFrame = frame;
             seqFireDue();
             const double ahead = (seqNextBoundary() - mStepPos) * mFramesPerStep;
             if (ahead >= 0.0 && ahead < static_cast<double>(numFrames)) {
@@ -1130,6 +1305,8 @@ private:
 
       // Published for the window's activity meter; the GUI never reads engine
       // state directly.
+      mOut = nullptr; // nothing outside this call may push to the host's list
+
       mVoiceMeter.store(mEngine.activeVoiceCount(), std::memory_order_relaxed);
       mNoteCounterMeter.store(mEngine.noteCounter(), std::memory_order_relaxed);
       publishOutputPeaks(outL, outR, numFrames);
@@ -1299,6 +1476,17 @@ private:
       if (mHost && mHost->request_process)
          mHost->request_process(mHost);
    }
+
+   // The window has taken the keyboard for its save field, so the key releases
+   // the host would have turned into note-offs now go to the window instead.
+   // Anything this plugin believes is held is about to be wrong.
+   //
+   // Only the transpose stack is dropped, and only by the audio thread, which
+   // owns it: a note a host *sequencer* is playing still gets its note-off, and
+   // dropping the engine's held notes would cut a clip off mid-phrase. It is
+   // the keys a person is holding down that lose their release, and in
+   // Sequencer mode one of those left behind runs the pattern for ever.
+   void guiKeyboardTaken() override { mForgetHeldKeys.store(true, std::memory_order_relaxed); }
 
    std::string guiSuggestedPresetName() const override {
       if (mCurrentPreset >= 0 && mCurrentPreset < static_cast<int>(mPresets.size()))
@@ -1640,13 +1828,28 @@ private:
    double mSwingAmt = 0.0;
    double mFramesPerStep = 1000.0;
    double mTempo = 120.0;
+   std::atomic<double> mTempoPublished{120.0};
    int mSeqKeyA = -1;          // the sounding note
    int mSeqKeyB = -1;          // the one a slide is moving away from
    double mSeqOffA = 0.0;
    double mSeqOffB = 0.0;
    int mTranspose = 0;
+   // What sequencerMode() said on the previous block, so a change can be seen.
+   bool mLastSeqMode = false;
+   // Whether the host's beat timeline is driving the position, rather than a
+   // held key, which decides whether a key press may restart the pattern.
+   bool mSeqLockedToHost = false;
+   // A note-on arrived in Sequencer mode; the pattern restarts on it.
+   bool mSeqRestartWanted = false;
+   // The host's event list for this block, and the frame the split loop has
+   // reached in it. Null outside process().
+   const clap_output_events_t *mOut = nullptr;
+   uint32_t mOutFrame = 0;
    int mHeldKeyCount = 0;
    int mHeldKeys[16] = {0};
+   // Set by the editor when it takes the keyboard, consumed by the audio
+   // thread; see guiKeyboardTaken().
+   std::atomic<bool> mForgetHeldKeys{false};
 
    ParamEdit mEditQueue[kEditQueueSize];
    std::atomic<uint32_t> mEditWrite{0};

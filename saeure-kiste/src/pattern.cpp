@@ -49,10 +49,14 @@ bool flagFromToken(const std::string &t) {
 }
 
 int octaveFromToken(const std::string &t) {
+   if (t == "--" || t == "-2")
+      return -2;
    if (t == "-" || t == "-1")
       return -1;
    if (t == "+" || t == "+1" || t == "1")
       return 1;
+   if (t == "++" || t == "+2" || t == "2")
+      return 2;
    return 0;
 }
 
@@ -60,15 +64,20 @@ int octaveFromToken(const std::string &t) {
 
 uint16_t Step::pack() const {
    const uint16_t n = note < 0 || note > 11 ? 0u : static_cast<uint16_t>(note + 1);
-   const int o = octave < -1 ? -1 : (octave > 1 ? 1 : octave);
+   const int o = octave < -kMaxOctave ? -kMaxOctave : (octave > kMaxOctave ? kMaxOctave : octave);
+   // The direction in bits 4-5, the distance in bit 9: see the note on the bit
+   // layout in pattern.h for why it is split that way.
+   const int dir = o < 0 ? -1 : (o > 0 ? 1 : 0);
    uint16_t v = n;
-   v |= static_cast<uint16_t>((o + 1) << 4);
+   v |= static_cast<uint16_t>((dir + 1) << 4);
    if (accent)
       v |= 1u << 6;
    if (slide)
       v |= 1u << 7;
    if (vibrato)
       v |= 1u << 8;
+   if (o == -2 || o == 2)
+      v |= 1u << 9;
    return v;
 }
 
@@ -80,6 +89,8 @@ Step Step::unpack(uint16_t packed) {
    s.accent = (packed & (1u << 6)) != 0;
    s.slide = (packed & (1u << 7)) != 0;
    s.vibrato = (packed & (1u << 8)) != 0;
+   if (packed & (1u << 9))
+      s.octave *= 2;
    return s;
 }
 
@@ -226,7 +237,13 @@ std::string formatPattern(const uint16_t *steps) {
             tok = s.note < 0 ? "." : kNoteNames[s.note];
             break;
          case 1:
-            tok = s.octave < 0 ? "-" : (s.octave > 0 ? "+" : ".");
+            // One character per octave, so the column still reads as a shape.
+            // The single-octave tokens are what they always were, which keeps
+            // every preset written before this byte for byte what it was.
+            tok = s.octave <= -2 ? "--"
+                                 : (s.octave == -1 ? "-"
+                                                   : (s.octave >= 2 ? "++"
+                                                                    : (s.octave == 1 ? "+" : ".")));
             break;
          default:
             tok = s.flag(which - 2) ? "x" : ".";

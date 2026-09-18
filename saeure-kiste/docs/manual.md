@@ -2,7 +2,7 @@
 
 *A monophonic acid bass synthesiser for Linux. CLAP.*
 
-Version 0.2.0
+Version 0.3.0
 
 ---
 
@@ -215,11 +215,19 @@ It runs off the **host's beat timeline**, re-read at the top of every block, so
 scrubbing, looping and tempo changes all land where they should. Inside the
 block the audio is split again at every step boundary, so a note starts on the
 sample it is due on and not on the next buffer. If the host is stopped, or has
-no transport at all, a held MIDI note runs the pattern anyway at 120 BPM, so it
-can be auditioned without putting the song into play.
+no transport at all, a held MIDI note runs the pattern anyway — at the project's
+tempo, which a stopped host still reports, or at 120 BPM if there is no
+transport at all — so it can be auditioned without putting the song into play.
 
 A held MIDI note **transposes** the pattern rather than sounding. **C2 is the
 pattern as written**; releasing everything puts it back.
+
+When the pattern is running off a key rather than off the host's transport,
+**pressing a key starts it again from step one**. That is the only way to place
+the first step where you want it without a transport, and it is what the
+machine's own keyboard did. With the host playing, a key only transposes: the
+position belongs to the song, and a pattern that jumped back to step one in the
+middle of a bar would be out of step with everything else in the project.
 
 ### The grid
 
@@ -230,14 +238,20 @@ Sixteen steps across, below the panels.
   right-click anywhere in the column) to clear the step, and **drag to paint**.
   An accented step is drawn bright — an accent is the first thing you look for
   when reading somebody else's pattern.
-- The **OCT** row above it is one octave up or down per step. Click the top half
-  for +1, the bottom half for −1, the same half again to centre it.
+- The **OCT** row above it moves a step up to **two octaves either way**. Click
+  the top half to step up, the bottom half to step down, one octave a click, as
+  far as +2 and −2; the right button puts a step straight back to the middle.
+  One octave fills its half of the box, two reach across the seam, so the row
+  can be read at a glance. The machine had one switch position each way; two is
+  a sequencer feature, and it is what lets a line hold a bass note and a lead in
+  the same sixteen steps.
 - **SLIDE**, **ACCENT** and **VIB** below. Click or drag.
 - Steps past the pattern's length are greyed; the playing step is lit.
 
 **CLEAR** empties it. The two **arrow** buttons walk the whole pattern one step
 sideways under the bar, which is the quickest way to find out that a line you
-liked was starting in the wrong place. The rest is the generator.
+liked was starting in the wrong place. **MIDI** drags the pattern out of the
+plugin — see *Taking the pattern with you* below. The rest is the generator.
 
 All of it applies to whichever pattern the bank has selected — which is not
 necessarily the one sounding, because a running chain moves on without the
@@ -251,6 +265,12 @@ written in it is filled, the selected one is outlined in the accent, the one
 sounding is ringed, and the ones the chain will reach are lit.
 
 The machine had sixty-four too, and a mode switch to reach them.
+
+**COPY** and **PASTE**, in the bank's own title row, are how a pattern becomes a
+variation of another one: copy it, click an empty slot, paste, and change the
+two steps you wanted to change. PASTE stays greyed until something has been
+copied. The clipboard is the editor's — it lasts as long as the window is open,
+and it is not in the preset, the state or the parameter list.
 
 **CHAIN** is what happens when a pattern has played through.
 
@@ -279,6 +299,37 @@ same deal a hardware sequencer offers.
 
 The whole bank travels in the preset file and in the plugin's state. Only the
 patterns with something in them are written out.
+
+### Taking the pattern with you
+
+A line worth keeping is often a line you want to *edit* — in the arranger, as
+notes, with the rest of the track around it. There are two ways out, and they
+carry the same thing.
+
+**The note output port.** The plugin has a note output as well as an input, and
+in Sequencer mode everything the sequencer plays goes out of it: route it to
+another track and record the line as it plays. What comes out is what you hear,
+including the transposition a held key applies.
+
+**Drag the MIDI button.** Press **MIDI** above the grid and drag into the host's
+arranger. The selected pattern is written to a temporary `.mid` file and dropped
+where you let go — which is how a DAW takes MIDI from anything else. A click
+that does not move drops nothing.
+
+Both use the same three conventions, and they are the ones this plugin reads
+back in MIDI mode, so a recording played into it again sounds like what it came
+from:
+
+| In the pattern | In the MIDI |
+|---|---|
+| **Accent** | a velocity above the **Acc Thresh** parameter — 127, against 80 for a plain step |
+| **Slide** | the note is still held when the next one starts. The overlap *is* the slide |
+| **Vibrato** | CC1 up for the length of the note and back down after it |
+| **Octave**, **Gate**, **Rate**, **Swing** | the key, the length and where the note falls |
+
+The dragged file carries the project's tempo and a 4/4 time signature, at 960
+ticks to the quarter note — which divides exactly by three, so a triplet rate and
+a triplet swing both land on whole ticks rather than between two of them.
 
 | Control | Range | Default | |
 |---|---|---|---|

@@ -1114,6 +1114,10 @@ private:
    void grabKeyboard() {
       if (!mWindow || mKeyboardGrabbed)
          return;
+      // Said before the keyboard actually moves, because from here on the key
+      // releases for anything the host is playing from its own computer
+      // keyboard go to this window instead of to the host.
+      mDelegate.guiKeyboardTaken();
 #if defined(_WIN32)
       // Windows routes keys to whichever window holds the focus, and a child
       // window is allowed to take it, so there is nothing here to grab. That is

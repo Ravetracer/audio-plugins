@@ -51,14 +51,14 @@ Cairo, both of which are already on any machine that runs a DAW.
 
 ### All four binaries
 
-`./release.sh 0.2.0` at the repository root builds CLAP and VST3 for both Linux
+`./release.sh 0.3.0` at the repository root builds CLAP and VST3 for both Linux
 and Windows and packs them with the manual into `dist/`:
 
 ```
-SaeureKiste-0.2.0/
+SaeureKiste-0.3.0/
 ├── linux/    SaeureKiste/SaeureKiste.clap + presets,  SaeureKiste.vst3
 ├── windows/  SaeureKiste/SaeureKiste.clap + presets,  SaeureKiste.vst3
-├── SaeureKiste-0.2.0-Manual.pdf
+├── SaeureKiste-0.3.0-Manual.pdf
 ├── README.md  LICENSE  INSTALL.txt  BUILD-INFO.txt
 ```
 
@@ -131,11 +131,13 @@ The grid below the panels is sixteen steps across:
 
 - a **piano roll**, twelve semitones, C at the bottom. Click to place a note,
   click it again to clear it, drag to paint. An accented step is drawn bright.
-- an **octave** lane above it: click the top half for +1, the bottom half for
-  -1, and again to centre it.
+- an **octave** lane above it, reaching **two octaves either way**: click the top
+  half to step up and the bottom half to step down, one octave a click; the
+  right button centres a step.
 - **slide**, **accent** and **vibrato** lanes below. Click or drag.
 - **CLEAR**, two **shift** buttons that walk the pattern sideways under the bar,
-  the **seed** with its - and + buttons, and **GEN**.
+  the **seed** with its - and + buttons, **GEN**, and **MIDI**, which drags the
+  pattern into the host.
 
 `Rate`, `Steps`, `Gate` and `Swing` are on the SEQUENCER panel. Steps takes 1 to
 16, as the machine did, and the interesting part of that range is the bit that
@@ -148,8 +150,12 @@ to edit it; the pattern sounding is ringed, the ones with something written in
 them are filled, and the ones the chain will reach are lit. The wheel steps
 through the bank.
 
-Under it are the two controls that say what happens when a pattern has played
-through:
+**COPY** and **PASTE** in the bank's title row turn a pattern into a variation of
+another one: copy, click an empty slot, paste, change the two steps you meant to
+change.
+
+Under the bank are the two controls that say what happens when a pattern has
+played through:
 
 | Chain | After each time round |
 |---|---|
@@ -169,6 +175,21 @@ a scrub lands on exactly the pattern it should, Random included.
 
 The whole bank travels in the preset file and in the plugin's state. Only the
 patterns with something in them are written out.
+
+### Getting the notes out
+
+The sequencer's line can leave the plugin as MIDI, two ways:
+
+- **The note output port.** In Sequencer mode everything the sequencer plays goes
+  out of it, transposition included. Route it to another track and record the
+  line as it plays.
+- **Drag the MIDI button** above the grid into the host's arranger. The selected
+  pattern is written to a temporary `.mid` and dropped where you let go.
+
+Both carry an accent as a velocity above the `Acc Thresh` parameter, a slide as
+one note still held when the next starts, and a vibrato as CC1 around the note --
+the same three conventions the plugin reads back in MIDI mode, so a recording
+played into it again sounds like what it came from.
 
 ### The collapsible half of the window
 

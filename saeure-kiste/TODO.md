@@ -21,10 +21,9 @@ preset, which exists for exactly this.
   remaining part of the signal path with no control over it.
 - **Filter coefficients update every 8 samples.** Inaudible on the envelopes
   this instrument has, but a fast automated cutoff sweep would show it.
-- **No copy or paste between pattern slots.** The bank holds sixty-four
-  patterns and chains them, but filling slot 12 with a variation on slot 11
-  still means writing it again or generating a new one. A copy, a paste and a
-  clear-all are the obvious next three buttons.
+- **No clear-all for the bank.** COPY and PASTE landed in 0.3.0; emptying the
+  whole bank in one go still means CLEAR on each pattern, or loading Blank
+  Slate.
 - **The chain has no per-pattern repeat count.** A pattern plays once before the
   chain moves on. Playing one twice and the next one once is the arrangement
   people reach for first, and it would want a number per slot rather than one
@@ -68,6 +67,25 @@ preset, which exists for exactly this.
   derives the namespace from the CMake project name, not the folder, so it does
   work on `saeure-kiste`; `./shared/tools/make-manual.sh saeure-kiste` builds
   the PDF and `release.sh` ships it.
+
+## What 0.3.0 added, and what is not proven about it
+
+- **The Windows drag has never dropped anything.** The OLE half of
+  `src/gui/dragfile.cpp` compiles, the window it belongs to opens under wine and
+  draws its MIDI button, and that is all that is known. The X11 half is verified
+  end to end against a test XDND target -- the drop arrives and carries the
+  file URI -- and that harness is not in the repository because it needs a live
+  X server and a window to drag from. It is fifty lines: a window with
+  `XdndAware` set that accepts anything and prints the `text/uri-list` it is
+  given, driven with `xdotool` from the MIDI button to the target. Put the two
+  windows on the same monitor and do not let them overlap, or the pointer lands
+  on the wrong window and nothing happens for a reason that has nothing to do
+  with the code.
+- **The note output port is untested in a DAW**, like everything else here. The
+  self-test checks what it emits: balanced notes, an accent louder than the
+  threshold, the overlap a slide is made of, and nothing at all in MIDI mode.
+- **The generator still writes one octave either way.** The lane now takes two,
+  by hand; Octaves, the generator's density control, does not reach them.
 
 ## 3. What the self-test does and does not cover
 
@@ -124,6 +142,97 @@ Two lessons, both worth keeping:
 Both are covered by `--selftest`, and both tests were checked by putting the bug
 back and watching them fail -- a regression test nobody has seen fail is not
 evidence of anything.
+
+**The sequencer used to play on its own after browsing presets.** Reported from
+a Windows session, 0.2.0: sequencer mode worked, a preset was saved, presets
+were browsed, and then the sequencer presets started playing with no key pressed
+and no transport running. Reloading the plugin cleared it; changing preset did
+not.
+
+The cause is which side of the plugin holds a key. In Sequencer mode a MIDI note
+does not sound, it transposes, so it is held in the plugin's own transpose stack
+rather than in the engine's held stack -- and which stack a note event goes to
+is decided per event, by reading the Mode parameter at the time. Change Mode
+between a note-on and its note-off and the two do not match: the on went to one
+stack and the off arrives at the other, so the first keeps the key for ever. A
+leftover transpose entry means the plugin believes a key is held, and a held key
+is what runs the pattern without a transport -- by design, so a line can be
+auditioned without putting the song into play.
+
+Browsing presets is enough to trigger it, because a preset carries the Mode:
+nineteen of the twenty-seven factory presets are in MIDI mode and eight are in
+Sequencer.
+
+Three lessons:
+
+- **A parameter that changes how an event is routed has to be watched, not just
+  read.** `updateSequencerClock()` now compares Mode against what it was on the
+  previous block and drops everything held when it moves. Polled rather than
+  hooked onto the parameter event, because the mode also moves without one:
+  loading a preset and loading the host's state both write the parameter table
+  directly from the main thread.
+- **`reset()` means nothing is held**, including the transpose stack, which it
+  did not clear.
+- **Taking the keyboard loses key releases.** When the save field opens, the
+  window grabs the keyboard on X11 and takes the focus on Windows, so a note
+  played from the host's own computer keyboard gets its note-on and never its
+  note-off. The window now tells the plugin through `GuiDelegate::
+  guiKeyboardTaken()`, and the plugin drops its transpose stack -- but not the
+  engine's held notes, which a host sequencer still releases properly.
+
+The first of the three is covered by `--selftest`, checked the same way: the
+test was watched failing at an RMS of 0.298 with nothing pressed before the fix
+went in. The other two have no contract to assert from outside the plugin.
+
+**A key press did not start the pattern over.** Found in the same session. With
+no transport the pattern free-runs off a held key, and pressing another one left
+the position exactly where it was: a key was a transposition and nothing else,
+so there was no way to decide where the line began. It now restarts at step one.
+
+Only when it is free-running, never when the host's beat timeline is driving the
+position: there the position belongs to the song, a key is a transposition, and
+a pattern that jumped back to step one in the middle of a bar would be out of
+step with the project -- and the next block would drag it back anyway.
+
+The test times it rather than measuring a level, so it cannot pass by accident:
+the key is pressed 80 % of the way through a step, where nothing is due. A
+restart puts a note onset on the key; without one the next onset is the step
+boundary, a fifth of a step later. It was watched failing at 46 ms before the
+fix and reads 0 ms after it. The step length is measured from a run with no key
+press in it rather than assumed, because the free-running tempo is whatever
+transport the plugin last saw.
+
+**And the tempo it free-ran at was the wrong one.** Reported from the same
+session: changing the project tempo did nothing, the pattern went on at the
+speed it had when the plugin was instantiated.
+
+`mTempo` was read inside the `IS_PLAYING` branch. A stopped DAW still hands over
+its tempo -- only the playing flag goes away -- and a pattern running off a held
+key is the one case where the plugin works the step length out for itself, so
+the audition ran at whatever tempo the plugin had last seen while the host was
+rolling, or at 120 if it never had been. The tempo is now read whenever the
+transport carries one.
+
+The test renders a held key against a stopped transport at two tempos and
+measures the gap between note onsets, which has to be `60 / bpm / 2` seconds at
+the 1/8 rate. It read 230 ms at both before the fix and 300 / 187 ms after it.
+
+**Two things fell out of writing those tests, both worth keeping:**
+
+- **Reconciling a mode change once per block was the wrong place for it.** The
+  first version compared Mode against the previous block from the sequencer
+  clock, which runs after the block's frame-0 events -- so a host that loads a
+  preset and plays a note in the same block had the note released a moment
+  after it arrived. It is now done as the parameter event is handled, with the
+  poll kept at the *top* of `process()` for the paths that move the mode with no
+  event at all. The suite caught it, at a check that had nothing to do with
+  either: "all parameters mid-range: still audible".
+- **A test that leaves a key down poisons the next one.** The sequencer tests
+  hold a key to run the pattern, and the first drafts never released it, so
+  later checks ran with the sequencer already going and measured numbers that
+  had nothing to do with what they were testing -- an "output stays bounded"
+  check read 1.49 that way. They release their keys now, and the
+  all-parameters sweep resets first.
 
 ## 5. Things that are deliberate, so they do not get "fixed"
 

@@ -66,6 +66,7 @@ const char *dlerrorCompat() { return "see GetLastError()"; }
 #include "params.h"
 #include <sstream>
 
+#include "midifile.h"
 #include "pattern.h"
 #include "saeurekiste.h"
 
@@ -419,6 +420,25 @@ clap_event_param_value_t makeParamValue(clap_id id, double value) {
 
 std::vector<std::pair<clap_id, double>> gParamOverrides;
 
+// What the plugin sent out of its note port during the last render, with the
+// times made absolute so the test can check when a note landed and not only
+// that it did. Filled by the output-event sink both renderers install.
+std::vector<clap_event_note_t> gNoteOut;
+uint32_t gBlockStart = 0;
+
+void installNoteSink(clap_output_events_t &out) {
+   out.ctx = nullptr;
+   out.try_push = [](const clap_output_events_t *, const clap_event_header_t *h) {
+      if (h && h->space_id == CLAP_CORE_EVENT_SPACE_ID &&
+          (h->type == CLAP_EVENT_NOTE_ON || h->type == CLAP_EVENT_NOTE_OFF)) {
+         clap_event_note_t ev = *reinterpret_cast<const clap_event_note_t *>(h);
+         ev.header.time += gBlockStart;
+         gNoteOut.push_back(ev);
+      }
+      return true;
+   };
+}
+
 // ---------------------------------------------------------------- automation
 //
 // A parameter that moves while the render runs, which is what turns a demo from
@@ -509,7 +529,19 @@ struct SeqEvent {
    int16_t key;
    double velocity;
    int32_t noteId;
+   // A schedule may carry parameter changes as well as notes, which is what it
+   // takes to test what happens when the host moves a parameter *between* a
+   // note-on and its note-off. `key` carries the parameter id then.
+   clap_id paramId = 0;
+   double paramValue = 0.0;
 };
+
+SeqEvent paramEvent(uint32_t frame, clap_id id, double value) {
+   SeqEvent e{frame, CLAP_EVENT_PARAM_VALUE, 0, 0.0, -1};
+   e.paramId = id;
+   e.paramValue = value;
+   return e;
+}
 
 struct PatternStep {
    int8_t semis;
@@ -575,10 +607,8 @@ RenderResult renderPlugin(const clap_plugin_t *plugin, double sampleRate, uint32
    outBuf.constant_mask = 0;
 
    clap_output_events_t outEvents{};
-   outEvents.ctx = nullptr;
-   outEvents.try_push = [](const clap_output_events_t *, const clap_event_header_t *) {
-      return true;
-   };
+   installNoteSink(outEvents);
+   gNoteOut.clear();
 
    plugin->start_processing(plugin);
 
@@ -604,6 +634,7 @@ RenderResult renderPlugin(const clap_plugin_t *plugin, double sampleRate, uint32
       }
       events.build();
 
+      gBlockStart = frame;
       clap_process_t pr{};
       pr.steady_time = frame;
       pr.frames_count = n;
@@ -645,7 +676,8 @@ RenderResult renderPlugin(const clap_plugin_t *plugin, double sampleRate, uint32
 RenderResult renderSequence(const clap_plugin_t *plugin, double sampleRate, uint32_t blockSize,
                             double seconds, double tailSeconds,
                             const std::vector<SeqEvent> &schedule, bool withTransport = false,
-                            double bpm = 130.0, double loopBeats = 0.0) {
+                            double bpm = 130.0, double loopBeats = 0.0,
+                            bool transportPlaying = true) {
    RenderResult res;
    const uint32_t totalFrames =
       static_cast<uint32_t>((seconds + tailSeconds) * sampleRate);
@@ -660,10 +692,8 @@ RenderResult renderSequence(const clap_plugin_t *plugin, double sampleRate, uint
    outBuf.constant_mask = 0;
 
    clap_output_events_t outEvents{};
-   outEvents.ctx = nullptr;
-   outEvents.try_push = [](const clap_output_events_t *, const clap_event_header_t *) {
-      return true;
-   };
+   installNoteSink(outEvents);
+   gNoteOut.clear();
 
    plugin->start_processing(plugin);
    res.interleaved.reserve(totalFrames * 2);
@@ -686,7 +716,13 @@ RenderResult renderSequence(const clap_plugin_t *plugin, double sampleRate, uint
       while (next < schedule.size() && schedule[next].frame < frame + n) {
          const SeqEvent &e = schedule[next];
          const uint32_t at = e.frame > frame ? e.frame - frame : 0;
-         events.notes.push_back(makeNote(e.type, at, e.key, e.velocity, e.noteId));
+         if (e.type == CLAP_EVENT_PARAM_VALUE) {
+            clap_event_param_value_t pv = makeParamValue(e.paramId, e.paramValue);
+            pv.header.time = at;
+            events.params.push_back(pv);
+         } else {
+            events.notes.push_back(makeNote(e.type, at, e.key, e.velocity, e.noteId));
+         }
          ++next;
       }
       events.build();
@@ -699,8 +735,11 @@ RenderResult renderSequence(const clap_plugin_t *plugin, double sampleRate, uint
          transport.header.time = 0;
          transport.header.space_id = CLAP_CORE_EVENT_SPACE_ID;
          transport.header.type = CLAP_EVENT_TRANSPORT;
-         transport.flags = CLAP_TRANSPORT_HAS_TEMPO | CLAP_TRANSPORT_HAS_BEATS_TIMELINE |
-                           CLAP_TRANSPORT_IS_PLAYING;
+         // A stopped host still hands over its tempo and its playhead; only
+         // IS_PLAYING goes away. That is the state a plugin is auditioned in.
+         transport.flags = CLAP_TRANSPORT_HAS_TEMPO | CLAP_TRANSPORT_HAS_BEATS_TIMELINE;
+         if (transportPlaying)
+            transport.flags |= CLAP_TRANSPORT_IS_PLAYING;
          transport.tempo = bpm;
          double beats = static_cast<double>(frame) / sampleRate * (bpm / 60.0);
          // A looping host: the beat timeline jumps backwards, which is what a
@@ -711,6 +750,7 @@ RenderResult renderSequence(const clap_plugin_t *plugin, double sampleRate, uint
             static_cast<clap_beattime>(beats * static_cast<double>(CLAP_BEATTIME_FACTOR));
       }
 
+      gBlockStart = frame;
       clap_process_t pr{};
       pr.steady_time = frame;
       pr.frames_count = n;
@@ -744,6 +784,119 @@ RenderResult renderSequence(const clap_plugin_t *plugin, double sampleRate, uint
    if (!res.interleaved.empty())
       res.rms = std::sqrt(res.rms / res.interleaved.size());
    return res;
+}
+
+// Where the notes are in a render, in milliseconds: a frame of RMS well above
+// the one before it and out of something close to silence. Only useful on a
+// render voiced for it -- a short gate and a short volume envelope, so a note
+// is over before the next step rather than sagging into it.
+std::vector<double> onsetTimesMs(const RenderResult &r, double sampleRate) {
+   const size_t hop = static_cast<size_t>(sampleRate / 1000.0);
+   auto rms = [&](size_t f) {
+      const size_t a = f * hop * 2, b = std::min(r.interleaved.size(), (f + 1) * hop * 2);
+      if (b <= a)
+         return 0.0;
+      double acc = 0.0;
+      for (size_t i = a; i < b; ++i)
+         acc += static_cast<double>(r.interleaved[i]) * r.interleaved[i];
+      return std::sqrt(acc / static_cast<double>(b - a));
+   };
+   std::vector<double> out;
+   const size_t frames = r.interleaved.size() / (hop * 2);
+   double last = -1.0e9;
+   for (size_t f = 1; f + 1 < frames; ++f) {
+      if (rms(f) > 0.02 && rms(f - 1) < 0.005 && static_cast<double>(f) - last > 30.0) {
+         last = static_cast<double>(f);
+         out.push_back(last);
+      }
+   }
+   return out;
+}
+
+// ------------------------------------------------------------- MIDI file read
+//
+// Just enough of a standard MIDI file reader to check what the exporter wrote:
+// one track, running status not used by the writer but handled anyway, and
+// every channel event kept with the tick it lands on.
+
+struct MidiEv {
+   long tick;
+   unsigned char status;
+   int data1;
+   int data2;
+};
+
+bool readMidiFile(const std::string &bytes, int &division, std::vector<MidiEv> &out) {
+   out.clear();
+   if (bytes.size() < 22 || bytes.compare(0, 4, "MThd") != 0)
+      return false;
+   auto u16 = [&](size_t at) {
+      return (static_cast<unsigned char>(bytes[at]) << 8) | static_cast<unsigned char>(bytes[at + 1]);
+   };
+   auto u32 = [&](size_t at) {
+      return (static_cast<unsigned long>(static_cast<unsigned char>(bytes[at])) << 24) |
+             (static_cast<unsigned long>(static_cast<unsigned char>(bytes[at + 1])) << 16) |
+             (static_cast<unsigned long>(static_cast<unsigned char>(bytes[at + 2])) << 8) |
+             static_cast<unsigned long>(static_cast<unsigned char>(bytes[at + 3]));
+   };
+   if (u32(4) != 6 || u16(8) != 0 || u16(10) != 1)
+      return false;
+   division = static_cast<int>(u16(12));
+   if (bytes.compare(14, 4, "MTrk") != 0)
+      return false;
+   const size_t len = static_cast<size_t>(u32(18));
+   size_t i = 22;
+   const size_t end = std::min(bytes.size(), 22 + len);
+   long tick = 0;
+   unsigned char running = 0;
+   while (i < end) {
+      unsigned long delta = 0;
+      while (i < end) {
+         const unsigned char b = static_cast<unsigned char>(bytes[i++]);
+         delta = (delta << 7) | (b & 0x7F);
+         if (!(b & 0x80))
+            break;
+      }
+      tick += static_cast<long>(delta);
+      if (i >= end)
+         break;
+      unsigned char status = static_cast<unsigned char>(bytes[i]);
+      if (status & 0x80)
+         ++i;
+      else
+         status = running;
+      if (status == 0xFF) {
+         const unsigned char type = static_cast<unsigned char>(bytes[i++]);
+         unsigned long mlen = 0;
+         while (i < end) {
+            const unsigned char b = static_cast<unsigned char>(bytes[i++]);
+            mlen = (mlen << 7) | (b & 0x7F);
+            if (!(b & 0x80))
+               break;
+         }
+         i += mlen;
+         if (type == 0x2F)
+            break;
+         continue;
+      }
+      running = status;
+      const unsigned char high = status & 0xF0;
+      const int need = (high == 0xC0 || high == 0xD0) ? 1 : 2;
+      MidiEv ev{tick, status, 0, 0};
+      ev.data1 = static_cast<unsigned char>(bytes[i++]);
+      if (need == 2)
+         ev.data2 = static_cast<unsigned char>(bytes[i++]);
+      out.push_back(ev);
+   }
+   return true;
+}
+
+// The first step of the pattern the plugin starts with, which is the one the
+// note-output test expects to hear first.
+uint16_t defaultStep0() {
+   uint16_t steps[saeurekiste::kMaxSteps];
+   saeurekiste::defaultPattern(steps);
+   return steps[0];
 }
 
 // --------------------------------------------------------------------- driver
@@ -1737,6 +1890,59 @@ int runSelfTest(const clap_plugin_entry_t *entry, double sampleRate) {
          // the blank line before it. An empty pattern must not cost a line.
          check(lines <= 3 * 5 + 3 + 2, "an empty pattern is not written out");
 
+         // --- the octave, which reaches two either way as of 0.3.0.
+         {
+            bool packHeld = true, textHeld = true;
+            PatternData wide;
+            for (int i = 0; i < kMaxPatterns; ++i)
+               clearPattern(wide.pattern(i));
+            for (int o = -kMaxOctave; o <= kMaxOctave; ++o) {
+               Step st;
+               st.note = 3;
+               st.octave = o;
+               st.accent = o < 0;
+               st.slide = o > 0;
+               st.vibrato = o == 0;
+               const Step back2 = Step::unpack(st.pack());
+               if (back2.octave != o || back2.note != st.note || back2.accent != st.accent ||
+                   back2.slide != st.slide || back2.vibrato != st.vibrato)
+                  packHeld = false;
+               wide.pattern(0)[o + kMaxOctave] = st.pack();
+            }
+            check(packHeld, "a step survives packing at every octave from -2 to +2");
+
+            // And through the preset text, which writes the octave as a token.
+            const std::string wideText = formatPattern(wide.steps);
+            PatternData wideBack;
+            std::istringstream win(wideText);
+            std::string wline;
+            while (std::getline(win, wline)) {
+               const size_t eq = wline.find('=');
+               if (wline.empty() || wline[0] == '#' || eq == std::string::npos)
+                  continue;
+               std::string key = wline.substr(0, eq);
+               std::string value = wline.substr(eq + 1);
+               while (!key.empty() && key.back() == ' ')
+                  key.pop_back();
+               parsePatternLine(key, value, wideBack);
+            }
+            for (int i = 0; i < 2 * kMaxOctave + 1; ++i)
+               if (wide.pattern(0)[i] != wideBack.pattern(0)[i])
+                  textHeld = false;
+            check(textHeld, "every octave survives the preset text");
+
+            // A state blob written by 0.2.x has no wide bit, and its steps have
+            // to read exactly as they did: one octave, in the direction the old
+            // two bits gave. This is the compatibility the split field bought.
+            bool oldHeld = true;
+            for (int dir = 0; dir <= 2; ++dir) {
+               const uint16_t legacy = static_cast<uint16_t>(1 | (dir << 4));
+               if (Step::unpack(legacy).octave != dir - 1)
+                  oldHeld = false;
+            }
+            check(oldHeld, "a pattern saved before the wide octave reads back unchanged");
+         }
+
          // Stay never moves; Next walks the chain and wraps at its length;
          // First comes home after one pattern; Random stays inside the chain.
          check(chainPatternAt(kChainStay, 3, 8, 7) == 3, "Stay repeats the selected pattern");
@@ -2061,15 +2267,441 @@ int runSelfTest(const clap_plugin_entry_t *entry, double sampleRate) {
          20.0 * std::log10(std::sqrt(std::max(signal, 1e-30)) / std::sqrt(std::max(error, 1e-30)));
       std::printf("       looped against linear transport: %.0f dB below signal\n", snr);
       check(snr > 40.0, "looping at the pattern length sounds the same as not looping");
+
+      // --- a Mode change must not leave a key behind.
+      //
+      // In Sequencer mode a MIDI note does not sound, it transposes, so it is
+      // held in the plugin's own stack rather than in the engine's. That stack
+      // is only maintained while the mode says Sequencer: switch to MIDI with a
+      // key down -- which is exactly what loading a preset does, since nineteen
+      // of the twenty-seven are in MIDI mode and eight are in Sequencer -- and
+      // the note-off goes to the engine instead, leaving the stack holding a
+      // key that is no longer down. Switch back and the plugin believes a key
+      // is held: the pattern runs on its own, with no transport and nothing
+      // pressed, until the plugin is reloaded.
+      //
+      // Reported from a Windows session: a preset was saved, presets were
+      // browsed, and the sequencer ones started playing by themselves.
+      {
+         gParamOverrides.clear();
+         gParamOverrides.emplace_back(modeId, 1.0); // Sequencer, on the first block
+         plugin->reset(plugin);
+
+         const uint32_t sr = static_cast<uint32_t>(sampleRate);
+         std::vector<SeqEvent> script;
+         // The key goes down, and the pattern runs off it -- no transport.
+         script.push_back({0, CLAP_EVENT_NOTE_ON, 36, 1.0, 1});
+         // The host switches the mode while it is still down.
+         script.push_back(paramEvent(sr / 2, modeId, 0.0)); // MIDI
+         // ... and only then does the key come up.
+         script.push_back({sr * 3 / 4, CLAP_EVENT_NOTE_OFF, 36, 1.0, 1});
+         // Back to Sequencer, with nothing held and no transport.
+         script.push_back(paramEvent(sr * 3 / 2, modeId, 1.0));
+
+         const RenderResult run =
+            renderSequence(plugin, sampleRate, 512, 3.0, 0.0, script, false);
+         gParamOverrides.clear();
+         plugin->reset(plugin);
+
+         auto rmsOver = [&](double from, double to) {
+            const size_t a = std::min(run.interleaved.size(),
+                                      static_cast<size_t>(from * sampleRate) * 2);
+            const size_t b = std::min(run.interleaved.size(),
+                                      static_cast<size_t>(to * sampleRate) * 2);
+            if (b <= a)
+               return 0.0;
+            double acc = 0.0;
+            for (size_t i = a; i < b; ++i)
+               acc += static_cast<double>(run.interleaved[i]) * run.interleaved[i];
+            return std::sqrt(acc / static_cast<double>(b - a));
+         };
+         // The control: while the key really is down, the pattern really runs.
+         check(rmsOver(0.05, 0.45) > 1e-3, "a held key runs the pattern without a transport");
+         // The claim: after it came up, nothing does.
+         const double after = rmsOver(2.0, 3.0);
+         std::printf("       level a second after a Mode change with a key down: %.6f\n", after);
+         check(after < 1e-5, "a Mode change with a key down does not leave the sequencer running");
+      }
+
+      // The three parameters the two tests below voice the sequencer with.
+      uint32_t rateId = CLAP_INVALID_ID, gateId = CLAP_INVALID_ID;
+      uint32_t ampDecayId = CLAP_INVALID_ID;
+      {
+         const uint32_t countR = params->count(plugin);
+         for (uint32_t i = 0; i < countR; ++i) {
+            clap_param_info_t info{};
+            if (!params->get_info(plugin, i, &info))
+               continue;
+            if (std::strcmp(info.name, "Rate") == 0)
+               rateId = info.id;
+            else if (std::strcmp(info.name, "Gate") == 0)
+               gateId = info.id;
+            else if (std::strcmp(info.name, "Amp Decay") == 0)
+               ampDecayId = info.id;
+         }
+         check(rateId != CLAP_INVALID_ID && gateId != CLAP_INVALID_ID &&
+                  ampDecayId != CLAP_INVALID_ID,
+               "the Rate, Gate and Amp Decay parameters exist");
+      }
+
+      // --- a key press starts the pattern over.
+      //
+      // With no transport the pattern free-runs off a held key, and pressing
+      // another one used to leave it exactly where it was: a key was a
+      // transposition and nothing else. What a player expects, and what the
+      // machine's own keyboard did, is that the key starts the pattern at step
+      // one.
+      //
+      // Timed rather than measured by level, so it cannot pass by accident:
+      // the key is pressed 80 % of the way through a step, where nothing is
+      // due. A restart puts a note onset right there. Without one the next
+      // onset is the step boundary, a fifth of a step later.
+      {
+         // The slowest rate, a gate that closes early and a short volume
+         // envelope: a note is well over before the next step, so an onset is
+         // a rise out of near-silence rather than a bump in a sustain. The
+         // machine's own 1.5 second amplifier sag leaves no gap to see one in.
+         auto overrides = [&]() {
+            gParamOverrides.clear();
+            gParamOverrides.emplace_back(modeId, 1.0);  // Sequencer
+            gParamOverrides.emplace_back(rateId, 4.0);  // 1/8
+            gParamOverrides.emplace_back(gateId, 0.3);
+            gParamOverrides.emplace_back(ampDecayId, 0.2);
+         };
+
+         // The step length is not assumed: the plugin free-runs at whatever
+         // tempo it last saw, so it is measured off a run with no key press in
+         // it and the press is placed against that.
+         overrides();
+         plugin->reset(plugin);
+         const std::vector<SeqEvent> oneKey = {
+            {0, CLAP_EVENT_NOTE_ON, 36, 1.0, 1},
+            {static_cast<uint32_t>(1.9 * sampleRate), CLAP_EVENT_NOTE_OFF, 36, 0.0, 1}};
+         const RenderResult plain = renderSequence(plugin, sampleRate, 64, 2.0, 0.0, oneKey, false);
+         const std::vector<double> grid = onsetTimesMs(plain, sampleRate);
+         check(grid.size() >= 4, "the free-running pattern plays a line to time");
+
+         // The shortest gap between two notes is one step; the longer ones are
+         // the pattern's rests.
+         double step = 1.0e9;
+         for (size_t i = 1; i < grid.size(); ++i)
+            step = std::min(step, grid[i] - grid[i - 1]);
+         // The last onset before one second, and 80 % of a step past it.
+         double anchor = grid.front();
+         for (double t : grid)
+            if (t <= 1000.0)
+               anchor = t;
+         const double pressAt = anchor + 0.8 * step;
+
+         overrides();
+         plugin->reset(plugin);
+         std::vector<SeqEvent> script;
+         script.push_back({0, CLAP_EVENT_NOTE_ON, 36, 1.0, 1});
+         script.push_back({static_cast<uint32_t>(pressAt / 1000.0 * sampleRate),
+                           CLAP_EVENT_NOTE_ON, 36, 1.0, 2});
+         // Both keys released before the render ends. A test that leaves one
+         // down leaves the sequencer running into whatever runs next.
+         script.push_back({static_cast<uint32_t>(1.9 * sampleRate), CLAP_EVENT_NOTE_OFF, 36, 0.0, 1});
+         script.push_back({static_cast<uint32_t>(1.9 * sampleRate), CLAP_EVENT_NOTE_OFF, 36, 0.0, 2});
+         const RenderResult run = renderSequence(plugin, sampleRate, 64, 2.0, 0.0, script, false);
+         gParamOverrides.clear();
+
+         double onsetMs = -1.0;
+         for (double t : onsetTimesMs(run, sampleRate)) {
+            if (t >= pressAt - 2.0) {
+               onsetMs = t - pressAt;
+               break;
+            }
+         }
+         std::printf("       step %.0f ms, key at %.0f ms, next note %.0f ms after it\n", step,
+                     pressAt, onsetMs);
+         check(onsetMs >= 0.0, "a key press is followed by a note at all");
+         // Half way between the two answers: a restart lands on the key, and
+         // carrying on lands a fifth of a step later.
+         check(onsetMs >= 0.0 && onsetMs < 0.1 * step,
+               "a key press starts the pattern over");
+      }
+
+      // --- a stopped host still has a tempo, and the sequencer has to use it.
+      //
+      // Reported from a Windows session: changing the project tempo did
+      // nothing, the pattern went on at the speed it had when the plugin was
+      // instantiated. The tempo was read inside the `IS_PLAYING` branch, so a
+      // pattern auditioned off a held key -- which is the whole point of being
+      // able to run one without putting the song into play -- ran at whatever
+      // tempo the plugin had last seen while the host was rolling, or at 120
+      // if it never had been.
+      //
+      // Two tempos, because one measurement only proves the step length is
+      // some number.
+      {
+         const double kTempos[] = {100.0, 160.0};
+         bool followed = true;
+         for (double bpm : kTempos) {
+            gParamOverrides.clear();
+            gParamOverrides.emplace_back(modeId, 1.0); // Sequencer
+            gParamOverrides.emplace_back(rateId, 4.0); // 1/8: two steps to the beat
+            gParamOverrides.emplace_back(gateId, 0.3);
+            gParamOverrides.emplace_back(ampDecayId, 0.2);
+            plugin->reset(plugin);
+            // A held key and a transport that is stopped but carries the
+            // tempo, which is what a DAW hands over when it is not rolling.
+            const std::vector<SeqEvent> held = {
+               {0, CLAP_EVENT_NOTE_ON, 36, 1.0, 1},
+               {static_cast<uint32_t>(1.9 * sampleRate), CLAP_EVENT_NOTE_OFF, 36, 0.0, 1}};
+            const RenderResult run =
+               renderSequence(plugin, sampleRate, 64, 2.0, 0.0, held, true, bpm, 0.0, false);
+            gParamOverrides.clear();
+
+            const std::vector<double> grid = onsetTimesMs(run, sampleRate);
+            double measured = 1.0e9;
+            for (size_t i = 1; i < grid.size(); ++i)
+               measured = std::min(measured, grid[i] - grid[i - 1]);
+            const double expected = 60000.0 / bpm / 2.0;
+            std::printf("       %.0f BPM: step %.0f ms, expected %.0f ms\n", bpm, measured,
+                        expected);
+            if (!(grid.size() >= 4 && std::fabs(measured - expected) < 0.06 * expected))
+               followed = false;
+         }
+         check(followed, "the sequencer runs at the host's tempo with the transport stopped");
+      }
+
+      // --- the note output port.
+      //
+      // The sequencer's notes go out as well as into the engine, so a producer
+      // can record the line onto another track and edit it as MIDI. What the
+      // port carries has to be what the instrument is actually doing: the
+      // transposed key, an accent as a velocity above the accent threshold, and
+      // a slide as an overlap -- the same convention the plugin's own MIDI mode
+      // reads back.
+      {
+         gParamOverrides.clear();
+         gParamOverrides.emplace_back(modeId, 1.0); // Sequencer
+         plugin->reset(plugin);
+         const RenderResult run =
+            renderSequence(plugin, sampleRate, 512, 4.0, 0.0, {}, true, 130.0);
+         (void)run;
+
+         std::vector<clap_event_note_t> notes = gNoteOut;
+         bool ordered = true;
+         uint32_t prev = 0;
+         for (const clap_event_note_t &ev : notes) {
+            if (ev.header.time < prev)
+               ordered = false;
+            prev = ev.header.time;
+         }
+         // The host stopping is what releases the last note, and a render that
+         // ends in the middle of one would look like a leak that is not there.
+         renderSequence(plugin, sampleRate, 512, 0.05, 0.0, {}, true, 130.0, 0.0, false);
+         notes.insert(notes.end(), gNoteOut.begin(), gNoteOut.end());
+         gParamOverrides.clear();
+         int ons = 0, offs = 0, accents = 0, plains = 0, maxHeld = 0, overlaps = 0;
+         int held = 0;
+         bool balanced = true;
+         int perKey[128] = {0};
+         for (const clap_event_note_t &ev : notes) {
+            if (ev.key < 0 || ev.key > 127) {
+               balanced = false;
+               continue;
+            }
+            if (ev.header.type == CLAP_EVENT_NOTE_ON) {
+               ++ons;
+               ++held;
+               ++perKey[ev.key];
+               if (held > maxHeld)
+                  maxHeld = held;
+               if (held > 1)
+                  ++overlaps;
+               if (ev.velocity > 0.99)
+                  ++accents;
+               else
+                  ++plains;
+            } else {
+               ++offs;
+               --held;
+               --perKey[ev.key];
+               if (perKey[ev.key] < 0)
+                  balanced = false;
+            }
+         }
+         for (int k = 0; k < 128; ++k)
+            if (perKey[k] != 0)
+               balanced = false;
+
+         std::printf("       note out: %d on, %d off, %d accented, %d overlapping\n", ons, offs,
+                     accents, overlaps);
+         check(ons > 8, "the sequencer sends its notes out of the note port");
+         check(ordered, "the notes it sends are in time order");
+         check(balanced, "every note it sends is released, and only once");
+         check(accents > 0 && plains > 0,
+               "an accented step goes out louder than an unaccented one");
+         check(maxHeld == 2, "a slid step overlaps the next one, and nothing overlaps three deep");
+
+         // The first note is the pattern's first step, at C2 plus whatever the
+         // step says, and it lands on the first sample of the bar.
+         const saeurekiste::Step first = saeurekiste::Step::unpack(defaultStep0());
+         const int expected = 36 + first.note + 12 * first.octave;
+         check(!notes.empty() && notes.front().header.type == CLAP_EVENT_NOTE_ON &&
+                  notes.front().key == expected && notes.front().header.time == 0,
+               "the first note out is step one of the pattern, on the first sample");
+
+         // Nothing at all in MIDI mode: those notes came from the host.
+         gParamOverrides.clear();
+         gParamOverrides.emplace_back(modeId, 0.0);
+         plugin->reset(plugin);
+         renderPlugin(plugin, sampleRate, 512, 0.5, 0.5, 60, 1.0);
+         gParamOverrides.clear();
+         check(gNoteOut.empty(), "MIDI mode sends nothing out of the note port");
+      }
+
+      // --- the MIDI file the window drags into the host.
+      //
+      // The same three conventions as the note port, written to a file: an
+      // accent is a velocity, a slide is an overlap, a vibrato is CC1 around
+      // the note. What is checked here is that the file says what the pattern
+      // says, tick for tick -- a dropped file that is a bar out of step or a
+      // slide short is worse than no feature.
+      {
+         using namespace saeurekiste;
+         uint16_t pat[kMaxSteps];
+         clearPattern(pat);
+         Step a;                     // plain
+         a.note = 0;
+         uint16_t &s0 = pat[0];
+         s0 = a.pack();
+         Step b;                     // accented, an octave up
+         b.note = 7;
+         b.octave = 2;
+         b.accent = true;
+         pat[1] = b.pack();
+         Step c;                     // slides into the next step
+         c.note = 3;
+         c.slide = true;
+         pat[2] = c.pack();
+         Step d;                     // vibrato, two octaves down
+         d.note = 5;
+         d.octave = -2;
+         d.vibrato = true;
+         pat[3] = d.pack();
+
+         MidiExport spec;
+         spec.steps = pat;
+         spec.length = 8;
+         spec.stepsPerBeat = 4.0; // 1/16
+         spec.gate = 0.5;
+         spec.swingPercent = 50.0;
+         spec.tempoBpm = 130.0;
+         spec.accentVelocity = 100.0;
+         spec.patternNumber = 3;
+
+         const std::string bytes = patternToMidiFile(spec);
+         int division = 0;
+         std::vector<MidiEv> evs;
+         check(!bytes.empty() && readMidiFile(bytes, division, evs),
+               "the pattern writes a standard MIDI file that parses back");
+         check(division == 960, "the file is 960 ticks to the quarter note");
+
+         const long step = division / 4; // a sixteenth
+         int ons = 0, offs = 0;
+         long onAt[4] = {-1, -1, -1, -1}, offAt[4] = {-1, -1, -1, -1};
+         int vel[4] = {0, 0, 0, 0};
+         const int wantKey[4] = {36, 36 + 7 + 24, 36 + 3, 36 + 5 - 24};
+         bool ccUp = false, ccDown = false;
+         for (const MidiEv &e : evs) {
+            const unsigned char high = e.status & 0xF0;
+            if (high == 0xB0 && e.data1 == 1) {
+               if (e.data2 > 0 && e.tick == 3 * step)
+                  ccUp = true;
+               if (e.data2 == 0 && e.tick > 3 * step)
+                  ccDown = true;
+               continue;
+            }
+            const bool on = high == 0x90 && e.data2 > 0;
+            const bool off = high == 0x80 || (high == 0x90 && e.data2 == 0);
+            for (int k = 0; k < 4; ++k) {
+               if (e.data1 != wantKey[k])
+                  continue;
+               if (on && onAt[k] < 0) {
+                  onAt[k] = e.tick;
+                  vel[k] = e.data2;
+               } else if (off && offAt[k] < 0) {
+                  offAt[k] = e.tick;
+               }
+            }
+            ons += on ? 1 : 0;
+            offs += off ? 1 : 0;
+         }
+
+         check(ons == 4 && offs == 4, "every step with a note in it is written once, and released");
+         bool onGrid = true;
+         for (int k = 0; k < 4; ++k)
+            if (onAt[k] != k * step)
+               onGrid = false;
+         check(onGrid, "every note lands on its own step");
+         check(vel[1] == 127 && vel[0] < 100 && vel[3] < 100,
+               "an accented step is written louder than the accent threshold, a plain one below");
+         check(offAt[0] == onAt[0] + step / 2, "an ordinary note holds for its share of the step");
+         check(offAt[2] > onAt[3], "a slid step is still held when the next note starts");
+         check(ccUp && ccDown, "a vibrato step is bracketed by CC1");
+
+         // Swing moves the odd steps and nothing else.
+         spec.swingPercent = 66.666666;
+         std::vector<MidiEv> swung;
+         check(readMidiFile(patternToMidiFile(spec), division, swung),
+               "a swung pattern writes a file too");
+         long firstOdd = -1, firstEven = -1;
+         for (const MidiEv &e : swung) {
+            if ((e.status & 0xF0) != 0x90 || e.data2 == 0)
+               continue;
+            if (e.data1 == wantKey[1] && firstOdd < 0)
+               firstOdd = e.tick;
+            if (e.data1 == wantKey[0] && firstEven < 0)
+               firstEven = e.tick;
+         }
+         check(firstEven == 0, "swing leaves the even steps where they are");
+         check(std::labs(firstOdd - (step + step / 3)) <= 1,
+               "swing puts an odd step exactly where a triplet would be");
+
+         // An empty pattern is not a file.
+         uint16_t empty[kMaxSteps];
+         clearPattern(empty);
+         spec.steps = empty;
+         check(patternToMidiFile(spec).empty(), "an empty pattern writes no file at all");
+      }
    }
 
    // --- parameter events must be reflected by get_value, which is how a host
    // reads back what automation did.
    {
       RenderResult r;
+      plugin->reset(plugin);
       const std::vector<double> atMax = driveAllParams(plugin, sampleRate, Extreme::Max, &r);
       check(!r.sawNonFinite, "all parameters at maximum: output stays finite");
       check(r.peak <= 1.001f, "all parameters at maximum: output stays bounded");
+
+      // That sweep renders silence, and it is worth knowing why rather than
+      // trusting it: at maximum, Mode is Sequencer and Pattern points at slot
+      // 64, which is empty. So it proves the plugin survives the extremes, not
+      // that the DSP was ever asked to do anything. The same extremes with
+      // Mode alone turned down are played over MIDI, by the note the renderer
+      // holds, and those do drive it.
+      {
+         gParamOverrides.clear();
+         const uint32_t countM = params->count(plugin);
+         for (uint32_t i = 0; i < countM; ++i) {
+            clap_param_info_t info{};
+            if (!params->get_info(plugin, i, &info))
+               continue;
+            gParamOverrides.emplace_back(
+               info.id, std::strcmp(info.name, "Mode") == 0 ? info.min_value : info.max_value);
+         }
+         plugin->reset(plugin);
+         const RenderResult loud = renderPlugin(plugin, sampleRate, 512, 0.6, 0.6, 60, 1.0);
+         gParamOverrides.clear();
+         check(!loud.sawNonFinite, "every parameter at maximum, played over MIDI: stays finite");
+         check(loud.peak <= 1.001f, "every parameter at maximum, played over MIDI: stays bounded");
+         check(loud.peak > 0.0005f, "every parameter at maximum, played over MIDI: makes sound");
+      }
 
       bool reflected = true;
       const uint32_t count2 = params->count(plugin);
