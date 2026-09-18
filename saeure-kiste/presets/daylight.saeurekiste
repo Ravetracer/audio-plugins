@@ -1,0 +1,72 @@
+# SaeureKiste preset
+format = 1
+name = Daylight
+author = SaeureKiste
+description = Happy. A major pentatonic line -- C, E, G, A, B and nothing else -- played short and bright, with a touch of swing and the filter well open. What makes it read as cheerful rather than merely fast is the interval content: there is no minor third anywhere in it, and the two slides both move upward. Accents land on one and nine, so the bar has a bounce instead of a shove.
+
+# VCO
+waveform = Sawtooth
+tuning = 0
+
+# VCF
+cutoff = 980
+resonance = 0.55
+envmod = 0.55
+decay = 260
+tracking = 0.15
+
+# Accent
+accent = 0.65
+accent_threshold = 100
+accent_decay = 55
+
+# Slide
+slide_time = 45
+
+# Drive
+drive = 0.24
+tone = 13000
+
+# Output
+volume = -7
+
+# Mods
+env_bias = 1.5
+env_depth = 5
+acc_sweep = 3.5
+acc_build = 0.75
+acc_gain = 90
+acc_decay_time = 200
+droop = 25
+ladder = 100
+res_range = 100
+drift = 0
+
+# Sequencer
+mode = Sequencer
+seq_rate = 1/16
+seq_steps = 16
+gate = 0.44
+swing = 56
+
+# Vibrato
+vib_depth = 25
+vib_rate = 6
+vib_delay = 60
+
+# Generator
+rand_seed = 214
+rand_scale = Major Pent
+rand_root = C
+rand_notes = 0.72
+rand_accent = 0.25
+rand_slide = 0.14
+rand_octave = 0.18
+rand_vibrato = 0.0
+
+# Sequence
+seq_pitch   = C   .   E   G   .   A   G   E   C   .   G   B   .   A   G   E
+seq_octave  = .   .   .   .   .   .   .   .   .   .   .   +   .   .   .   .
+seq_slide   = .   .   .   .   .   x   .   .   .   .   .   .   .   x   .   .
+seq_accent  = x   .   .   .   .   x   .   .   x   .   .   .   .   x   .   .
+seq_vibrato = .   .   .   .   .   .   .   .   .   .   .   .   .   .   .   .

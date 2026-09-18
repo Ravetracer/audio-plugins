@@ -13,14 +13,14 @@ Vibe coded with Claude.
 
 | Plugin | Version | Platforms | Formats | What it is |
 |--------|---------|-----------|---------|------------|
-| **[ThreeOhThree](three-o-three/)** | 0.1.0 | Linux, Windows | CLAP, VST3 | a monophonic acid bass synthesiser modelled on the Roland TB-303's main board, from the February 1982 service notes, with Robin Whittle's Devil Fish modification |
+| **[SäureKiste](saeure-kiste/)** | 0.1.0 | Linux, Windows | CLAP, VST3 | a monophonic acid bass synthesiser modelled on the Roland TB-303's main board, from the February 1982 service notes, with Robin Whittle's Devil Fish modification |
 
 ## Build
 
 Each plugin builds and installs from its own folder:
 
 ```sh
-cd three-o-three
+cd saeure-kiste
 ./install.sh          # configure, build, self-test, install to ~/.clap
 ```
 
@@ -42,7 +42,7 @@ sudo apt install build-essential cmake ninja-build libx11-dev libcairo2-dev
 ```
 audio-plugins/
 ├── shared/            the PluginCore library every plugin is built on
-├── three-o-three/     ThreeOhThree
+├── saeure-kiste/     SaeureKiste
 ├── release.sh         builds every plugin and packs the archives
 ├── setup-winbuild.sh  one-time Windows cross-build setup
 └── CLAP/              CLAP SDK checkouts — gitignored, fetched locally
@@ -71,5 +71,5 @@ independent copies now and will drift apart.
 
 MIT — see [LICENSE](LICENSE).
 
-ThreeOhThree is not affiliated with or endorsed by Roland Corporation. *TB-303*
+SäureKiste is not affiliated with or endorsed by Roland Corporation. *TB-303*
 is their trademark and is used only to name what was modelled.

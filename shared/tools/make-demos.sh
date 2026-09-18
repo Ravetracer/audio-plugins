@@ -38,7 +38,7 @@
 #
 # --render-arg passes one argument straight through to the plugin's renderer and
 # may be given more than once. It is how a plugin asks for something only its own
-# renderer knows about -- ThreeOhThree's --demo-moves, which sweeps the cutoff
+# renderer knows about -- SaeureKiste's --demo-moves, which sweeps the cutoff
 # and rides the resonance and the drive across the take so a demo is a recording
 # of somebody playing the preset rather than a photograph of it. Nothing here
 # knows what the argument means, which is the point: this script stays the same

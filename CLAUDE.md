@@ -42,25 +42,25 @@ audio-plugins/
 ├── CLAP/              CLAP SDK checkouts       — GITIGNORED, see below
 ├── winbuild/          meson venv + Windows Cairo — GITIGNORED
 ├── dist/              release archives         — GITIGNORED
-└── three-o-three/     ThreeOhThree — a TB-303 model
+└── saeure-kiste/     SaeureKiste — a TB-303 model
 ```
 
 ## The plugins
 
 | # | Plugin | Folder | Status | Platforms | Formats | What it is |
 |---|--------|--------|--------|-----------|---------|------------|
-| 1 | **ThreeOhThree** | `three-o-three/` | 0.1.0 | Linux, Windows | CLAP, VST3 | a Roland TB-303 model, from the 1982 service notes, plus Robin Whittle's Devil Fish modification |
+| 1 | **SäureKiste** | `saeure-kiste/` | 0.1.0 | Linux, Windows | CLAP, VST3 | a Roland TB-303 model, from the 1982 service notes, plus Robin Whittle's Devil Fish modification |
 
 Naming follows the plugin, not a pattern: the CMake project, the installed
-artifact and the display name are CamelCase (`ThreeOhThree`), the folder is
-lowercase (`three-o-three` — hyphens are fine, it is a folder name), and the
-preset extension is the CamelCase name lowercased and joined (`.threeohthree`).
+artifact and the display name are CamelCase (`SaeureKiste`), the folder is
+lowercase (`saeure-kiste` — hyphens are fine, it is a folder name), and the
+preset extension is the CamelCase name lowercased and joined (`.saeurekiste`).
 
 Note that the folder and the preset extension are **not** required to match, and
-for ThreeOhThree they do not. That is deliberate and it has one consequence
+for SäureKiste they do not. That is deliberate and it has one consequence
 worth knowing: `shared/tools/install-plugin.sh` derives tool names and an
-environment variable from the folder name, and `three-o-three` is not a usable
-shell identifier. ThreeOhThree therefore carries its own `install.sh` rather
+environment variable from the folder name, and `saeure-kiste` is not a usable
+shell identifier. SäureKiste therefore carries its own `install.sh` rather
 than the thin wrapper the Verdalis plugins use. A new plugin with a
 shell-safe folder name can use the shared script.
 
@@ -185,7 +185,7 @@ the consistency is what makes the shared components possible.
                              material is not ours to redistribute.
 ```
 
-**Not every plugin needs every part of it.** ThreeOhThree adds `src/pattern.*`
+**Not every plugin needs every part of it.** SäureKiste adds `src/pattern.*`
 and `src/gui/seqwindow.*` for its sequencer, which nothing else has, and that is
 the point of this repository — the skeleton is a starting shape, not a
 constraint.
@@ -252,13 +252,13 @@ If the checkout lives anywhere else, point CMake at it explicitly with
 
 ## Windows and VST3
 
-**ThreeOhThree builds for Windows and as a VST3 as of 0.1.0**, so
+**SäureKiste builds for Windows and as a VST3 as of 0.1.0**, so
 `./release.sh <version>` needs no switches.
 
 **The Windows build can be tested from here, and should be.** Cross-build the
-offline tools as well (`-DTHREEOHTHREE_BUILD_TOOLS=ON`) and both run under wine:
-`threeohthree-render.exe --selftest` puts the Windows plugin through the entire
-suite, and `threeohthree-guihost.exe` opens its real window so the win32 backend
+offline tools as well (`-DSAEUREKISTE_BUILD_TOOLS=ON`) and both run under wine:
+`saeurekiste-render.exe --selftest` puts the Windows plugin through the entire
+suite, and `saeurekiste-guihost.exe` opens its real window so the win32 backend
 can be driven and photographed exactly as the X11 one is. That found a genuine
 bug in the forked window and would have found more. The tools need the same
 static link options as the plugin or they die before `main()` with exit code 53
@@ -291,7 +291,7 @@ Three things to carry over, all easy to undo by accident:
   takes the host down. `setup-winbuild.sh` checks for this and rebuilds a stale
   library that has them.
 - The window class registration described under *Keeping it in step with
-  Verdalis*. ThreeOhThree's forked window **had this bug** -- it was copied from
+  Verdalis*. SäureKiste's forked window **had this bug** -- it was copied from
   `shared/src/gui/window.cpp` before the fix and carried
   `GetModuleHandle(nullptr)` and a fixed class name until the first Windows
   build was attempted. Nothing had noticed, because it cannot bite on Linux.
@@ -325,7 +325,7 @@ line, not the collection's, because they are downloaded and updated separately.
 
 **This script came from Verdalis unchanged**, and as of 0.1.0 this repository
 delivers everything it assumes: it builds Windows and VST3 for every plugin, and
-ThreeOhThree does both. `--linux-only` and `--no-vst3` are still there for a
+SaeureKiste does both. `--linux-only` and `--no-vst3` are still there for a
 machine without the mingw toolchain or the VST3 checkouts.
 
 Other options: `--tarball` adds `.tar.gz` beside every `.zip`; `--no-manuals`
@@ -370,7 +370,7 @@ window reads as one instrument rather than a grey chassis with a coloured knob.
 
 | Plugin | Accent | Character |
 |--------|--------|-----------|
-| ThreeOhThree | `#9BE31D` | acid green at hue 82, over a cool, almost neutral near-black graphite chassis rather than a tinted one -- the machine it models was a silver box with dark legends, and a warm chassis would be pretending otherwise |
+| SäureKiste | `#9BE31D` | acid green at hue 82, over a cool, almost neutral near-black graphite chassis rather than a tinted one -- the machine it models was a silver box with dark legends, and a warm chassis would be pretending otherwise |
 
 A new plugin picks its own accent and derives its greys from it. Do not reuse
 another plugin's theme.
@@ -384,7 +384,7 @@ and `guiEventCounter()` is an optional monotonic count of discrete events,
 defaulting to zero. The meter's wording comes from the spec's `voiceNoun` and
 `eventNoun`.
 
-**ThreeOhThree is the exception, and it is a fork.** `src/gui/seqwindow.*` is
+**SäureKiste is the exception, and it is a fork.** `src/gui/seqwindow.*` is
 `shared/src/gui/window.cpp` copied, with the namespace changed and the step grid,
 the pattern bank and the collapsible panel section added — it is not a second
 window beside the shared one, it replaces it for that plugin. A step grid cannot
@@ -452,27 +452,27 @@ may be repeated. Nothing in the script knows what the argument means, which is
 how a plugin asks for something only its own renderer has:
 
 ```sh
-shared/tools/make-demos.sh three-o-three --render-arg --demo-moves
+shared/tools/make-demos.sh saeure-kiste --render-arg --demo-moves
 ```
 
-ThreeOhThree's `--demo-moves` sweeps the cutoff and rides the resonance and the
+SaeureKiste's `--demo-moves` sweeps the cutoff and rides the resonance and the
 drive across the take, relative to whatever each preset sets, so a demo is a
 recording of somebody playing the preset rather than a photograph of it. Without
 it every knob holds still for sixteen seconds.
 
-ThreeOhThree instead keeps plain WAV renders in `demos/`, which are gitignored
+SaeureKiste instead keeps plain WAV renders in `demos/`, which are gitignored
 and are made with that flag. A `demo-descriptions.txt` and a proper MP3 run are
 open work.
 
 ## Working notes
 
 - `!dev/` is large and gitignored. **Never `git add -A` without checking.**
-  ThreeOhThree's `!dev/` holds the Roland TB-303 service-note PDFs and Robin
+  SäureKiste's `!dev/` holds the Roland TB-303 service-note PDFs and Robin
   Whittle's Devil Fish manuals. Neither set is ours to redistribute.
 - The self-test runs as part of `install.sh` — do not skip it when changing DSP.
 - `STATUS.md` and `TODO.md` in each plugin are the current source of truth for
   that plugin's state; read them before starting work there.
-- Trademarks: ThreeOhThree models a Roland product and says so. It is not
+- Trademarks: SäureKiste models a Roland product and says so. It is not
   affiliated with or endorsed by Roland, and *TB-303* is used only to name what
   was modelled. Keep that notice in the README and the manual.
 
@@ -480,7 +480,7 @@ open work.
 
 Where a plugin's synthesis is stochastic, comparing output only works with the
 seed pinned; `render --param` matches on the *display* name, so the override is
-`randomseed=N`. ThreeOhThree has no random state at all and renders
+`randomseed=N`. SäureKiste has no random state at all and renders
 bit-identically by construction, which makes it a good canary.
 
 The recipe that proves a refactor changed nothing:
@@ -489,11 +489,11 @@ The recipe that proves a refactor changed nothing:
 # 1. a reference build from before the change
 git worktree add /tmp/ref <commit>
 ln -s "$PWD/CLAP" /tmp/ref/CLAP
-cmake -S /tmp/ref/three-o-three -B /tmp/ref-build -DCMAKE_BUILD_TYPE=Release && cmake --build /tmp/ref-build
+cmake -S /tmp/ref/saeure-kiste -B /tmp/ref-build -DCMAKE_BUILD_TYPE=Release && cmake --build /tmp/ref-build
 
 # 2. render every preset from both
 for side in ref new; do
-   ./threeohthree-render --plugin ./ThreeOhThree.clap --all --outdir /tmp/wav-$side \
+   ./saeurekiste-render --plugin ./SaeureKiste.clap --all --outdir /tmp/wav-$side \
       --seconds 3 --tail 2 --rate 48000
 done
 
@@ -507,7 +507,7 @@ byte-identical).
 
 For a GUI change, `<plugin>-guihost <plugin>.clap "" 8` opens the real window for
 eight seconds; capture it with `import -window $(xdotool search --name
-ThreeOhThree | head -1)` and compare with `compare -metric AE`. Zero differing
+SaeureKiste | head -1)` and compare with `compare -metric AE`. Zero differing
 pixels is the bar. Match the window by its expected width when picking it out of
 `xdotool search` — the search also matches other windows with the plugin's name
 in the title, and grabbing the wrong one silently "passes".

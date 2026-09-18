@@ -1,0 +1,65 @@
+# SaeureKiste preset
+format = 1
+name = Every Accent Alone
+author = SaeureKiste
+description = The opposite: Sweep Time at 20 ms, so an accent is gone before the next sixteenth starts. Every accented note is the same accent and nothing carries over. Useful for hearing what the accent circuit does by removing the part of it that is hardest to hear.
+
+# VCO
+waveform = Sawtooth
+tuning = 0
+
+# VCF
+cutoff = 450
+resonance = 0.65
+envmod = 0.7
+decay = 320
+tracking = 0
+
+# Accent
+accent = 0.8
+accent_threshold = 100
+accent_decay = 20
+
+# Slide
+slide_time = 60
+
+# Drive
+drive = 0.25
+tone = 10000
+
+# Output
+volume = -7
+
+# Mods
+env_bias = 1.5
+env_depth = 5
+acc_sweep = 3.5
+acc_build = 0.75
+acc_gain = 90
+acc_decay_time = 200
+droop = 25
+ladder = 100
+res_range = 100
+drift = 0
+
+# Sequencer
+mode = MIDI
+seq_rate = 1/16
+seq_steps = 16
+gate = 0.5
+swing = 50
+
+# Vibrato
+vib_depth = 25
+vib_rate = 6
+vib_delay = 60
+
+# Generator
+rand_seed = 1
+rand_scale = Minor
+rand_root = C
+rand_notes = 0.78
+rand_accent = 0.3
+rand_slide = 0.2
+rand_octave = 0.22
+rand_vibrato = 0.06
