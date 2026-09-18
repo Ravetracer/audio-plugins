@@ -1876,10 +1876,82 @@ int runSelfTest(const clap_plugin_entry_t *entry, double sampleRate) {
          check(fast.interleaved != slow.interleaved, "Sweep Speed Fast is not Slow");
 
          // The Muffler is a clipper and not a volume control: it must not cost
-         // level, and it has to add harmonics rather than remove them.
-         const RenderResult muffled = renderWith(kParamMuffler, 2.0);
-         check(muffled.rms > stock.rms * 0.9, "the Muffler does not cost level");
-         check(muffled.peak <= stock.peak * 1.2f, "the Muffler softens the extremes");
+         // level, and it has to reshape the waveform rather than scale it.
+         //
+         // "Reshapes" is measured, not asserted: scale one take onto the other
+         // by least squares and see how much waveform is left over. A clipper
+         // leaves a lot; a stage doing nothing leaves nothing, whatever its
+         // level. Checking only the level -- which is all this did at first --
+         // passed happily with the Muffler in a position where the drive
+         // stage's harder clipper erased it completely.
+         auto shapeResidual = [](const RenderResult &a, const RenderResult &b) {
+            const size_t n = std::min(a.interleaved.size(), b.interleaved.size());
+            double num = 0.0, den = 0.0;
+            for (size_t i = 0; i < n; ++i) {
+               num += static_cast<double>(a.interleaved[i]) * b.interleaved[i];
+               den += static_cast<double>(a.interleaved[i]) * a.interleaved[i];
+            }
+            if (!(den > 0.0))
+               return 0.0;
+            const double g = num / den;
+            double res = 0.0, sig = 0.0;
+            for (size_t i = 0; i < n; ++i) {
+               const double d = b.interleaved[i] - g * a.interleaved[i];
+               res += d * d;
+               sig += static_cast<double>(b.interleaved[i]) * b.interleaved[i];
+            }
+            return sig > 0.0 ? std::sqrt(res / sig) : 0.0;
+         };
+         // Loud enough for a clipper to have something to work on, which is the
+         // only condition under which the Muffler does anything at all.
+         gParamOverrides.clear();
+         gParamOverrides.emplace_back(kParamOverdrive, 24.0);
+         plugin->reset(plugin);
+         const RenderResult loudOff = renderSequence(plugin, sampleRate, 512, 2.0, 0.5, flat);
+         gParamOverrides.emplace_back(kParamMuffler, 2.0);
+         plugin->reset(plugin);
+         const RenderResult loudHard = renderSequence(plugin, sampleRate, 512, 2.0, 0.5, flat);
+         gParamOverrides.clear();
+         check(loudHard.rms > loudOff.rms * 0.9, "the Muffler does not cost level");
+         check(loudHard.peak <= loudOff.peak * 1.2f, "the Muffler softens the extremes");
+         // 10.4 % on a working build; ~0 with the Muffler ahead of the drive.
+         check(shapeResidual(loudOff, loudHard) > 0.03,
+               "the Muffler reshapes the waveform rather than only scaling it");
+
+         // Overdrive has to compress rather than simply amplify: the ladder's
+         // input pair saturates, so the crest factor falls as it is driven.
+         auto crest = [](const RenderResult &r) {
+            return r.rms > 0.0 ? static_cast<double>(r.peak) / r.rms : 0.0;
+         };
+         check(crest(driven) < crest(stock) * 0.95,
+               "Overdrive squashes the waveform instead of only raising it");
+
+         // Amp Sustain holds a note up instead of letting it fall away. Nothing
+         // covered it at all until the fix was backed out and nothing noticed.
+         //
+         // gParamOverrides carries *raw* values, and Amp Decay is logarithmic,
+         // so its raw range is 0..1 rather than milliseconds. Passing 120 here
+         // clamped to the maximum and neither take decayed -- this check failed
+         // on correct code until the conversion was put in.
+         gParamOverrides.clear();
+         gParamOverrides.emplace_back(kParamAmpDecay,
+                                      realToParam(*paramById(kParamAmpDecay), 120.0));
+         plugin->reset(plugin);
+         const RenderResult dies = renderPlugin(plugin, sampleRate, 512, 1.5, 0.2, 40, 1.0);
+         gParamOverrides.emplace_back(kParamAmpSustain, 0.9);
+         plugin->reset(plugin);
+         const RenderResult holds = renderPlugin(plugin, sampleRate, 512, 1.5, 0.2, 40, 1.0);
+         gParamOverrides.clear();
+         auto tailRms = [](const RenderResult &r) {
+            const size_t from = r.interleaved.size() / 2;
+            double sum = 0.0;
+            size_t n = 0;
+            for (size_t i = from; i < r.interleaved.size(); ++i, ++n)
+               sum += static_cast<double>(r.interleaved[i]) * r.interleaved[i];
+            return n ? std::sqrt(sum / static_cast<double>(n)) : 0.0;
+         };
+         check(tailRms(holds) > tailRms(dies) * 2.0,
+               "Amp Sustain holds a note up instead of letting it fall away");
 
          // Filter FM is a feedback path from the amplifier back into the filter.
          // The one thing it must never do is run away.
@@ -2095,6 +2167,137 @@ int runSelfTest(const clap_plugin_entry_t *entry, double sampleRate) {
                               static_cast<size_t>(saeurekiste::kMaxPatterns) *
                                  saeurekiste::kMaxSteps * sizeof(uint16_t),
             "the state blob carries the whole bank");
+   }
+
+   // --- the bank and the chain, end to end through a real preset file.
+   //
+   // Every check here exists because backing a fix out showed the suite did not
+   // notice. The round trip above compares two outputs of the *same* writer, so
+   // a writer that dropped every pattern but the first produced two identical
+   // blobs and passed; the chain had unit tests on chainPatternAt() and nothing
+   // connecting it to the sequencer; and a preset load that stopped resetting to
+   // defaults went entirely unremarked.
+   if (state) {
+      using namespace saeurekiste;
+      const std::string dir =
+         (std::filesystem::temp_directory_path() /
+          ("saeurekiste-bank-" + std::to_string(
+#if defined(_WIN32)
+              static_cast<unsigned long>(GetCurrentProcessId())
+#else
+              static_cast<unsigned long>(getpid())
+#endif
+              ))).string();
+      std::error_code ec;
+      std::filesystem::create_directories(dir, ec);
+      const std::string path = dir + "/two-patterns." + std::string(kPresetExtension);
+
+      // Pattern 1 is a bar of C; pattern 2 is a bar of G an octave up and
+      // accented, so the two cannot be confused in the audio.
+      std::string text = "# preset\nformat = 1\nname = Two Patterns\n";
+      text += "mode = Sequencer\nseq_rate = 1/16\nseq_steps = 16\nchain_length = 2\n";
+      text += "cutoff = 900\nresonance = 0.4\n";
+      auto row = [](const char *key, const char *tok) {
+         std::string l = key;
+         while (l.size() < 13) l += ' ';
+         l += "=";
+         for (int i = 0; i < kMaxSteps; ++i) { l += " "; l += tok; }
+         return l + "\n";
+      };
+      text += row("seq_pitch", "C") + row("seq_octave", ".") + row("seq_slide", ".") +
+              row("seq_accent", ".") + row("seq_vibrato", ".");
+      text += row("seq2_pitch", "G") + row("seq2_octave", "+") + row("seq2_slide", ".") +
+              row("seq2_accent", "x") + row("seq2_vibrato", ".");
+      std::string werr;
+      const bool wrote = writePresetFile(path, text, werr);
+      check(wrote, "the two-pattern test preset writes");
+
+      const auto *pl = static_cast<const clap_plugin_preset_load_t *>(
+         plugin->get_extension(plugin, CLAP_EXT_PRESET_LOAD));
+      if (wrote && pl) {
+         check(pl->from_location(plugin, CLAP_PRESET_DISCOVERY_LOCATION_FILE, path.c_str(), ""),
+               "a preset carrying two patterns loads");
+
+         // 1. the bank actually reaches the state blob, compared against the
+         //    preset's own words rather than against another save -- so a
+         //    writer that drops the bank cannot agree with itself.
+         PresetData pd;
+         PatternData pat;
+         std::string perr;
+         check(parsePresetFile(path, pd, &pat, perr) && pat.present,
+               "the test preset parses back with its bank");
+         std::string blob;
+         clap_ostream_t bos{};
+         bos.ctx = &blob;
+         bos.write = [](const clap_ostream_t *st, const void *buf, uint64_t size) -> int64_t {
+            static_cast<std::string *>(st->ctx)->append(static_cast<const char *>(buf), size);
+            return static_cast<int64_t>(size);
+         };
+         state->save(plugin, &bos);
+         const size_t bankAt = sizeof(uint32_t) * 3 + static_cast<size_t>(kNumParams) * 12;
+         const size_t pat2At = bankAt + static_cast<size_t>(kMaxSteps) * sizeof(uint16_t);
+         bool carried = blob.size() >= pat2At + kMaxSteps * sizeof(uint16_t);
+         for (int i = 0; carried && i < kMaxSteps; ++i) {
+            uint16_t got = 0;
+            std::memcpy(&got, blob.data() + pat2At + i * sizeof(uint16_t), sizeof(got));
+            if (got != pat.pattern(1)[i])
+               carried = false;
+         }
+         check(carried, "the state blob carries pattern 2, not just pattern 1");
+
+         // 2. the chain is wired to the sequencer. Stay repeats one bar; Next
+         //    alternates two very different ones, so the audio must differ.
+         const ParamDesc &cm = *paramById(kParamChainMode);
+         gParamOverrides.clear();
+         gParamOverrides.emplace_back(cm.id, static_cast<double>(kChainStay));
+         plugin->reset(plugin);
+         const RenderResult stay =
+            renderSequence(plugin, sampleRate, 512, 4.0, 0.5, {}, true, 130.0);
+         gParamOverrides.clear();
+         gParamOverrides.emplace_back(cm.id, static_cast<double>(kChainNext));
+         plugin->reset(plugin);
+         const RenderResult next =
+            renderSequence(plugin, sampleRate, 512, 4.0, 0.5, {}, true, 130.0);
+         gParamOverrides.clear();
+         check(stay.peak > 0.001f && next.peak > 0.001f, "both chain renders make sound");
+         check(stay.interleaved != next.interleaved,
+               "the sequencer plays the chain, not just the selected pattern");
+
+         // 3. a preset load starts from the defaults. Drive a parameter the
+         //    minimal preset below never mentions, then load it.
+         const std::string bare = dir + "/bare." + std::string(kPresetExtension);
+         check(writePresetFile(bare, "# preset\nformat = 1\nname = Bare\ncutoff = 700\n", werr),
+               "the minimal test preset writes");
+         const ParamDesc &res = *paramById(kParamResonance);
+         gParamOverrides.clear();
+         plugin->reset(plugin);
+         const auto *pex = static_cast<const clap_plugin_params_t *>(
+            plugin->get_extension(plugin, CLAP_EXT_PARAMS));
+         {
+            // flush(), not a zero-frame process(): flush is the call CLAP
+            // provides for moving a parameter while the plugin is not running,
+            // and a process() with no frames does not deliver the event.
+            EventList ev;
+            ev.params.push_back(makeParamValue(res.id, res.max));
+            ev.build();
+            static clap_output_events_t noOut{};
+            noOut.try_push = [](const clap_output_events_t *, const clap_event_header_t *) {
+               return true;
+            };
+            pex->flush(plugin, &ev.in, &noOut);
+         }
+         double before = 0.0;
+         pex->get_value(plugin, res.id, &before);
+         check(std::fabs(before - res.max) < 1e-9, "the probe parameter moved off its default");
+         check(pl->from_location(plugin, CLAP_PRESET_DISCOVERY_LOCATION_FILE, bare.c_str(), ""),
+               "the minimal preset loads");
+         double after = 0.0;
+         pex->get_value(plugin, res.id, &after);
+         check(std::fabs(after - res.def) < 1e-9,
+               "a preset resets a parameter it does not mention to its default");
+      }
+      std::error_code rmec;
+      std::filesystem::remove_all(dir, rmec);
    }
 
    // --- a fresh instance must be silent until a note arrives
