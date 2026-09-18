@@ -1,7 +1,10 @@
 # SäureKiste -- status
 
 Version 0.2.0. Linux and Windows, CLAP and VST3. 51 parameters, 27 presets,
-builds clean, self-test passes with no failures.
+builds clean, self-test passes with no failures across 111 checks.
+
+Six of seven fixes were confirmed by backing the bug out and watching the suite
+fail; the seventh has no contract to assert. See `TODO.md` §3.
 
 ## What works
 

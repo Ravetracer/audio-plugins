@@ -69,7 +69,23 @@ preset, which exists for exactly this.
   work on `saeure-kiste`; `./shared/tools/make-manual.sh saeure-kiste` builds
   the PDF and `release.sh` ships it.
 
-## 3. Fixed, and worth remembering
+## 3. What the self-test does and does not cover
+
+Seven fixes were backed out one at a time on 2026-09-18 to see which the suite
+noticed. Six of seven were not caught on the first pass; after strengthening,
+six are. What each strengthened check exists for is written beside it in
+`tools/render.cpp`.
+
+**The ladder input knee is the one with no test, on purpose.** Removing
+`softKnee(osc * oscDrive, kLadderInputKnee)` changes nothing a test can assert:
+the output stays finite and bounded either way (already checked), the response
+to Overdrive stays monotonic either way (measured: 0.197 / 0.257 / 0.273 / 0.278
+with it, 0.197 / 0.259 / 0.284 / 0.299 without), and at the stock setting it is
+the identity in both — which the byte-for-byte preset comparison already proves.
+It is a voicing decision about how the input pair saturates, not a contract, and
+a test written to pin it down would only be asserting today's numbers.
+
+## 4. Fixed, and worth remembering
 
 **A looping host used to wedge the sequencer.** The first pass through the loop
 played, the second turned into one endless slide that faded out over about
@@ -109,7 +125,7 @@ Both are covered by `--selftest`, and both tests were checked by putting the bug
 back and watching them fail -- a regression test nobody has seen fail is not
 evidence of anything.
 
-## 4. Things that are deliberate, so they do not get "fixed"
+## 5. Things that are deliberate, so they do not get "fixed"
 
 - **The window is a fork** of `shared/src/gui/window.cpp`, not a change to it.
   The step grid cannot be expressed as panels of knobs, and a plugin that is not
