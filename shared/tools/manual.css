@@ -1,0 +1,338 @@
+/*
+ * Stylesheet for the plugin manuals in this repository.
+ *
+ * Used for both outputs of make-manual.sh: the HTML manual and the PDF that
+ * wkhtmltopdf renders from it. That constrains the CSS to what its WebKit
+ * understands -- no grid, no custom properties, no @page margin boxes -- so
+ * page geometry is set on the command line and everything here is plain box
+ * layout. Colours are the house palette; the plugin accent is
+ * substituted in as ACCENT by the script, which is the only thing that differs
+ * between the three manuals.
+ */
+
+html {
+   -webkit-print-color-adjust: exact;
+}
+
+body {
+   font-family: "Inter", "Noto Sans", "DejaVu Sans", sans-serif;
+   font-size: 11pt;
+   line-height: 1.55;
+   color: #1E2A26;
+   margin: 0;
+}
+
+/* ------------------------------------------------------------------- cover */
+
+.cover {
+   text-align: center;
+   padding-top: 34mm;
+   page-break-after: always;
+}
+
+.cover img {
+   width: 96mm;
+   margin-bottom: 22mm;
+}
+
+/* Stands in for the logo when the collection has none. Same vertical space, so
+   the rest of the cover does not move depending on whether an image exists. */
+.cover .wordmark {
+   font-size: 22pt;
+   font-weight: 700;
+   letter-spacing: 0.18em;
+   text-transform: uppercase;
+   color: #2E8B7A;
+   margin: 0 0 22mm 0;
+}
+
+.cover .plugin {
+   font-size: 40pt;
+   font-weight: 800;
+   letter-spacing: -0.02em;
+   color: #0E3328;
+   margin: 0;
+}
+
+.cover .tagline {
+   font-size: 13pt;
+   color: #2E8B7A;
+   margin: 4mm 0 0;
+}
+
+.cover .rule {
+   width: 28mm;
+   height: 3px;
+   background: #F2AE3F;
+   margin: 12mm auto;
+}
+
+.cover .meta {
+   font-size: 10pt;
+   color: #5A6B65;
+   line-height: 1.9;
+}
+
+.cover .meta strong {
+   color: #1B5A48;
+}
+
+/* ---------------------------------------------------------------- headings */
+
+h1, h2, h3, h4 {
+   font-family: "Inter", "Noto Sans", "DejaVu Sans", sans-serif;
+   font-weight: 700;
+   color: #0E3328;
+   page-break-after: avoid;
+}
+
+h1 {
+   font-size: 22pt;
+   letter-spacing: -0.01em;
+   margin: 0 0 6mm;
+   padding-bottom: 3mm;
+   border-bottom: 2px solid ACCENT;
+   page-break-before: always;
+}
+
+h1.first, .cover + h1 {
+   page-break-before: avoid;
+}
+
+h2 {
+   font-size: 14pt;
+   margin: 9mm 0 3mm;
+   color: #1B5A48;
+}
+
+h3 {
+   font-size: 11.5pt;
+   margin: 7mm 0 2mm;
+   color: #2E8B7A;
+   text-transform: uppercase;
+   letter-spacing: 0.06em;
+}
+
+h4 {
+   font-size: 10.5pt;
+   margin: 5mm 0 1mm;
+}
+
+p {
+   margin: 0 0 3.2mm;
+   orphans: 3;
+   widows: 3;
+}
+
+/* ------------------------------------------------------------------ tables */
+
+table {
+   width: 100%;
+   border-collapse: collapse;
+   margin: 4mm 0 6mm;
+   font-size: 8.8pt;
+}
+
+/* Repeat the header row when a table runs over a page break. */
+
+thead {
+   display: table-header-group;
+}
+
+thead th {
+   background: #0E3328;
+   color: #DCEFE3;
+   font-weight: 600;
+   text-align: left;
+   padding: 2mm 2.4mm;
+   font-size: 8.4pt;
+   text-transform: uppercase;
+   letter-spacing: 0.05em;
+}
+
+tbody td {
+   padding: 2mm 2.4mm;
+   border-bottom: 1px solid #DCE7E2;
+   vertical-align: top;
+}
+
+tbody tr:nth-child(even) td {
+   background: #F4F9F6;
+}
+
+/* Keep a parameter's row whole. This WebKit honours it on the cells rather
+ * than on the row, and without the cell rule a long description is split down
+ * the middle by a page break and leaves a sliver at the top of the next page. */
+
+tr, td, th {
+   page-break-inside: avoid;
+}
+
+/* The parameter reference only: name, range and default stay on one line each
+ * and the description takes whatever is left. Scoped to that section, because
+ * the tables written by hand in the prose need their columns to wrap. */
+
+.paramref td:first-child {
+   white-space: nowrap;
+}
+
+.paramref td:nth-child(2),
+.paramref td:nth-child(3) {
+   white-space: nowrap;
+   color: #3D4F49;
+}
+
+/* -------------------------------------------------------------------- code */
+
+code {
+   font-family: "DejaVu Sans Mono", "Liberation Mono", monospace;
+   font-size: 0.86em;
+   background: #EDF5F1;
+   color: #1B5A48;
+   padding: 0.4mm 1mm;
+   border-radius: 2px;
+}
+
+pre {
+   background: #0E3328;
+   color: #DCEFE3;
+   padding: 3.5mm 4mm;
+   border-radius: 3px;
+   font-size: 8.6pt;
+   line-height: 1.45;
+   overflow: hidden;
+   page-break-inside: avoid;
+}
+
+pre code {
+   background: none;
+   color: inherit;
+   padding: 0;
+   font-size: 1em;
+}
+
+/* -------------------------------------------------------------- structures */
+
+blockquote {
+   margin: 4mm 0;
+   padding: 2mm 0 2mm 4mm;
+   border-left: 3px solid #F2AE3F;
+   color: #3D4F49;
+   page-break-inside: avoid;
+}
+
+blockquote p:last-child {
+   margin-bottom: 0;
+}
+
+ul, ol {
+   margin: 0 0 3.2mm;
+   padding-left: 6mm;
+}
+
+li {
+   margin-bottom: 1.2mm;
+}
+
+dl {
+   margin: 4mm 0;
+}
+
+dt {
+   font-weight: 700;
+   color: #1B5A48;
+   margin-top: 3.5mm;
+}
+
+dd {
+   margin: 0.6mm 0 0 6mm;
+   color: #3D4F49;
+}
+
+dt, dd {
+   page-break-inside: avoid;
+}
+
+dt {
+   page-break-after: avoid;
+}
+
+em {
+   color: #5A6B65;
+}
+
+hr {
+   border: none;
+   border-top: 1px solid #DCE7E2;
+   margin: 7mm 0;
+}
+
+a {
+   color: #2E8B7A;
+   text-decoration: none;
+}
+
+/* ------------------------------------------------------------------ the toc
+ *
+ * python-markdown's toc extension emits nested <ul>. This machine's
+ * wkhtmltopdf is the unpatched build, which cannot write page numbers or a PDF
+ * outline, so the contents page is a plain linked list -- the links work, they
+ * simply carry no page number.
+ */
+
+/* No page-break-after here: the chapter heading that follows breaks the page
+ * by itself, and two breaks in a row leave a blank sheet. */
+
+.toctitle {
+   display: block;
+   font-size: 22pt;
+   font-weight: 700;
+   color: #0E3328;
+   letter-spacing: -0.01em;
+   margin: 0 0 6mm;
+   padding-bottom: 3mm;
+   border-bottom: 2px solid ACCENT;
+}
+
+.toc > ul {
+   list-style: none;
+   padding: 0;
+   font-size: 11pt;
+}
+
+.toc > ul > li {
+   margin: 2.5mm 0 0;
+   font-weight: 600;
+   color: #0E3328;
+}
+
+.toc ul ul {
+   list-style: none;
+   padding-left: 5mm;
+   font-weight: 400;
+   font-size: 9.6pt;
+}
+
+.toc ul ul li {
+   margin: 0.8mm 0 0;
+}
+
+.toc ul ul ul {
+   display: none;
+}
+
+.toc a {
+   color: inherit;
+}
+
+/* -------------------------------------------------------------- last page */
+
+.colophon {
+   page-break-before: always;
+   font-size: 9.5pt;
+   color: #5A6B65;
+}
+
+.colophon h1 {
+   page-break-before: avoid;
+}

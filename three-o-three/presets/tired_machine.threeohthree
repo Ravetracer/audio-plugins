@@ -1,0 +1,72 @@
+# ThreeOhThree preset
+format = 1
+name = Tired Machine
+author = ThreeOhThree
+description = Drift at 55 %. The exponential converter is a matched transistor pair with a posistor compensating its temperature coefficient, and it is only ever approximately right -- so the pitch wanders slowly and every note starts a shade off where the last one did. No two of these machines ever agreed with each other. Env Bias is down a little as well, which is the sort of thing twenty-year-old components do on their own.
+
+# VCO
+waveform = Sawtooth
+tuning = -6
+
+# VCF
+cutoff = 520
+resonance = 0.6
+envmod = 0.55
+decay = 650
+tracking = 0
+
+# Accent
+accent = 0.6
+accent_threshold = 100
+accent_decay = 80
+
+# Slide
+slide_time = 70
+
+# Drive
+drive = 0.25
+tone = 7500
+
+# Output
+volume = -7
+
+# Mods
+env_bias = 1.15
+env_depth = 5
+acc_sweep = 3.5
+acc_build = 0.75
+acc_gain = 90
+acc_decay_time = 200
+droop = 38
+ladder = 100
+res_range = 100
+drift = 0.55
+
+# Sequencer
+mode = MIDI
+seq_rate = 1/16
+seq_steps = 16
+gate = 0.5
+swing = 50
+
+# Vibrato
+vib_depth = 25
+vib_rate = 6
+vib_delay = 60
+
+# Generator
+rand_seed = 1
+rand_scale = Minor
+rand_root = C
+rand_notes = 0.78
+rand_accent = 0.3
+rand_slide = 0.2
+rand_octave = 0.22
+rand_vibrato = 0.06
+
+# Sequence
+seq_pitch   = C   .   C   D#  .   C   G   .   C   .   A#  C   .   G   C   .
+seq_octave  = .   .   .   .   .   .   .   .   .   .   .   .   .   .   .   .
+seq_slide   = .   .   x   .   .   .   x   .   .   .   .   x   .   .   x   .
+seq_accent  = x   .   .   .   .   x   .   .   x   .   .   .   .   x   .   .
+seq_vibrato = .   .   .   x   .   .   .   .   .   .   x   .   .   .   .   .

@@ -1,0 +1,41 @@
+# The CLAP SDK and ecosystem checkouts. Third-party upstream code from
+# free-audio -- not ours to redistribute, and ~23 MB of it. Everyone checks it
+# out themselves; see the "CLAP SDK" section of CLAUDE.md for the clone
+# commands. Never commit this tree.
+/CLAP/
+
+# Build output from any plugin subfolder.
+*/build*/
+
+# Release archives and their staging tree. These contain the statically linked
+# Windows plugins at ~5 MB each -- exactly the kind of thing that must never be
+# committed.
+/dist/
+
+# The cross-build toolchain: a meson venv and the pixman/Cairo built from
+# upstream source for mingw. Third-party, large, and reproducible at any time
+# with ./setup-winbuild.sh.
+/winbuild/
+
+# Local reference material inside a plugin (recordings, papers, renders).
+# The leading "!" has to be escaped or git reads it as a negation.
+*/\!dev/
+
+# Python bytecode
+__pycache__/
+*.py[cod]
+
+# Editor and OS noise
+*.swp
+*~
+.DS_Store
+.vscode/
+.idea/
+
+# Website copy. Marketing text for the site, not part of the released archives and
+# deliberately not published here -- it lives on this machine only.
+_designs/website-copy.md
+
+# Demo tracks. Music rendered with or referenced by these plugins, kept locally for
+# listening tests. Large, and not ours to redistribute.
+/DemoTracks/

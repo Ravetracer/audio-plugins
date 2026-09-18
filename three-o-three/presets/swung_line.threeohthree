@@ -1,0 +1,72 @@
+# ThreeOhThree preset
+format = 1
+name = Swung Line
+author = ThreeOhThree
+description = Swing at 66.7 %, which puts every second step exactly where a triplet would be. The hardware could not do this at all -- its steps were evenly spaced and that was that -- so this is a sequencer setting rather than a machine one. Gate is short to let the shuffle breathe.
+
+# VCO
+waveform = Sawtooth
+tuning = 0
+
+# VCF
+cutoff = 470
+resonance = 0.7
+envmod = 0.66
+decay = 280
+tracking = 0
+
+# Accent
+accent = 0.72
+accent_threshold = 100
+accent_decay = 60
+
+# Slide
+slide_time = 45
+
+# Drive
+drive = 0.32
+tone = 9000
+
+# Output
+volume = -7
+
+# Mods
+env_bias = 1.5
+env_depth = 5
+acc_sweep = 3.5
+acc_build = 0.75
+acc_gain = 90
+acc_decay_time = 200
+droop = 25
+ladder = 100
+res_range = 100
+drift = 0
+
+# Sequencer
+mode = Sequencer
+seq_rate = 1/16
+seq_steps = 16
+gate = 0.38
+swing = 66.7
+
+# Vibrato
+vib_depth = 25
+vib_rate = 6
+vib_delay = 60
+
+# Generator
+rand_seed = 1
+rand_scale = Minor
+rand_root = C
+rand_notes = 0.78
+rand_accent = 0.3
+rand_slide = 0.2
+rand_octave = 0.22
+rand_vibrato = 0.06
+
+# Sequence
+seq_pitch   = C   C   D#  C   G   C   A#  C   C   C   D#  C   G   C   A#  C
+seq_octave  = .   .   .   .   .   .   .   +   .   .   .   .   .   .   .   +
+seq_slide   = .   .   x   .   .   .   x   .   .   .   x   .   .   .   x   .
+seq_accent  = x   .   .   .   x   .   .   .   x   .   .   .   x   .   .   .
+seq_vibrato = .   .   .   .   .   .   .   .   .   .   .   .   .   .   .   .

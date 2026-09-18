@@ -1,0 +1,7 @@
+/* Export only the CLAP entry point. */
+{
+   global:
+      clap_entry;
+   local:
+      *;
+};

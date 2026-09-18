@@ -1,0 +1,368 @@
+#include "params.h"
+
+#include "plugincore/param_macros.h"
+
+#include <cmath>
+#include <cstdio>
+#include <cstdlib>
+#include <cstring>
+#include <strings.h>
+
+namespace threeohthree {
+
+namespace {
+
+const char *const kWaveformNames[] = {"Sawtooth", "Square"};
+const char *const kModeNames[] = {"MIDI", "Sequencer"};
+const char *const kRateNames[] = {"1/32", "1/16T", "1/16", "1/8T", "1/8"};
+const char *const kScaleNames[] = {"Minor",  "Major",    "Minor Pent", "Major Pent",
+                                   "Dorian", "Phrygian", "Blues",      "Chromatic"};
+const char *const kRootNames[] = {"C",  "C#", "D",  "D#", "E",  "F",
+                                  "F#", "G",  "G#", "A",  "A#", "B"};
+
+// Where the numbers come from.
+//
+// Every default below is either a value printed in the TB-303 service notes
+// (Feb 19 1982, First Edition) or a component value read off the main-board
+// schematic on page 5 of them. tools/analysis/README.md lists each one and
+// what it was read from; the short version is in the tips.
+//
+// The two that are neither -- Drive and Tone -- belong to a stage the machine
+// does not have, and say so.
+const ParamDesc kParams[kNumParams] = {
+   // ------------------------------------------------------------------- vco
+   ENUM(kParamWaveform, "waveform", "Waveform", "VCO", 0.0, kWaveformNames,
+        "Switch S1 on the main board. The sawtooth falls rather than rises -- the "
+        "oscillator is an integrator that ramps down and is snapped back up by Q8 -- "
+        "and the square is the quieter of the two by a factor the schematic states "
+        "outright: the saw swings 12 V to 5.5 V and the square 8 V to 5 V, so the "
+        "square arrives at the filter 6.7 dB down. That level difference is part of "
+        "how the two settings sound, and it is reproduced rather than normalised "
+        "away."),
+   LIN(kParamTuning, "tuning", "Tuning", "VCO", -700.0, 700.0, 0.0, "cents",
+       "VR2, the front-panel tuning control. The service notes give its travel as "
+       "approximately plus or minus 700 cents -- a perfect fifth either way -- which "
+       "is the range here. Zero is concert pitch."),
+
+   // ------------------------------------------------------------------- vcf
+   LOG(kParamCutoff, "cutoff", "Cutoff", "VCF", 0.5, 100.0, 2500.0, "Hz",
+       "VR3. The range is pinned by the service notes' own alignment procedure: with "
+       "cutoff centred and resonance full clockwise, TM3 is trimmed until the filter "
+       "rings with a period of 2 ms plus or minus 0.5 ms. A 2 ms ring is 500 Hz, so "
+       "the centre of this knob is 500 Hz -- and 100 Hz to 2.5 kHz is the decade and "
+       "a bit around it. The filter reaches far higher than 2.5 kHz in use; that is "
+       "what Env Mod and Accent are for."),
+   PCT(kParamResonance, "resonance", "Resonance", "VCF", 0.35,
+       "VR4, the feedback around the ladder. It stops just short of oscillation on "
+       "purpose, because the machine does: the waveform the service notes print for "
+       "the TM3 check, taken at full resonance, is a ring that dies away rather than "
+       "a tone that sustains. A 303 that self-oscillates is a modified 303."),
+   PCT(kParamEnvMod, "envmod", "Env Mod", "VCF", 0.5,
+       "VR5, and the one control on the machine that does two things at once. Page 8 "
+       "of the service notes explains why: raising Env Mod feeds more envelope to the "
+       "base of Q10, and the same movement shifts the bias that Q9 sets, which lowers "
+       "the filter's resting cutoff. Roland's word for it is a gimmick. The effect is "
+       "that a deeper sweep also starts from further down, so the sweep stays inside "
+       "the range where it is audible instead of running off the top. Turning this up "
+       "therefore darkens the note it is not sweeping and brightens the one it is."),
+   LOG(kParamDecay, "decay", "Decay", "VCF", 0.4350, 200.0, 2500.0, "ms",
+       "VR6, the filter envelope's decay. The range is printed on the schematic beside "
+       "the envelope curve: DECAY VR MAX T = 2.5 sec, MIN T = 200 ms. The envelope has "
+       "no attack worth the name and no sustain at all -- it is triggered and it falls, "
+       "which is why every unaccented note on a 303 drops the same way. An accented "
+       "note ignores this knob; see Accent."),
+   PCT(kParamTracking, "tracking", "Tracking", "VCF", 0.0,
+       "How much the cutoff follows the note. The machine has none: the pitch CV goes "
+       "to the VCO and nowhere else, so a bass note and a note two octaves up meet the "
+       "same filter. Zero is therefore the hardware, and it is the default. It is here "
+       "because a line written across three octaves in a piano roll is not a line "
+       "anybody wrote on the machine, and at 100 % the filter follows the key exactly."),
+
+   // ---------------------------------------------------------------- accent
+   PCT(kParamAccent, "accent", "Accent", "Accent", 0.6,
+       "VR7. An accented note is louder, brighter and shorter all at once, and this "
+       "sets how much of all three. It is not a velocity control: the accent circuit "
+       "has its own envelope and its own time constant, and this scales that."),
+   STEP(kParamAccentThreshold, "accent_threshold", "Accent At", "Accent", 1.0, 127.0, 100.0, "",
+        "Which velocities count as an accent. On the machine accent was one bit per "
+        "step, written on the sequencer; played from a host it has to come from "
+        "somewhere, and velocity is the obvious place. Notes at or above this "
+        "velocity are accented and notes below it are not -- it is a switch, not a "
+        "curve, because the hardware's accent is a switch."),
+   LOG(kParamAccentDecay, "accent_decay", "Sweep Time", "Accent", 0.4900, 10.0, 500.0, "ms",
+       "How long an accent takes to fade out of the filter, and the reason a 303 line "
+       "breathes. C62 on the main board is 1 uF and discharges through R138, 68 k, so "
+       "the accent circuit's time constant is 68 ms -- which is the default here. That "
+       "is shorter than a bar and longer than a sixteenth, so accents landing close "
+       "together stack on top of each other and the filter pumps. Shorten this and "
+       "each accent stands alone; lengthen it and a run of them builds."),
+
+   // ----------------------------------------------------------------- slide
+   LOG(kParamSlideTime, "slide_time", "Slide Time", "Slide", 0.5268, 10.0, 300.0, "ms",
+       "How long a slide takes. Overlap two notes in the host and the second slides "
+       "from the first instead of restarting it -- which is exactly what the machine "
+       "does, because a slid step holds the gate high and never fires a new trigger, "
+       "so the filter envelope carries straight on through. The circuit's own time is "
+       "fixed by C35, 0.22 uF, and the resistor network around it; the default here "
+       "is 60 ms, which is where a 303 sits."),
+
+   // ----------------------------------------------------------------- drive
+   PCT(kParamDrive, "drive", "Drive", "Drive", 0.2,
+       "The one stage that is not in the schematic. A 303 into a mixer is a clean, "
+       "fairly quiet instrument; everything anybody recognises as acid went through "
+       "something else first. This is that something: a soft clipper after the filter, "
+       "compensated so that turning it up thickens rather than simply raising the "
+       "level. At zero the signal path is the machine's."),
+   LOG(kParamTone, "tone", "Tone", "Drive", 0.739536, 800.0, 18000.0, "Hz",
+       "A gentle lowpass after the drive, for taking the top off what the clipper "
+       "adds. Also not in the schematic. At the top of its range it is doing nothing."),
+
+   // ---------------------------------------------------------------- output
+   LIN(kParamVolume, "volume", "Volume", "Output", -60.0, 0.0, -6.0, "dB",
+       "VR8, the master. It stops at unity rather than offering makeup gain, because "
+       "the machine does -- the service notes give the output stage's gain as unity "
+       "and there is nothing above it. Fully down is silence."),
+
+   // ------------------------------------------------------------------ mods
+   //
+   // Ten constants that used to be hard-coded, all of them numbers the
+   // schematic does not give. Their defaults are the values the engine shipped
+   // with, so a preset that does not mention them sounds exactly as it did.
+   LIN(kParamEnvBias, "env_bias", "Env Bias", "Mods", 0.0, 3.0, 1.5, "oct",
+       "How far Env Mod drops the filter's resting cutoff as it deepens the sweep -- "
+       "the size of Q9's bias shift. Page 8 of the service notes describes the "
+       "arrangement and says why it exists, but gives no figure for it, and it is the "
+       "single number that most decides how Env Mod feels. At zero this control is "
+       "gone and Env Mod becomes an ordinary envelope-amount knob: the sweep gets "
+       "deeper without the start of it getting darker, which is what almost every "
+       "other filter in the world does and what the TB-303 deliberately does not."),
+   LIN(kParamEnvDepth, "env_depth", "Env Depth", "Mods", 1.0, 8.0, 5.0, "oct",
+       "How deep a full Env Mod sweep is, in octaves. Also not a figure the schematic "
+       "gives. Five octaves is enough to cross the whole audible range from a resting "
+       "point an octave and a half down; more than that is a machine somebody has "
+       "been inside."),
+   LIN(kParamAccSweep, "acc_sweep", "Acc Sweep", "Mods", 0.0, 6.0, 3.5, "oct",
+       "How far a full accent opens the filter. This is the control that decides "
+       "whether an accent reads as an accent at all, because an accented note is also "
+       "running a much shorter envelope: too little here and the shortened decay wins, "
+       "and the accent comes out *darker* than the note it was supposed to be "
+       "accenting. That is not hypothetical -- it is what this instrument did at two "
+       "octaves, and how the default of 3.5 was arrived at."),
+   PCT(kParamAccBuild, "acc_build", "Acc Build", "Mods", 0.75,
+       "How much of the accent capacitor each accent fills. C62 discharges through "
+       "R138 in 68 ms, which the schematic gives, but how much charge a single accent "
+       "pulse puts in depends on the pulse width against the charging path and "
+       "neither is printed. Below 100 % an accent lands on whatever the last one left "
+       "behind, so a run of them builds instead of repeating -- which is the "
+       "behaviour the machine is described as having. At 100 % every accent is "
+       "identical and nothing accumulates."),
+   LIN(kParamAccGain, "acc_gain", "Acc Gain", "Mods", 0.0, 200.0, 90.0, "%",
+       "How much louder an accented note is. The accent reaches the amplifier as well "
+       "as the filter; this is the amplifier half of it."),
+   LOG(kParamAccDecay, "acc_decay_time", "Acc Decay", "Mods", 0.476896, 20.0, 2500.0, "ms",
+       "The envelope decay an accented note is forced to use. On the machine this is "
+       "not a choice: the ACCENT line gates IC12, a 4066 analog switch, onto the "
+       "envelope node, and the Decay knob is bypassed for as long as it is high. The "
+       "fixed value it lands on is the short end of the knob's own range, 200 ms, "
+       "which is the default here. Set this to the same value as Decay and accented "
+       "notes stop being shorter -- which is precisely the modification the Devil "
+       "Fish added a switch for, and the most-requested change to the circuit there "
+       "has ever been."),
+   LOG(kParamDroop, "droop", "Droop", "Mods", 0.537248, 1.0, 400.0, "Hz",
+       "The tilt on the square wave. The square the service notes print is not flat: "
+       "its top slopes down across the half period at 110 Hz by roughly a third, and "
+       "a first-order highpass at 25 Hz draws that. Which resistor and capacitor in "
+       "the circuit actually produce it could not be traced from the scan, so this is "
+       "the one control here fitted to a *drawing*. Turn it down for a clean square; "
+       "turn it up and the square thins towards a pulse. It does nothing at all on "
+       "the sawtooth."),
+   LIN(kParamLadder, "ladder", "Ladder", "Mods", 0.0, 200.0, 100.0, "%",
+       "How hard the ladder's feedback is driven into its own saturation. The filter "
+       "is transistors, and transistors run out of headroom -- that is where a 303 "
+       "gets its growl at high resonance rather than a clean whistle, and it is also "
+       "what stops the resonance running away. Down, and the filter is cleaner and "
+       "rings harder. Up, and it fights back."),
+   LIN(kParamResRange, "res_range", "Res Range", "Mods", 50.0, 130.0, 100.0, "%",
+       "How much feedback the Resonance knob can ask for. 100 % is the machine: the "
+       "top of the knob sits just below the point where the loop would oscillate, "
+       "which is why a stock 303 rings and dies rather than singing -- the damped "
+       "waveform printed for the TM3 alignment is the proof. Above 100 % it crosses "
+       "that line and the filter becomes a sine oscillator with the keyboard doing "
+       "nothing to it. That is a modification, not a machine, and it is here because "
+       "people made it."),
+   PCT(kParamDrift, "drift", "Drift", "Mods", 0.0,
+       "Oscillator instability. The exponential converter is a matched transistor "
+       "pair with a posistor compensating its temperature coefficient, and it is only "
+       "ever approximately right: no two machines were in tune with each other and "
+       "none of them held still. Zero is the arithmetic. Up from there the pitch "
+       "wanders slowly and each note starts a shade off. Deterministic -- the wander "
+       "is seeded at reset, so a render is still repeatable to the sample."),
+
+   // ------------------------------------------------------------- sequencer
+   ENUM(kParamMode, "mode", "Mode", "Sequencer", 0.0, kModeNames,
+        "Where the notes come from. In MIDI the host plays it: velocity makes an "
+        "accent, overlapping notes make a slide, and the mod wheel is the vibrato. In "
+        "Sequencer the plugin plays its own sixteen steps, locked to the host's "
+        "transport, and a held MIDI note transposes the pattern instead of sounding -- "
+        "C2 plays it as written. The machine only ever worked the second way."),
+   ENUM(kParamSeqRate, "seq_rate", "Rate", "Sequencer", 2.0, kRateNames,
+        "How long one step lasts, as a fraction of a beat. 1/16 is the grid a bass "
+        "line is written on and is the default; the triplet settings are not something "
+        "the hardware could do at all."),
+   STEP(kParamSeqSteps, "seq_steps", "Steps", "Sequencer", 1.0, 16.0, 16.0, "",
+        "How many steps the pattern runs before it repeats. The machine took 1 to 16, "
+        "and the useful part of that range is the bit that is not 16: fifteen steps "
+        "against a four-four bar walks the pattern around the beat."),
+   PCT(kParamGate, "gate", "Gate", "Sequencer", 0.5,
+       "How much of its own step a note holds for. It does not apply to a step marked "
+       "Slide -- that one holds past the start of the next step on purpose, because "
+       "overlapping the notes is what produces a slide."),
+   LIN(kParamSwing, "swing", "Swing", "Sequencer", 50.0, 75.0, 50.0, "%",
+       "Delays every second step. 50 % is straight, 66.7 % is triplet swing. The "
+       "hardware had none of this; its steps were exactly even."),
+
+   // --------------------------------------------------------------- vibrato
+   LIN(kParamVibDepth, "vib_depth", "Vib Depth", "Vibrato", 0.0, 100.0, 25.0, "cents",
+       "How far a vibrato step bends. Nothing on the machine does this -- a vibrato "
+       "per step is a modification, and a common one, because a line of identical "
+       "notes is a line of identical notes."),
+   LOG(kParamVibRate, "vib_rate", "Vib Rate", "Vibrato", 0.673617, 0.5, 20.0, "Hz",
+       "How fast it bends."),
+   LIN(kParamVibDelay, "vib_delay", "Vib Delay", "Vibrato", 0.0, 400.0, 60.0, "ms",
+       "How long the note waits before the vibrato comes in, after which it ramps up "
+       "over 80 ms. At zero the note is already wobbling when it starts, which sounds "
+       "like a mistake rather than like playing. A slide does not restart the wait: a "
+       "slid note is a continuation, and dropping the vibrato in the middle of a held "
+       "phrase would be wrong."),
+
+   // ------------------------------------------------------- pattern generator
+   //
+   // A seed plus six densities. Together they describe a pattern completely:
+   // the GEN button in the grid turns them into sixteen steps, and the same
+   // settings always give the same sixteen. So a line you like is a number you
+   // can write on a piece of paper.
+   //
+   // Each step draws all six of its random values whether or not it uses them,
+   // which is the property that makes the thing usable: nudging Accents changes
+   // only which steps are accented and leaves the notes exactly where they
+   // were. A generator that reshuffled everything on every tweak would be a
+   // slot machine rather than an instrument.
+   STEP(kParamRandSeed, "rand_seed", "Seed", "Generator", 0.0, 9999.0, 1.0, "",
+        "Which pattern. Step it with the - and + buttons beside the grid and the "
+        "pattern regenerates as you go, which is how this is meant to be used: hold "
+        "the settings still and walk through seeds until one of them is the one."),
+   ENUM(kParamRandScale, "rand_scale", "Scale", "Generator", 0.0, kScaleNames,
+        "Which notes the generator may use. Minor is where nearly every acid line "
+        "lives; Chromatic is the setting for when it should not make sense. The root "
+        "itself comes up more often than the rest, because a bass line that does not "
+        "keep returning to its root is not a bass line."),
+   ENUM(kParamRandRoot, "rand_root", "Root", "Generator", 0.0, kRootNames,
+        "What the scale is built on, and the note the pattern keeps coming back to. "
+        "It moves the notes inside the octave rather than transposing the result -- to "
+        "move the whole line, hold a MIDI note."),
+   PCT(kParamRandNotes, "rand_notes", "Notes", "Generator", 0.78,
+       "How many of the sixteen steps get a note at all. The rest are rests, and they "
+       "matter more than they look: a pattern with a note on every step has no shape."),
+   PCT(kParamRandAccent, "rand_accent", "Accents", "Generator", 0.3,
+       "How often a note is accented."),
+   PCT(kParamRandSlide, "rand_slide", "Slides", "Generator", 0.2,
+       "How often a note slides into the next. Worth keeping low -- a slide only reads "
+       "as a slide when the notes around it do not."),
+   PCT(kParamRandOctave, "rand_octave", "Octaves", "Generator", 0.22,
+       "How often a note jumps an octave. Mostly up; one jump in three is down."),
+   PCT(kParamRandVibrato, "rand_vibrato", "Vibrato", "Generator", 0.06,
+       "How often a note gets a vibrato. Nothing on the machine does this at all, so "
+       "the default is sparing."),
+};
+
+#undef LIN
+#undef PCT
+#undef BIPCT
+#undef LOG
+#undef STEP
+#undef ENUM
+
+// The table is indexed by id everywhere -- paramByIdIn() returns the entry only
+// when table[id].id == id -- so a row out of order shows up as a parameter the
+// host cannot read rather than as a wrong one.
+
+} // namespace
+
+// Steps per beat for each Rate setting. 1/16 is four to the beat.
+double stepsPerBeat(int rate) {
+   switch (rate) {
+   case kRate32:
+      return 8.0;
+   case kRate16T:
+      return 6.0;
+   case kRate8T:
+      return 3.0;
+   case kRate8:
+      return 2.0;
+   case kRate16:
+   default:
+      return 4.0;
+   }
+}
+
+int scaleNotes(int scale, int *out) {
+   // The root is always first, which is what lets the generator weight it.
+   switch (scale) {
+   case kScaleMajor: {
+      static const int v[] = {0, 2, 4, 5, 7, 9, 11};
+      for (int i = 0; i < 7; ++i)
+         out[i] = v[i];
+      return 7;
+   }
+   case kScaleMinorPent: {
+      static const int v[] = {0, 3, 5, 7, 10};
+      for (int i = 0; i < 5; ++i)
+         out[i] = v[i];
+      return 5;
+   }
+   case kScaleMajorPent: {
+      static const int v[] = {0, 2, 4, 7, 9};
+      for (int i = 0; i < 5; ++i)
+         out[i] = v[i];
+      return 5;
+   }
+   case kScaleDorian: {
+      static const int v[] = {0, 2, 3, 5, 7, 9, 10};
+      for (int i = 0; i < 7; ++i)
+         out[i] = v[i];
+      return 7;
+   }
+   case kScalePhrygian: {
+      static const int v[] = {0, 1, 3, 5, 7, 8, 10};
+      for (int i = 0; i < 7; ++i)
+         out[i] = v[i];
+      return 7;
+   }
+   case kScaleBlues: {
+      static const int v[] = {0, 3, 5, 6, 7, 10};
+      for (int i = 0; i < 6; ++i)
+         out[i] = v[i];
+      return 6;
+   }
+   case kScaleChromatic: {
+      for (int i = 0; i < 12; ++i)
+         out[i] = i;
+      return 12;
+   }
+   case kScaleMinor:
+   default: {
+      static const int v[] = {0, 2, 3, 5, 7, 8, 10};
+      for (int i = 0; i < 7; ++i)
+         out[i] = v[i];
+      return 7;
+   }
+   }
+}
+
+const ParamDesc *paramTable() { return kParams; }
+
+const ParamDesc *paramById(uint32_t id) { return paramByIdIn(kParams, kNumParams, id); }
+
+const ParamDesc *paramByKey(const char *key) { return paramByKeyIn(kParams, kNumParams, key); }
+
+} // namespace threeohthree

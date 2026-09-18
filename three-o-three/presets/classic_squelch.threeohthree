@@ -1,0 +1,72 @@
+# ThreeOhThree preset
+format = 1
+name = Classic Squelch
+author = ThreeOhThree
+description = Resonance high and the envelope sweeping nearly its whole range, with the decay short enough that the peak has fallen back before the next sixteenth. The Env Mod knob is doing both of its jobs at 80 %: the resting cutoff has dropped over an octave from where the Cutoff knob points, and what the envelope adds on top of that is four octaves.
+
+# VCO
+waveform = Sawtooth
+tuning = 0
+
+# VCF
+cutoff = 420
+resonance = 0.78
+envmod = 0.8
+decay = 300
+tracking = 0
+
+# Accent
+accent = 0.7
+accent_threshold = 100
+accent_decay = 68
+
+# Slide
+slide_time = 60
+
+# Drive
+drive = 0.35
+tone = 9000
+
+# Output
+volume = -7
+
+# Mods
+env_bias = 1.5
+env_depth = 5
+acc_sweep = 3.5
+acc_build = 0.75
+acc_gain = 90
+acc_decay_time = 200
+droop = 25
+ladder = 100
+res_range = 100
+drift = 0
+
+# Sequencer
+mode = MIDI
+seq_rate = 1/16
+seq_steps = 16
+gate = 0.5
+swing = 50
+
+# Vibrato
+vib_depth = 25
+vib_rate = 6
+vib_delay = 60
+
+# Generator
+rand_seed = 1
+rand_scale = Minor
+rand_root = C
+rand_notes = 0.78
+rand_accent = 0.3
+rand_slide = 0.2
+rand_octave = 0.22
+rand_vibrato = 0.06
+
+# Sequence
+seq_pitch   = C   C   C   .   C   A#  C   D#  C   .   C   A#  C   G   C   .
+seq_octave  = .   .   +   .   .   .   .   .   .   .   +   .   .   .   .   .
+seq_slide   = .   x   .   .   .   .   x   .   .   .   x   .   .   .   x   .
+seq_accent  = x   .   .   .   .   x   .   .   x   .   .   .   .   x   .   .
+seq_vibrato = .   .   .   .   .   .   .   .   .   .   .   .   .   .   .   .

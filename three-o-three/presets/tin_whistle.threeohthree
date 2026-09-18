@@ -1,0 +1,65 @@
+# ThreeOhThree preset
+format = 1
+name = Tin Whistle
+author = ThreeOhThree
+description = The square wave up where it is thin rather than hollow, with a short decay. High resonance on a square is a different sound from high resonance on a sawtooth, because the square has no even harmonics for the peak to land on.
+
+# VCO
+waveform = Square
+tuning = 0
+
+# VCF
+cutoff = 1100
+resonance = 0.8
+envmod = 0.55
+decay = 240
+tracking = 0
+
+# Accent
+accent = 0.7
+accent_threshold = 100
+accent_decay = 55
+
+# Slide
+slide_time = 40
+
+# Drive
+drive = 0.4
+tone = 11000
+
+# Output
+volume = -8
+
+# Mods
+env_bias = 1.5
+env_depth = 5
+acc_sweep = 3.5
+acc_build = 0.75
+acc_gain = 90
+acc_decay_time = 200
+droop = 25
+ladder = 100
+res_range = 100
+drift = 0
+
+# Sequencer
+mode = MIDI
+seq_rate = 1/16
+seq_steps = 16
+gate = 0.5
+swing = 50
+
+# Vibrato
+vib_depth = 25
+vib_rate = 6
+vib_delay = 60
+
+# Generator
+rand_seed = 1
+rand_scale = Minor
+rand_root = C
+rand_notes = 0.78
+rand_accent = 0.3
+rand_slide = 0.2
+rand_octave = 0.22
+rand_vibrato = 0.06

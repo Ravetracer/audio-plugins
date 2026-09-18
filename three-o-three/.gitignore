@@ -1,0 +1,9 @@
+# Reference material: the TB-303 service-note PDFs. Roland's, not ours to
+# redistribute. The root .gitignore already covers */\!dev/; this repeats it so
+# the rule travels with the folder.
+/\!dev/
+
+# Build trees and renders.
+/build/
+/build-*/
+*.wav
