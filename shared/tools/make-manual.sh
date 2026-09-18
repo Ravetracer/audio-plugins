@@ -37,6 +37,12 @@ out_dir="${2:-${root}/dist/manuals}"
 name="$(sed -n 's/^project(\([A-Za-z0-9_]*\).*/\1/p' "${src}/CMakeLists.txt" | head -1)"
 version="$(sed -n 's/^project([A-Za-z0-9_]* VERSION \([0-9.]*\).*/\1/p' "${src}/CMakeLists.txt" | head -1)"
 
+# The plugin's C++ namespace is its CMake project name lowercased -- the same
+# convention as its preset extension. Derived from the project name rather than
+# from the folder, because a folder name is free to carry hyphens ("three-o-
+# three") and a C++ identifier is not.
+doc_ns="$(printf '%s' "$name" | tr '[:upper:]' '[:lower:]')"
+
 for tool in python3 wkhtmltopdf; do
    command -v "$tool" >/dev/null 2>&1 || { echo "${tool} not found -- cannot build the manual" >&2; exit 1; }
 done
@@ -48,7 +54,7 @@ trap 'rm -rf "$work"' EXIT
 
 # ------------------------------------------------------- the generated sections
 "${CXX:-g++}" -std=c++17 -O1 -Wall -Wextra \
-   "-DPLUGINCORE_DOC_NS=${plugin}" \
+   "-DPLUGINCORE_DOC_NS=${doc_ns}" \
    -I"${root}/shared/include" -I"${src}/src" \
    "${here}/docgen.cpp" "${src}/src/params.cpp" "${root}/shared/src/params.cpp" \
    -o "${work}/docgen"

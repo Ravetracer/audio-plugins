@@ -201,7 +201,12 @@ build_one() {
    local plugin="$1" target="$2" build_dir="$3" install_root="$4"
    local name upper
    name="$(project_name "$plugin")"
-   upper="$(echo "$plugin" | tr '[:lower:]' '[:upper:]')"
+   # The option prefix is the CMake project name uppercased, not the folder
+   # name: a folder may carry hyphens ("three-o-three") and a CMake variable may
+   # not. Getting this wrong is quiet -- CMake only warns that a
+   # manually-specified variable went unused, and the build silently keeps its
+   # defaults, which for a release means shipping with the offline tools on.
+   upper="$(echo "$name" | tr '[:lower:]' '[:upper:]')"
 
    local args=(
       -S "${here}/${plugin}"
