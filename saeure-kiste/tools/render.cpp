@@ -1767,6 +1767,56 @@ int runSelfTest(const clap_plugin_entry_t *entry, double sampleRate) {
       generatePattern(other, b);
       check(std::memcmp(a, b, sizeof(a)) != 0, "a different seed gives a different pattern");
 
+      // --- GEN gives a new pattern every press.
+      //
+      // It used to regenerate from the seed that was already set, so pressing
+      // it twice gave the same sixteen steps twice unless a density had moved
+      // in between -- a button marked GEN that generated nothing. It now picks
+      // a new seed first, which is what every other generator does and what
+      // was wanted in the first place.
+      //
+      // The seed stays a parameter: the pattern GEN just made is still a
+      // number that can be written down and stepped back to.
+      {
+         const uint32_t kMaxSeed = 9999;
+         uint32_t seed = 1;
+         bool inRange = true, everRepeated = false, everStood = false;
+         int distinct = 0;
+         uint16_t seen[64][kMaxSteps];
+         // Sixty-four presses, the salt running as a plain counter the way the
+         // plugin's does.
+         for (uint32_t press = 0; press < 64; ++press) {
+            const uint32_t next = nextGeneratorSeed(seed, press, kMaxSeed);
+            if (next > kMaxSeed)
+               inRange = false;
+            if (next == seed)
+               everStood = true;
+            seed = next;
+
+            GenSettings gs;
+            gs.seed = seed;
+            generatePattern(gs, seen[press]);
+            for (uint32_t before = 0; before < press; ++before)
+               if (std::memcmp(seen[press], seen[before], sizeof(seen[0])) == 0)
+                  everRepeated = true;
+            ++distinct;
+         }
+         std::printf("       GEN: %d presses, %s, last seed %u\n", distinct,
+                     everRepeated ? "a pattern came back" : "no pattern came back", seed);
+         check(inRange, "a generated seed stays inside the parameter's range");
+         check(!everStood, "GEN never hands back the seed that is already set");
+         check(!everRepeated, "sixty-four presses of GEN give sixty-four different patterns");
+
+         // And it is still the seed that decides, not the press: setting the
+         // same seed again reproduces the line GEN made.
+         GenSettings back;
+         back.seed = seed;
+         uint16_t again[kMaxSteps];
+         generatePattern(back, again);
+         check(std::memcmp(again, seen[63], sizeof(again)) == 0,
+               "a pattern GEN made comes back from its seed");
+      }
+
       // The independence property: raising Accents must not rewrite the line.
       //
       // Octaves are the one deliberate exception. An octave jump is far likelier
@@ -2420,6 +2470,84 @@ int runSelfTest(const clap_plugin_entry_t *entry, double sampleRate) {
          // carrying on lands a fifth of a step later.
          check(onsetMs >= 0.0 && onsetMs < 0.1 * step,
                "a key press starts the pattern over");
+      }
+
+      // --- releasing the key and pressing it again starts the pattern over.
+      //
+      // The restart above is the easy half: a second key while the first one is
+      // still down, with the sequencer already running. The reported bug is the
+      // other half -- let go, press again, and the pattern carried on from the
+      // step it had stopped on instead of from step one.
+      //
+      // Two things caused it, and both need a stopped host that still publishes
+      // a beats timeline, which is what a DAW hands over when it is not
+      // rolling. The clock is read once per block and before the restart is
+      // consumed, so a press that is not on the block's first sample found the
+      // sequencer still stopped and the restart was dropped; and the free-run
+      // start path only rewound the position when the host offered no beats
+      // timeline at all, so with one present it resumed where it left off.
+      //
+      // Checked against a reference run rather than by eye: what comes out of
+      // the note port after the second press has to be, note for note and
+      // sample for sample, what comes out after the first one. The keys alone
+      // would not do it -- eight of the sixteen default steps are the root, so
+      // resuming in the wrong place lands on the right key about half the time.
+      {
+         auto seqOverrides = [&]() {
+            gParamOverrides.clear();
+            gParamOverrides.emplace_back(modeId, 1.0); // Sequencer
+            gParamOverrides.emplace_back(rateId, 4.0); // 1/8
+            gParamOverrides.emplace_back(gateId, 0.3);
+            gParamOverrides.emplace_back(ampDecayId, 0.2);
+         };
+         // (frame, key) for the note-ons at or after `from`, relative to it.
+         auto onsAfter = [](uint32_t from, size_t want) {
+            std::vector<std::pair<uint32_t, int>> out;
+            for (const clap_event_note_t &ev : gNoteOut) {
+               if (ev.header.type != CLAP_EVENT_NOTE_ON || ev.header.time < from)
+                  continue;
+               out.emplace_back(ev.header.time - from, static_cast<int>(ev.key));
+               if (out.size() == want)
+                  break;
+            }
+            return out;
+         };
+
+         seqOverrides();
+         plugin->reset(plugin);
+         const std::vector<SeqEvent> once = {
+            {0, CLAP_EVENT_NOTE_ON, 36, 1.0, 1},
+            {static_cast<uint32_t>(2.9 * sampleRate), CLAP_EVENT_NOTE_OFF, 36, 0.0, 1}};
+         renderSequence(plugin, sampleRate, 512, 3.0, 0.0, once, true, 130.0, 0.0, false);
+         const std::vector<std::pair<uint32_t, int>> reference = onsAfter(0, 8);
+
+         // The second press is deliberately off a block boundary as well as off
+         // a step boundary: the restart has to land on the sample the key
+         // arrived on, not at the top of the next block.
+         seqOverrides();
+         plugin->reset(plugin);
+         const uint32_t pressFrame = static_cast<uint32_t>(1.3 * sampleRate) + 173;
+         const std::vector<SeqEvent> twice = {
+            {0, CLAP_EVENT_NOTE_ON, 36, 1.0, 1},
+            {static_cast<uint32_t>(0.7 * sampleRate), CLAP_EVENT_NOTE_OFF, 36, 0.0, 1},
+            {pressFrame, CLAP_EVENT_NOTE_ON, 36, 1.0, 2},
+            {static_cast<uint32_t>(3.9 * sampleRate), CLAP_EVENT_NOTE_OFF, 36, 0.0, 2}};
+         renderSequence(plugin, sampleRate, 512, 4.0, 0.0, twice, true, 130.0, 0.0, false);
+         const std::vector<std::pair<uint32_t, int>> again = onsAfter(pressFrame, 8);
+         gParamOverrides.clear();
+
+         std::printf("       key again at frame %u: %zu notes follow it, first at +%u (key %d); "
+                     "the first press gave +%u (key %d)\n",
+                     pressFrame, again.size(), again.empty() ? 0u : again.front().first,
+                     again.empty() ? -1 : again.front().second,
+                     reference.empty() ? 0u : reference.front().first,
+                     reference.empty() ? -1 : reference.front().second);
+         check(reference.size() == 8, "the reference run plays a line out of the note port");
+         check(again.size() == 8, "pressing the key again plays a line at all");
+         check(!again.empty() && again.front().first == 0,
+               "the note after a fresh key press lands on the key, not on the next block");
+         check(again == reference,
+               "a released and pressed key starts the pattern over, note for note");
       }
 
       // --- a stopped host still has a tempo, and the sequencer has to use it.

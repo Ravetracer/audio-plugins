@@ -2,7 +2,7 @@
 
 *A monophonic acid bass synthesiser for Linux. CLAP.*
 
-Version 0.3.1
+Version 0.4.0
 
 ---
 
@@ -357,10 +357,16 @@ A seed, a scale, a root and five densities. **The same settings always give the
 same sixteen steps**, so a line worth keeping is a number you can write down
 rather than a file you have to find.
 
+**GEN** gives a new pattern, every press. It picks a seed you have not heard
+and generates from it, which is what the button is for -- press it until
+something good happens. The seed it picked is shown beside it and is an
+ordinary parameter, so the line you just kept is a number: write it down, and
+it comes back.
+
 Step the seed with the **−** and **+** buttons beside the grid and the pattern
-regenerates as you go. That is how it is meant to be used: hold the settings
-still and walk through seeds until one of them is the one. **GEN** regenerates
-with the current seed, for when the densities have moved.
+regenerates as you go, one seed at a time. That is the other way to use it:
+hold the settings still and walk through seeds until one of them is the one.
+Those two buttons are the deterministic half, GEN is the dice.
 
 Two things make it a generator rather than a random number generator wired to a
 piano roll.

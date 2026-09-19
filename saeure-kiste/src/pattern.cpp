@@ -349,4 +349,26 @@ bool parsePatternLine(const std::string &key, const std::string &value, PatternD
    return true;
 }
 
+uint32_t nextGeneratorSeed(uint32_t current, uint32_t salt, uint32_t maxSeed) {
+   if (maxSeed == 0)
+      return 0;
+   // Two rounds of an avalanche mix, so consecutive salts -- which is what a
+   // counter gives -- land nowhere near each other.
+   uint32_t x = salt * 0x9E3779B9u + current * 0x85EBCA6Bu + 0x165667B1u;
+   for (int guard = 0; guard < 8; ++guard) {
+      x ^= x >> 16;
+      x *= 0x7FEB352Du;
+      x ^= x >> 15;
+      x *= 0x846CA68Bu;
+      x ^= x >> 16;
+      const uint32_t candidate = x % (maxSeed + 1);
+      if (candidate != current)
+         return candidate;
+      // The one in ten thousand that came back with the seed already set. Mix
+      // again rather than return it: GEN has to change something.
+      x += 0x9E3779B9u;
+   }
+   return current + 1 > maxSeed ? 0 : current + 1;
+}
+
 } // namespace saeurekiste

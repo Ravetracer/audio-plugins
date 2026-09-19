@@ -374,8 +374,6 @@ private:
    double mK = 3.0;
 };
 
-FilterCurve gFilterCurve;
-
 const WindowSpec kSpec = {
    /* wordmarkFirst  */ "Säure",
    /* wordmarkSecond */ "Kiste",
@@ -395,7 +393,8 @@ const WindowSpec kSpec = {
    // balance, so there is no mixer and no MIXER button.
    /* mixer          */ nullptr,
    /* mixerCount     */ 0,
-   /* ornament       */ &gFilterCurve,
+   /* ornament       */ nullptr, // filled in by createGui: one per window
+   /* ownsOrnament   */ true,
    /* pattern        */ nullptr, // filled in by createGui: it is the plugin
    /* patternSteps   */ kMaxSteps,
    /* patternCount   */ kMaxPatterns,
@@ -411,11 +410,25 @@ const WindowSpec kSpec = {
 } // namespace
 
 Gui *createGui(GuiDelegate &delegate, PatternAccess &pattern, WindowHost &host) {
-   static WindowSpec spec = kSpec;
+   // A local, and deliberately so. This used to be a function-local `static`,
+   // which made it one spec for the whole module: the second instance's editor
+   // overwrote the pattern and host pointers the first one was still reading,
+   // so two tracks of SaeureKiste shared one pattern bank and one pattern
+   // selection -- switching pattern in one switched it in the other, and a
+   // pattern written in one appeared in, and vanished with, the other. The
+   // window copies what it is given, so there is nothing here to keep alive.
+   WindowSpec spec = kSpec;
    spec.params = paramTable();
    spec.pattern = &pattern;
    spec.host = &host;
-   return createWindow(delegate, spec);
+   // One ornament per window, for the same reason: it holds the envelope of
+   // the note that is sounding, and two windows sharing it would fight over
+   // it. The window owns it -- see `ownsOrnament`.
+   spec.ornament = new FilterCurve();
+   Gui *gui = createWindow(delegate, spec);
+   if (!gui)
+      delete spec.ornament;
+   return gui;
 }
 
 } // namespace saeurekiste

@@ -3,6 +3,13 @@
 // so a host has to supply the parent window; that is all this does.
 //
 //   ./saeurekiste-guihost [plugin.clap] [preset.saeurekiste] [seconds]
+//                         [--also <preset.saeurekiste|-> ...]
+//
+// Each --also opens another instance of the same plugin in its own window,
+// loaded with its own preset ("-" for the defaults). One process, one module,
+// several instances: that is what a DAW does with two tracks of the same
+// plugin, and it is the only arrangement in which state accidentally shared
+// between instances can be seen at all.
 //
 // It processes audio on a timer thread as well, because the editor reads its
 // parameter values back through the same path a host would.
@@ -26,30 +33,52 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <memory>
 #include <string>
 #include <thread>
 #include <vector>
 
 namespace {
 
-const clap_host_t *gHostPtr = nullptr;
-const clap_plugin_t *gPlugin = nullptr;
 std::atomic<bool> gRunning{true};
+
+// One plugin instance and the host window it is parented into. Everything a
+// DAW keeps per track: its own clap_host_t, so a callback can tell which
+// instance made it, and its own size and resize request.
+struct Instance {
+   const clap_plugin_t *plug = nullptr;
+   const clap_plugin_gui_t *gui = nullptr;
+   clap_host_t host{};
+   std::string title;
+   uint32_t w = 900;
+   uint32_t h = 648;
+   std::atomic<bool> resizeWanted{false};
+   std::atomic<uint32_t> resizeW{0};
+   std::atomic<uint32_t> resizeH{0};
+#if defined(_WIN32)
+   HWND window = nullptr;
+#else
+   Window window = 0;
+#endif
+};
+
+Instance *instanceOf(const clap_host_t *host) {
+   return host ? static_cast<Instance *>(host->host_data) : nullptr;
+}
+
+void hostGuiResizeHintsChanged(const clap_host_t *) {}
 
 // The plugin asks to be resized when its collapsible panel section opens or
 // closes. A DAW obliges by resizing the window it parented the editor into;
 // this does the same, on the event loop rather than on the calling thread,
 // because that is where the X connection is.
-std::atomic<bool> gResizeWanted{false};
-std::atomic<uint32_t> gResizeW{0};
-std::atomic<uint32_t> gResizeH{0};
-
-void hostGuiResizeHintsChanged(const clap_host_t *) {}
-
-bool hostGuiRequestResize(const clap_host_t *, uint32_t width, uint32_t height) {
-   gResizeW.store(width);
-   gResizeH.store(height);
-   gResizeWanted.store(true);
+bool hostGuiRequestResize(const clap_host_t *host, uint32_t width, uint32_t height) {
+   Instance *inst = instanceOf(host);
+   if (!inst)
+      return false;
+   inst->resizeW.store(width);
+   inst->resizeH.store(height);
+   inst->resizeWanted.store(true);
    return true;
 }
 
@@ -72,9 +101,35 @@ void hostRequestCallback(const clap_host_t *) {}
 } // namespace
 
 int main(int argc, char **argv) {
-   const std::string pluginPath = argc > 1 ? argv[1] : "./SaeureKiste.clap";
-   const char *presetPath = (argc > 2 && argv[2][0]) ? argv[2] : nullptr;
-   const int liveSeconds = argc > 3 ? std::atoi(argv[3]) : 600;
+   std::string pluginPath = "./SaeureKiste.clap";
+   int liveSeconds = 600;
+   // One entry per instance: the preset it opens with, or empty for the
+   // defaults. The first is the positional argument, the rest come from --also.
+   std::vector<std::string> presets(1);
+
+   {
+      int positional = 0;
+      for (int i = 1; i < argc; ++i) {
+         const std::string arg = argv[i];
+         if (arg == "--also") {
+            if (i + 1 >= argc) {
+               std::fprintf(stderr, "--also wants a preset path, or - for the defaults\n");
+               return 1;
+            }
+            const std::string p = argv[++i];
+            presets.push_back(p == "-" ? std::string() : p);
+         } else if (positional == 0) {
+            pluginPath = arg;
+            ++positional;
+         } else if (positional == 1) {
+            presets[0] = arg;
+            ++positional;
+         } else if (positional == 2) {
+            liveSeconds = std::atoi(arg.c_str());
+            ++positional;
+         }
+      }
+   }
 
 #if defined(_WIN32)
    HMODULE lib = LoadLibraryA(pluginPath.c_str());
@@ -100,53 +155,17 @@ int main(int argc, char **argv) {
       entry->get_factory(CLAP_PLUGIN_FACTORY_ID));
    const clap_plugin_descriptor_t *desc = fac->get_plugin_descriptor(fac, 0);
 
-   clap_host_t host{};
-   host.clap_version = CLAP_VERSION;
-   host.name = "saeurekiste-guihost";
-   host.vendor = "SaeureKiste";
-   host.url = "";
-   host.version = "1.0";
-   host.get_extension = hostGetExtension;
-   host.request_restart = hostRequestRestart;
-   host.request_process = hostRequestProcess;
-   host.request_callback = hostRequestCallback;
-   gHostPtr = &host;
-
-   const clap_plugin_t *plug = fac->create_plugin(fac, &host, desc->id);
-   if (!plug || !plug->init(plug)) {
-      std::fprintf(stderr, "plugin init failed\n");
-      return 1;
-   }
-   gPlugin = plug;
-
    const double sr = 48000.0;
    const uint32_t block = 512;
-   plug->activate(plug, sr, block, block);
-   plug->start_processing(plug);
 
-   if (presetPath) {
-      auto *pl = static_cast<const clap_plugin_preset_load_t *>(
-         plug->get_extension(plug, CLAP_EXT_PRESET_LOAD));
-      if (pl && !pl->from_location(plug, CLAP_PRESET_DISCOVERY_LOCATION_FILE, presetPath, ""))
-         std::fprintf(stderr, "preset load failed: %s\n", presetPath);
-   }
-
-   auto *gui = static_cast<const clap_plugin_gui_t *>(plug->get_extension(plug, CLAP_EXT_GUI));
-   if (!gui || !gui->is_api_supported(plug, RD_WINDOW_API, false)) {
-      std::fprintf(stderr, "plugin has no embedded GUI for %s\n", RD_WINDOW_API);
+#if !defined(_WIN32)
+   Display *dpy = XOpenDisplay(nullptr);
+   if (!dpy) {
+      std::fprintf(stderr, "no X display\n");
       return 1;
    }
-   if (!gui->create(plug, RD_WINDOW_API, false)) {
-      std::fprintf(stderr, "gui create failed\n");
-      return 1;
-   }
-
-   uint32_t w = 900, h = 648;
-   gui->get_size(plug, &w, &h);
-
-#if defined(_WIN32)
-   // A plain top-level window standing in for the host's, with the plugin's
-   // own window parented into it exactly as a DAW would.
+   const int screen = DefaultScreen(dpy);
+#else
    WNDCLASSEXW wc{};
    wc.cbSize = sizeof(wc);
    wc.lpfnWndProc = DefWindowProcW;
@@ -154,58 +173,118 @@ int main(int argc, char **argv) {
    wc.hCursor = LoadCursor(nullptr, IDC_ARROW);
    wc.lpszClassName = L"SaeureKisteGuiHost";
    RegisterClassExW(&wc);
-
-   RECT wanted{0, 0, static_cast<LONG>(w), static_cast<LONG>(h)};
-   AdjustWindowRect(&wanted, WS_OVERLAPPEDWINDOW, FALSE);
-   HWND hostWindow = CreateWindowExW(0, L"SaeureKisteGuiHost", L"SaeureKiste", WS_OVERLAPPEDWINDOW,
-                               CW_USEDEFAULT, CW_USEDEFAULT, wanted.right - wanted.left,
-                               wanted.bottom - wanted.top, nullptr, nullptr,
-                               GetModuleHandleW(nullptr), nullptr);
-   if (!hostWindow) {
-      std::fprintf(stderr, "could not create the host window\n");
-      return 1;
-   }
-   ShowWindow(hostWindow, SW_SHOW);
-
-   clap_window_t parent{};
-   parent.api = CLAP_WINDOW_API_WIN32;
-   parent.win32 = hostWindow;
-   if (!gui->set_parent(plug, &parent)) {
-      std::fprintf(stderr, "set_parent failed\n");
-      return 1;
-   }
-   gui->show(plug);
-   std::printf("window %p  %ux%u\n", static_cast<void *>(hostWindow), w, h);
-   std::fflush(stdout);
-#else
-   Display *dpy = XOpenDisplay(nullptr);
-   if (!dpy) {
-      std::fprintf(stderr, "no X display\n");
-      return 1;
-   }
-   const int screen = DefaultScreen(dpy);
-   Window win = XCreateSimpleWindow(dpy, RootWindow(dpy, screen), 0, 0, w, h, 0,
-                                    BlackPixel(dpy, screen), BlackPixel(dpy, screen));
-   XStoreName(dpy, win, "SaeureKiste");
-   XSelectInput(dpy, win, StructureNotifyMask);
-   XMapWindow(dpy, win);
-   XFlush(dpy);
-
-   clap_window_t parent{};
-   parent.api = RD_WINDOW_API;
-   parent.x11 = static_cast<clap_xwnd>(win);
-   if (!gui->set_parent(plug, &parent)) {
-      std::fprintf(stderr, "set_parent failed\n");
-      return 1;
-   }
-   gui->show(plug);
-   XFlush(dpy);
-   std::printf("window 0x%lx  %ux%u\n", win, w, h);
-   std::fflush(stdout);
 #endif
+
+   // unique_ptr rather than a plain vector: an Instance holds atomics, so it
+   // cannot be moved, and a growing vector would move it.
+   std::vector<std::unique_ptr<Instance>> instances;
+
+   for (size_t i = 0; i < presets.size(); ++i) {
+      auto inst = std::make_unique<Instance>();
+      // A distinct title per instance. The verification recipe picks a window
+      // out of `xdotool search` by name, and two windows with the same name is
+      // exactly how the wrong one gets grabbed.
+      inst->title = presets.size() > 1 ? "SaeureKiste #" + std::to_string(i + 1) : "SaeureKiste";
+
+      inst->host.clap_version = CLAP_VERSION;
+      inst->host.host_data = inst.get();
+      inst->host.name = "saeurekiste-guihost";
+      inst->host.vendor = "SaeureKiste";
+      inst->host.url = "";
+      inst->host.version = "1.0";
+      inst->host.get_extension = hostGetExtension;
+      inst->host.request_restart = hostRequestRestart;
+      inst->host.request_process = hostRequestProcess;
+      inst->host.request_callback = hostRequestCallback;
+
+      const clap_plugin_t *plug = fac->create_plugin(fac, &inst->host, desc->id);
+      if (!plug || !plug->init(plug)) {
+         std::fprintf(stderr, "plugin init failed\n");
+         return 1;
+      }
+      inst->plug = plug;
+      plug->activate(plug, sr, block, block);
+      plug->start_processing(plug);
+
+      if (!presets[i].empty()) {
+         auto *pl = static_cast<const clap_plugin_preset_load_t *>(
+            plug->get_extension(plug, CLAP_EXT_PRESET_LOAD));
+         if (pl && !pl->from_location(plug, CLAP_PRESET_DISCOVERY_LOCATION_FILE,
+                                      presets[i].c_str(), ""))
+            std::fprintf(stderr, "preset load failed: %s\n", presets[i].c_str());
+      }
+
+      auto *gui = static_cast<const clap_plugin_gui_t *>(plug->get_extension(plug, CLAP_EXT_GUI));
+      if (!gui || !gui->is_api_supported(plug, RD_WINDOW_API, false)) {
+         std::fprintf(stderr, "plugin has no embedded GUI for %s\n", RD_WINDOW_API);
+         return 1;
+      }
+      if (!gui->create(plug, RD_WINDOW_API, false)) {
+         std::fprintf(stderr, "gui create failed\n");
+         return 1;
+      }
+      inst->gui = gui;
+      gui->get_size(plug, &inst->w, &inst->h);
+
+#if defined(_WIN32)
+      // A plain top-level window standing in for the host's, with the plugin's
+      // own window parented into it exactly as a DAW would.
+      RECT wanted{0, 0, static_cast<LONG>(inst->w), static_cast<LONG>(inst->h)};
+      AdjustWindowRect(&wanted, WS_OVERLAPPEDWINDOW, FALSE);
+      const std::wstring wtitle(inst->title.begin(), inst->title.end());
+      HWND hostWindow = CreateWindowExW(
+         0, L"SaeureKisteGuiHost", wtitle.c_str(), WS_OVERLAPPEDWINDOW,
+         CW_USEDEFAULT, CW_USEDEFAULT, wanted.right - wanted.left, wanted.bottom - wanted.top,
+         nullptr, nullptr, GetModuleHandleW(nullptr), nullptr);
+      if (!hostWindow) {
+         std::fprintf(stderr, "could not create the host window\n");
+         return 1;
+      }
+      inst->window = hostWindow;
+      ShowWindow(hostWindow, SW_SHOW);
+
+      clap_window_t parent{};
+      parent.api = CLAP_WINDOW_API_WIN32;
+      parent.win32 = hostWindow;
+      if (!gui->set_parent(plug, &parent)) {
+         std::fprintf(stderr, "set_parent failed\n");
+         return 1;
+      }
+      gui->show(plug);
+      std::printf("window %p  %ux%u  %s\n", static_cast<void *>(hostWindow), inst->w, inst->h,
+                  inst->title.c_str());
+      std::fflush(stdout);
+#else
+      // Side by side rather than stacked, so two of them can be photographed
+      // without moving either.
+      const int x = static_cast<int>(i) * 40;
+      const int y = static_cast<int>(i) * 40;
+      Window win = XCreateSimpleWindow(dpy, RootWindow(dpy, screen), x, y, inst->w, inst->h, 0,
+                                       BlackPixel(dpy, screen), BlackPixel(dpy, screen));
+      XStoreName(dpy, win, inst->title.c_str());
+      XSelectInput(dpy, win, StructureNotifyMask);
+      XMapWindow(dpy, win);
+      XFlush(dpy);
+      inst->window = win;
+
+      clap_window_t parent{};
+      parent.api = RD_WINDOW_API;
+      parent.x11 = static_cast<clap_xwnd>(win);
+      if (!gui->set_parent(plug, &parent)) {
+         std::fprintf(stderr, "set_parent failed\n");
+         return 1;
+      }
+      gui->show(plug);
+      XFlush(dpy);
+      std::printf("window 0x%lx  %ux%u  %s\n", win, inst->w, inst->h, inst->title.c_str());
+      std::fflush(stdout);
+#endif
+      instances.push_back(std::move(inst));
+   }
 
    // The editor publishes its parameter edits through process(), so the audio
    // thread has to keep turning for the interface to behave as it does in a host.
+   // One thread for all of them, which is what a host does per audio buffer.
    std::thread audio([&] {
       std::vector<float> l(block), r(block);
       float *chans[2] = {l.data(), r.data()};
@@ -220,81 +299,95 @@ int main(int argc, char **argv) {
       clap_output_events_t out{};
       out.try_push = [](const clap_output_events_t *, const clap_event_header_t *) { return true; };
       while (gRunning.load()) {
-         clap_process_t pr{};
-         pr.frames_count = block;
-         pr.audio_outputs = &ab;
-         pr.audio_outputs_count = 1;
-         pr.in_events = &in;
-         pr.out_events = &out;
-         plug->process(plug, &pr);
+         for (auto &inst : instances) {
+            clap_process_t pr{};
+            pr.frames_count = block;
+            pr.audio_outputs = &ab;
+            pr.audio_outputs_count = 1;
+            pr.in_events = &in;
+            pr.out_events = &out;
+            inst->plug->process(inst->plug, &pr);
+         }
          std::this_thread::sleep_for(std::chrono::milliseconds(10));
       }
    });
 
    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(liveSeconds);
    while (std::chrono::steady_clock::now() < deadline) {
+      for (auto &instPtr : instances) {
+         Instance &inst = *instPtr;
 #if defined(_WIN32)
-      // A resize the plugin asked for, taken the way a DAW takes it. The same
-      // job as the X11 branch below, but the host window's frame has to be
-      // added back: SetWindowPos sizes the whole window and the plugin asked
-      // for a client area.
-      if (gResizeWanted.exchange(false)) {
-         const uint32_t nw = gResizeW.load();
-         const uint32_t nh = gResizeH.load();
-         if (nw && nh && (nw != w || nh != h)) {
-            w = nw;
-            h = nh;
-            RECT want{0, 0, static_cast<LONG>(w), static_cast<LONG>(h)};
-            AdjustWindowRect(&want, WS_OVERLAPPEDWINDOW, FALSE);
-            SetWindowPos(hostWindow, nullptr, 0, 0, want.right - want.left,
-                         want.bottom - want.top, SWP_NOMOVE | SWP_NOZORDER);
-            std::printf("host resize %ux%u\n", w, h);
-            std::fflush(stdout);
+         // A resize the plugin asked for, taken the way a DAW takes it. The same
+         // job as the X11 branch below, but the host window's frame has to be
+         // added back: SetWindowPos sizes the whole window and the plugin asked
+         // for a client area.
+         if (inst.resizeWanted.exchange(false)) {
+            const uint32_t nw = inst.resizeW.load();
+            const uint32_t nh = inst.resizeH.load();
+            if (nw && nh && (nw != inst.w || nh != inst.h)) {
+               inst.w = nw;
+               inst.h = nh;
+               RECT want{0, 0, static_cast<LONG>(inst.w), static_cast<LONG>(inst.h)};
+               AdjustWindowRect(&want, WS_OVERLAPPEDWINDOW, FALSE);
+               SetWindowPos(inst.window, nullptr, 0, 0, want.right - want.left,
+                            want.bottom - want.top, SWP_NOMOVE | SWP_NOZORDER);
+               std::printf("host resize %ux%u  %s\n", inst.w, inst.h, inst.title.c_str());
+               std::fflush(stdout);
+            }
          }
+         // The plugin's window is repainted from the host's timer in a DAW; here
+         // there is no timer, so the host drives it.
+         if (auto *timer = static_cast<const clap_plugin_timer_support_t *>(
+                inst.plug->get_extension(inst.plug, CLAP_EXT_TIMER_SUPPORT)))
+            timer->on_timer(inst.plug, 0);
+#else
+         // A resize the plugin asked for, taken the way a DAW takes it: the host
+         // window follows the editor rather than the other way round.
+         if (inst.resizeWanted.exchange(false)) {
+            const uint32_t nw = inst.resizeW.load();
+            const uint32_t nh = inst.resizeH.load();
+            if (nw && nh && (nw != inst.w || nh != inst.h)) {
+               inst.w = nw;
+               inst.h = nh;
+               XResizeWindow(dpy, inst.window, inst.w, inst.h);
+               XFlush(dpy);
+               std::printf("host resize %ux%u  %s\n", inst.w, inst.h, inst.title.c_str());
+               std::fflush(stdout);
+            }
+         }
+#endif
       }
+
+#if defined(_WIN32)
       MSG msg;
       while (PeekMessageW(&msg, nullptr, 0, 0, PM_REMOVE)) {
          TranslateMessage(&msg);
          DispatchMessageW(&msg);
       }
-      // The plugin's window is repainted from the host's timer in a DAW; here
-      // there is no timer, so the host drives it.
-      if (auto *timer = static_cast<const clap_plugin_timer_support_t *>(
-             plug->get_extension(plug, CLAP_EXT_TIMER_SUPPORT)))
-         timer->on_timer(plug, 0);
 #else
-      // A resize the plugin asked for, taken the way a DAW takes it: the host
-      // window follows the editor rather than the other way round.
-      if (gResizeWanted.exchange(false)) {
-         const uint32_t nw = gResizeW.load();
-         const uint32_t nh = gResizeH.load();
-         if (nw && nh && (nw != w || nh != h)) {
-            w = nw;
-            h = nh;
-            XResizeWindow(dpy, win, w, h);
-            XFlush(dpy);
-            std::printf("host resize %ux%u\n", w, h);
-            std::fflush(stdout);
-         }
-      }
       while (XPending(dpy)) {
          XEvent ev;
          XNextEvent(dpy, &ev);
+         if (ev.type != ConfigureNotify)
+            continue;
          // The user resized the host window: offer the new size to the plugin
          // the way a DAW does -- adjust_size to snap it, set_size to take it --
          // and follow the plugin to the size it settled on.
-         if (ev.type == ConfigureNotify && gui->can_resize(plug)) {
+         for (auto &instPtr : instances) {
+            Instance &inst = *instPtr;
+            if (ev.xconfigure.window != inst.window || !inst.gui->can_resize(inst.plug))
+               continue;
             uint32_t nw = static_cast<uint32_t>(ev.xconfigure.width);
             uint32_t nh = static_cast<uint32_t>(ev.xconfigure.height);
-            if (nw != w || nh != h) {
-               gui->adjust_size(plug, &nw, &nh);
-               if (gui->set_size(plug, nw, nh)) {
-                  w = nw;
-                  h = nh;
-                  XResizeWindow(dpy, win, w, h);
-                  std::printf("resized %ux%u\n", w, h);
-                  std::fflush(stdout);
-               }
+            if (nw == inst.w && nh == inst.h)
+               continue;
+            inst.gui->adjust_size(inst.plug, &nw, &nh);
+            if (inst.gui->set_size(inst.plug, nw, nh)) {
+               inst.w = nw;
+               inst.h = nh;
+               XResizeWindow(dpy, inst.window, inst.w, inst.h);
+               std::printf("resized %ux%u  %s\n", inst.w, inst.h, inst.title.c_str());
+               std::fflush(stdout);
             }
          }
       }
@@ -304,10 +397,13 @@ int main(int argc, char **argv) {
 
    gRunning = false;
    audio.join();
-   plug->stop_processing(plug);
-   gui->destroy(plug);
-   plug->deactivate(plug);
-   plug->destroy(plug);
+   for (auto &instPtr : instances) {
+      Instance &inst = *instPtr;
+      inst.plug->stop_processing(inst.plug);
+      inst.gui->destroy(inst.plug);
+      inst.plug->deactivate(inst.plug);
+      inst.plug->destroy(inst.plug);
+   }
    entry->deinit();
 #if !defined(_WIN32)
    XCloseDisplay(dpy);

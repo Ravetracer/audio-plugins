@@ -57,7 +57,13 @@ public:
       buildLayout();
    }
 
-   ~PluginWindow() override { closeWindow(); }
+   ~PluginWindow() override {
+      closeWindow();
+      // The ornament animates per window, so a plugin with more than one editor
+      // open hands each one its own and asks the window to keep it.
+      if (mSpec.ownsOrnament)
+         delete mSpec.ornament;
+   }
 
 #if defined(_WIN32)
    static LRESULT CALLBACK wndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp);
@@ -2512,7 +2518,12 @@ private:
    static constexpr int kBrowserScrollW = 14;
 
    GuiDelegate &mDelegate;
-   const WindowSpec &mSpec;
+   // By value: a plugin fills the spec's per-instance fields in just before
+   // creating the window, so a reference would follow whatever the caller
+   // reused. Every plugin's createGui() keeps its spec in a function-local
+   // `static`, which means a second instance's editor would rewrite the first
+   // one's. A copy is thirty-odd scalars.
+   const WindowSpec mSpec;
    const int mWindowW;
 
 #if defined(_WIN32)

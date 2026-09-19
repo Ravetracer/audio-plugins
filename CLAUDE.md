@@ -49,7 +49,7 @@ audio-plugins/
 
 | # | Plugin | Folder | Status | Platforms | Formats | What it is |
 |---|--------|--------|--------|-----------|---------|------------|
-| 1 | **SäureKiste** | `saeure-kiste/` | 0.3.1 | Linux, Windows | CLAP, VST3 | a Roland TB-303 model, from the 1982 service notes, plus Robin Whittle's Devil Fish modification |
+| 1 | **SäureKiste** | `saeure-kiste/` | 0.4.0 | Linux, Windows | CLAP, VST3 | a Roland TB-303 model, from the 1982 service notes, plus Robin Whittle's Devil Fish modification |
 
 Naming follows the plugin, not a pattern: the CMake project, the installed
 artifact and the display name are CamelCase (`SaeureKiste`), the folder is
@@ -141,6 +141,19 @@ case is worth recording because it cost a user their DAW session:
 > the last window so an unloaded plugin cannot leave a dangling `wndProc`. X11
 > has no class registry, so this can only ever bite on Windows.
 > (Verdalis issue #1.)
+
+The second case is the same shape and is **unfixed in Verdalis as of this
+writing**: the window held its `WindowSpec` by reference while every plugin's
+`createGui()` kept that spec in a function-local `static`. One spec per binary,
+so opening a second instance's editor rewrote the pointers the first one's
+window was still reading -- for SäureKiste that meant two tracks sharing one
+pattern bank. `shared/src/gui/window.cpp` now holds the spec **by value**, and
+`WindowSpec` grew an `ownsOrnament` flag so an ornament -- which carries the
+animation state of one window -- can be allocated per window and deleted with
+it. Porting it is the same two substitutions plus the same edit in each
+plugin's `gui.cpp`. Nothing per-instance may live at file scope in a plugin
+binary; `nm -C --defined-only <plugin>.clap | grep " [bB] "` is the cheap way to
+ask.
 
 ### Rule for a shared change
 

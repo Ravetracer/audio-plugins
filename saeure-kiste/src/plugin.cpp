@@ -917,7 +917,14 @@ private:
       }
 
       if (playing && !mSeqRunning) {
-         if (!(tr && (tr->flags & CLAP_TRANSPORT_HAS_BEATS_TIMELINE)))
+         // A free-running start begins at step one, wherever the pattern
+         // happened to stop last time. What decides that is whether the
+         // position is the song's -- not whether the host merely publishes a
+         // beats timeline, which it does while it is stopped as well. Asking
+         // the wrong question meant that in a DAW that is not rolling, a key
+         // released and pressed again carried on from the middle of the
+         // pattern instead of starting it over.
+         if (!lockedToHost)
             mStepPos = 0.0;
          mLastFired = -1.0e18;
       }
@@ -1106,6 +1113,25 @@ private:
       mPresetEdited = true;
    }
 
+   // GEN: a new line, not the same one again.
+   //
+   // The seed is still a parameter and still the thing that makes a generated
+   // pattern reproducible -- this only moves it first, and through the same
+   // path a knob move takes, so the host sees the edit and can undo it.
+   //
+   // The salt is per instance and mixes a counter with the clock: two editors
+   // open on two tracks must not hand out the same sequence of seeds, and
+   // nothing here may live at file scope for exactly that reason.
+   void seqGenerateNew() override {
+      const ParamDesc &d = paramTable()[kParamRandSeed];
+      const auto now = std::chrono::steady_clock::now().time_since_epoch();
+      const auto ticks = std::chrono::duration_cast<std::chrono::nanoseconds>(now).count();
+      const uint32_t salt = ++mGenSalt ^ static_cast<uint32_t>(ticks);
+      const uint32_t seed = nextGeneratorSeed(static_cast<uint32_t>(realValue(kParamRandSeed)),
+                                              salt, static_cast<uint32_t>(d.max));
+      seqSetSeed(static_cast<int>(seed)); // writes the parameter and regenerates
+   }
+
    // ------------------------------------------------------------------ process
 
    void handleEvent(const clap_event_header_t *hdr) {
@@ -1263,11 +1289,20 @@ private:
          // the clock because the block is already split at every event, so the
          // restart lands on the sample the key arrived on rather than at the
          // top of the next block.
+         //
+         // It starts the sequencer as well as rewinding it. The clock is read
+         // once per block and before this, so a key arriving anywhere but on
+         // the block's first sample found `mSeqRunning` still false and the
+         // restart was thrown away -- the pattern then began, a block later and
+         // from wherever it had stopped, out of the clock's own start path.
+         // That is the free-running case only: locked to the host's timeline a
+         // key is a transposition and the position belongs to the song.
          if (mSeqRestartWanted) {
             mSeqRestartWanted = false;
-            if (mSeqRunning && !mSeqLockedToHost) {
+            if (sequencerMode() && !mSeqLockedToHost && mHeldKeyCount > 0) {
                mOutFrame = frame;
                seqRestart();
+               mSeqRunning = true;
             }
          }
 
@@ -1836,6 +1871,9 @@ private:
    int mTranspose = 0;
    // What sequencerMode() said on the previous block, so a change can be seen.
    bool mLastSeqMode = false;
+   // Advanced on every GEN press, so two presses in the same nanosecond still
+   // differ. Per instance, never a global -- see CLAUDE.md.
+   uint32_t mGenSalt = 0;
    // Whether the host's beat timeline is driving the position, rather than a
    // held key, which decides whether a key press may restart the pattern.
    bool mSeqLockedToHost = false;

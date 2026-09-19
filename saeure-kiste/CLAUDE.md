@@ -161,6 +161,19 @@ tool names and an environment variable from the folder name, and
   changed the state magic, so nothing older can be read at all and the format
   restarted at version 1. The next range change will need one written, and a
   self-test that builds an old blob by hand to prove it works.
+- **Nothing per-instance may live at file scope.** A DAW loads the binary once
+  and instantiates it per track, so a global, a namespace-scope variable or a
+  function-local `static` is shared by every instance in the project. This has
+  already cost one bug: `createGui()` kept its `WindowSpec` in a `static` and
+  the window held a *reference* to it, so a second instance's editor redirected
+  the first one's at the second plugin's pattern bank -- two tracks sharing one
+  bank and one pattern selection. The window now copies the spec, the spec is a
+  local, and the header ornament is allocated per window. The check is
+  mechanical: `nm -C --defined-only build/SaeureKiste.clap | grep " [bB] "`
+  should turn up nothing but lookup tables and the module-level preset
+  discovery, which is the same for every instance by definition.
+  `tools/check-instances.sh` proves it from the outside, with two editors open.
+
 - **The version lives in two places** — `project(... VERSION)` in
   `CMakeLists.txt` and `kPluginVersion` in `src/saeurekiste.h`. A
   `static_assert` fails the build when they disagree. Bump both.

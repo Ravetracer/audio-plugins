@@ -120,6 +120,20 @@ struct GenSettings {
 //  2. It knows some things about bass lines -- see the implementation.
 void generatePattern(const GenSettings &settings, uint16_t *steps);
 
+// A seed to generate from next, for the GEN button.
+//
+// GEN used to regenerate from the seed that was already set, which made it a
+// no-op unless one of the densities had moved -- press it twice and you got
+// the same sixteen steps twice. What a player reaches for it for is a new
+// line, so it picks a new seed instead: `salt` is whatever the caller has that
+// changes between presses, and the result is in 0..maxSeed and never equal to
+// `current`, so every press is a pattern that was not there before.
+//
+// The seed stays visible and stays a parameter, which is the point of it --
+// the line GEN just made is a number that can be written down, nudged with the
+// - and + buttons, and automated.
+uint32_t nextGeneratorSeed(uint32_t current, uint32_t salt, uint32_t maxSeed);
+
 // The default pattern a fresh instance starts with. Sixteen steps that show
 // what the instrument does rather than sixteen rests, because an empty
 // sequencer looks broken.
@@ -169,7 +183,12 @@ public:
    // Writes the seed back as a proper parameter edit, so the host sees it, and
    // regenerates from it.
    virtual void seqSetSeed(int seed) = 0;
+   // Regenerates from the seed that is set. Deterministic, and what the - and
+   // + buttons use.
    virtual void seqGenerate() = 0;
+   // Picks a new seed and generates from that: what GEN does, and what a
+   // player expects from a button called GEN -- a new pattern every press.
+   virtual void seqGenerateNew() = 0;
 
    // Writes the selected pattern to a temporary .mid file and returns the path,
    // or an empty string if there was nothing to write or nowhere to write it.

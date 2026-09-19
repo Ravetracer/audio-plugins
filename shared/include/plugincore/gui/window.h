@@ -187,11 +187,18 @@ struct WindowSpec {
    int mixerCount;
 
    // Optional; nothing is drawn behind the wordmark when it is null.
+   //
+   // An ornament carries its own animation state, so it belongs to one window
+   // rather than to the plugin: two editors open at once would otherwise pump
+   // and decay the same envelope against each other. Set `ownsOrnament` and
+   // the window deletes it when it closes.
    HeaderOrnament *ornament;
+   bool ownsOrnament;
 };
 
-// Creates the window. Returns nullptr if no X display could be opened. `spec`
-// must outlive the window.
+// Creates the window. Returns nullptr if no X display could be opened. The
+// window copies the spec, so the caller may keep it on the stack -- and must
+// not reuse one spec for two windows expecting them to stay apart.
 Gui *createWindow(GuiDelegate &delegate, const WindowSpec &spec);
 
 } // namespace plugincore

@@ -73,7 +73,13 @@ public:
       buildLayout();
    }
 
-   ~PluginWindow() override { closeWindow(); }
+   ~PluginWindow() override {
+      closeWindow();
+      // The ornament animates per window, so a plugin with more than one editor
+      // open hands each one its own and asks the window to keep it.
+      if (mSpec.ownsOrnament)
+         delete mSpec.ornament;
+   }
 
 #if defined(_WIN32)
    static LRESULT CALLBACK wndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp);
@@ -2652,7 +2658,9 @@ private:
          return true;
       }
       if (mSeqGenRect.contains(x, y)) {
-         mSpec.pattern->seqGenerate();
+         // A new pattern every press. The - and + buttons are the deterministic
+         // half: they step the seed and regenerate from it.
+         mSpec.pattern->seqGenerateNew();
          mDirty = true;
          return true;
       }
@@ -3345,7 +3353,17 @@ private:
    static constexpr int kBrowserScrollW = 14;
 
    GuiDelegate &mDelegate;
-   const WindowSpec &mSpec;
+   // By value, and that matters. A plugin describes itself once, as a constant
+   // table, and fills the two per-instance pointers in -- the pattern access
+   // and the window host -- just before it creates the window. Holding a
+   // reference to the caller's spec meant that whatever the caller reused, the
+   // window followed: SaeureKiste's createGui() kept one function-local
+   // `static` spec, so opening a second instance's editor rewrote the first
+   // one's, and both windows then drew and edited the second plugin's pattern
+   // bank. Two tracks of the same plugin shared their patterns and their
+   // pattern selection. A copy is thirty-odd scalars and it makes the window
+   // own everything it reads.
+   const WindowSpec mSpec;
    const int mWindowW;
 
 #if defined(_WIN32)

@@ -1,10 +1,37 @@
 # SäureKiste -- status
 
-Version 0.3.1. Linux and Windows, CLAP and VST3. 51 parameters, 27 presets,
-builds clean, self-test passes with no failures across 143 checks.
+Version 0.4.0. Linux and Windows, CLAP and VST3. 51 parameters, 27 presets,
+builds clean, self-test passes with no failures across 151 checks, and
+`tools/check-instances.sh` passes with two editors open at once.
 
 Six of seven fixes were confirmed by backing the bug out and watching the suite
 fail; the seventh has no contract to assert. See `TODO.md` §3.
+
+0.4.0 makes **GEN** generate. It regenerated from the seed that was already
+set, so pressing it twice gave the same sixteen steps twice -- a button that did
+nothing unless one of the densities had moved. It now picks a seed that is not
+the current one and generates from that, so every press is a new line, which is
+what every other generator does. The seed is still a parameter and still what
+makes a pattern reproducible: the line GEN just made is a number, and the - and
++ buttons still walk through seeds one at a time.
+
+0.3.3 makes two instances independent of each other. Every editor was reading
+one window description, because the plugin handed `createWindow()` a
+function-local `static` and the window kept a *reference* to it: opening a
+second instance's editor redirected the first one's window at the second
+plugin's pattern bank. Two tracks of SaeureKiste shared their patterns and their
+pattern selection, and a pattern written in one appeared in -- and vanished
+with -- the other. The window now copies what it is given, the spec is a local,
+and the header ornament is one per window rather than one per binary. Nothing
+mutable is left at file scope but the module-level preset discovery, which is
+the same for every instance by definition.
+
+0.3.2 fixes the sequencer restart in a stopped DAW. Releasing the key and
+pressing it again carried on from the step the pattern had stopped on instead of
+starting it over, because the restart was dropped whenever the key did not
+arrive on a block's first sample, and because the free-run start path only
+rewound the position when the host published no beats timeline -- a stopped DAW
+publishes one. Four checks cover it, against a reference run of the same line.
 
 0.3.1 makes the octave lane readable: up is the accent green and down is amber,
 where both directions used to be the same colour and, at two octaves, nearly the
