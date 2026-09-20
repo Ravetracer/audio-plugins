@@ -8,7 +8,7 @@ subtitle: CLAP and VST3 instrument for Linux and Windows
 
 *A monophonic acid bass synthesiser. Linux and Windows, CLAP and VST3.*
 
-Version 0.7.0
+Version 0.7.1
 
 ---
 

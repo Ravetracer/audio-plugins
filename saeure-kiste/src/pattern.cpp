@@ -398,14 +398,22 @@ uint32_t nextGeneratorSeed(uint32_t current, uint32_t salt, uint32_t maxSeed) {
       x ^= x >> 15;
       x *= 0x846CA68Bu;
       x ^= x >> 16;
-      const uint32_t candidate = x % (maxSeed + 1);
+      // maxSeed + 1 is the size of the range -- except at the top of the
+      // word, where it wraps to zero and a modulo by it is a division by
+      // zero. That is not hypothetical: the seed's range was widened to the
+      // whole of a 32-bit word in 0.7.0 so it could be set from a Unix
+      // timestamp, and GEN crashed the plugin on the first press. When the
+      // range is the whole word there is nothing to fold into, so x is
+      // already a value in it.
+      const uint32_t span = maxSeed + 1;
+      const uint32_t candidate = span == 0 ? x : x % span;
       if (candidate != current)
          return candidate;
       // The one in ten thousand that came back with the seed already set. Mix
       // again rather than return it: GEN has to change something.
       x += 0x9E3779B9u;
    }
-   return current + 1 > maxSeed ? 0 : current + 1;
+   return current >= maxSeed ? 0 : current + 1;
 }
 
 } // namespace saeurekiste

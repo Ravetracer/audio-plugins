@@ -1825,7 +1825,12 @@ int runSelfTest(const clap_plugin_entry_t *entry, double sampleRate) {
       // The seed stays a parameter: the pattern GEN just made is still a
       // number that can be written down and stepped back to.
       {
-         const uint32_t kMaxSeed = 9999;
+         // From the parameter table, never a literal. This was hard-coded at
+         // 9999 and stayed there when the seed's range was widened to the
+         // whole of a 32-bit word, so the suite went on testing a range the
+         // plugin no longer had -- and missed that GEN divided by zero at the
+         // top of the real one.
+         const uint32_t kMaxSeed = static_cast<uint32_t>(paramTable()[kParamRandSeed].max);
          uint32_t seed = 1;
          bool inRange = true, everRepeated = false, everStood = false;
          int distinct = 0;
@@ -1851,6 +1856,21 @@ int runSelfTest(const clap_plugin_entry_t *entry, double sampleRate) {
          std::printf("       GEN: %d presses, %s, last seed %u\n", distinct,
                      everRepeated ? "a pattern came back" : "no pattern came back", seed);
          check(inRange, "a generated seed stays inside the parameter's range");
+         // The top of the word specifically: there the range is 2^32, which
+         // does not fit in the uint32 that counts it.
+         {
+            bool topOk = true;
+            uint32_t at = 0;
+            for (uint32_t press = 0; press < 32; ++press) {
+               const uint32_t next = nextGeneratorSeed(at, press, 0xFFFFFFFFu);
+               if (next == at)
+                  topOk = false;
+               at = next;
+            }
+            check(topOk, "GEN works when the seed's range is the whole 32-bit word");
+         }
+         check(nextGeneratorSeed(0xFFFFFFFFu, 1, 0xFFFFFFFFu) != 0xFFFFFFFFu,
+               "and from the very last seed in it");
          check(!everStood, "GEN never hands back the seed that is already set");
          check(!everRepeated, "sixty-four presses of GEN give sixty-four different patterns");
 

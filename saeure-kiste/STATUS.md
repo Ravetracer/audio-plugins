@@ -1,11 +1,31 @@
 # SäureKiste -- status
 
-Version 0.7.0. Linux and Windows, CLAP and VST3. 63 parameters, 27 presets,
-builds clean, self-test passes with no failures across 233 checks, and
+Version 0.7.1. Linux and Windows, CLAP and VST3. 63 parameters, 27 presets,
+builds clean, self-test passes with no failures across 235 checks, and
 `tools/check-instances.sh` passes with two editors open at once.
 
 Six of seven fixes were confirmed by backing the bug out and watching the suite
 fail; the seventh has no contract to assert. See `TODO.md` §3.
+
+0.7.1 fixes a crash in GEN, and it is the kind worth writing down because the
+test suite watched it go past.
+
+Widening the generator seed to the whole of a 32-bit word in 0.7.0 left
+`nextGeneratorSeed()` computing `x % (maxSeed + 1)`. At the top of the word
+that addition wraps to zero, so the modulo is a division by zero: pressing GEN
+took the host down with SIGFPE, on the first press, every time.
+
+**The suite had a test for GEN and it passed.** It ran sixty-four presses and
+checked the range, the repeats and the determinism -- against
+`const uint32_t kMaxSeed = 9999`, a literal that had been correct until the
+range moved and was never touched again. It was testing a plugin that no
+longer existed. The maximum now comes out of `paramTable()`, so it cannot
+drift again, and two checks sit beside it for the top of the word
+specifically. Both were confirmed to crash the suite with the fix backed out.
+
+The lesson is the general one: a constant copied into a test is a second
+source of truth, and the copy does not fail when the original changes -- it
+keeps passing.
 
 0.7.0 makes a long note a thing that can be drawn, adds a delay, and gives the
 sequencer a mode meant for playing rather than for writing.

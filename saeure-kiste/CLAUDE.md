@@ -139,6 +139,15 @@ tool names and an environment variable from the folder name, and
   goes low across a slide, so the envelope keeps running. This is true for both
   play modes — an overlapping MIDI note and a slid sequencer step. It is the
   single most audible behaviour of the instrument and the easiest to break.
+- **A range that reaches the top of a word breaks `+ 1`.** The generator seed
+  spans 0 to 4294967295, so `maxSeed + 1` -- the obvious way to write "the size
+  of the range" -- wraps to zero, and `x % 0` took the host down every time GEN
+  was pressed. Anything that counts this range needs the full-word case
+  spelled out. It is not only arithmetic: a uint32 cannot hold 2^32.
+- **Never copy a parameter's range into a test.** The suite's GEN test carried
+  `const uint32_t kMaxSeed = 9999` and went on passing after the real range
+  moved, because it was asserting about a plugin that no longer existed -- and
+  that is why the crash above shipped. Take the bound from `paramTable()`.
 - **A long note is a run of tied steps, not a step with a length.** A note held
   over eight steps is eight steps on the same pitch, each sliding into the next
   -- which is how the hardware does it, and it is why the window can draw one
