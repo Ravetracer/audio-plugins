@@ -63,6 +63,69 @@ def split_header(text):
     return meta, text[end + 4 :].lstrip("\n")
 
 
+# ---------------------------------------------------------------- page breaks
+#
+# `page-break-after: avoid` on a heading is in the stylesheet and wkhtmltopdf's
+# WebKit ignores it, which is how a section heading ends up alone at the foot of
+# a page with its content overleaf. What that build *does* honour is
+# `page-break-inside: avoid` on a block -- so the heading and the block under it
+# are wrapped in one, and the pair moves to the next page together or not at
+# all.
+#
+# The exception is a long table. Binding a heading to a table half a page deep
+# would push both to a fresh page and leave the hole it was meant to close, so
+# past a threshold the heading is left to take its chances.
+KEEP_WITH_HEADING = re.compile(r"^<h([234])[ >]")
+MAX_KEPT_ROWS = 10
+
+
+def top_level_blocks(html_text):
+    """Splits the converted body into its top-level elements.
+
+    python-markdown emits a flat sequence of them, so this only has to track
+    the depth of the tags it opens and closes rather than parse anything.
+    """
+    blocks, depth, start = [], 0, 0
+    for m in re.finditer(r"<(/?)([a-zA-Z][a-zA-Z0-9]*)([^>]*)>", html_text):
+        closing, name, rest = m.group(1), m.group(2).lower(), m.group(3)
+        if name in ("br", "hr", "img", "meta", "link") or rest.endswith("/"):
+            continue
+        if closing:
+            depth -= 1
+            if depth == 0:
+                blocks.append(html_text[start : m.end()])
+                start = m.end()
+        else:
+            if depth == 0:
+                between = html_text[start : m.start()]
+                if between.strip():
+                    blocks.append(between)
+                start = m.start()
+            depth += 1
+    tail = html_text[start:]
+    if tail.strip():
+        blocks.append(tail)
+    return blocks
+
+
+def keep_headings_with_content(html_text):
+    blocks = top_level_blocks(html_text)
+    out, i = [], 0
+    while i < len(blocks):
+        block = blocks[i]
+        following = blocks[i + 1] if i + 1 < len(blocks) else ""
+        long_table = following.lstrip().startswith("<table") and (
+            following.count("<tr") > MAX_KEPT_ROWS
+        )
+        if KEEP_WITH_HEADING.match(block.lstrip()) and following.strip() and not long_table:
+            out.append('<div class="keep">%s\n%s</div>' % (block, following))
+            i += 2
+            continue
+        out.append(block)
+        i += 1
+    return "\n".join(out)
+
+
 def data_uri(path):
     suffix = pathlib.Path(path).suffix.lower()
     mime = {".png": "image/png", ".svg": "image/svg+xml", ".jpg": "image/jpeg"}.get(
@@ -74,16 +137,69 @@ def data_uri(path):
     )
 
 
+# Markdown image references, resolved against the manual source's own folder
+# and inlined. The output has to stand on its own -- it is published as a web
+# manual and wkhtmltopdf renders it with no access to the file system -- so a
+# relative <img src> would be a broken image in both.
+IMG_SRC = re.compile(r'(<img\b[^>]*?\bsrc=")([^"]+)(")')
+
+
+def inline_images(html_text, base_dir):
+    def one(match):
+        src = match.group(2)
+        if src.startswith(("data:", "http:", "https:")):
+            return match.group(0)
+        path = (base_dir / src).resolve()
+        if not path.is_file():
+            sys.exit("manual.py: no such image: %s" % src)
+        return match.group(1) + data_uri(path) + match.group(3)
+
+    return IMG_SRC.sub(one, html_text)
+
+
+# A figure is an image on a paragraph of its own, optionally with the alt text
+# under it as a caption. Markdown has no syntax for one, so the shape it does
+# produce -- a <p> holding nothing but an <img> -- is promoted here.
+LONE_IMAGE = re.compile(r"<p>\s*(<img\b[^>]*>)\s*</p>")
+
+
+def figures(html_text):
+    def one(match):
+        img = match.group(1)
+        alt = re.search(r'\balt="([^"]*)"', img)
+        caption = ""
+        if alt and alt.group(1):
+            caption = "<figcaption>%s</figcaption>" % alt.group(1)
+        return '<figure>%s%s</figure>' % (img, caption)
+
+    return LONE_IMAGE.sub(one, html_text)
+
+
 def logo_markup(path, plugin):
-    """The cover image, or a plain wordmark when no logo file was given."""
+    """The cover image, when there is one.
+
+    There used to be a fallback here: with no logo file the cover printed the
+    plugin's name as a small letter-spaced wordmark. That put the name on the
+    cover *twice*, because the line below it is the name as well -- once in
+    22pt capitals and once in 40pt. A collection logo is a mark for the
+    collection, and standing the plugin's own name in for it says nothing the
+    next line does not say louder. So there is no fallback: without a logo the
+    cover simply starts at the name.
+    """
     if path and pathlib.Path(path).is_file():
         return '<img src="%s" alt="%s">' % (data_uri(path), html.escape(plugin))
-    return '<p class="wordmark">%s</p>' % html.escape(plugin)
+    return ""
 
 
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--plugin", required=True)
+    # What the plugin is *called*, where that is not what it is filed under.
+    # SaeureKiste is the CMake project, the binary and the preset directory,
+    # and none of those may carry an umlaut; the instrument is SaeureKiste's
+    # display name and is what the cover and the prose say. Defaults to
+    # --plugin, so a plugin whose two names agree passes nothing.
+    ap.add_argument("--display-name", default="")
     ap.add_argument("--version", required=True)
     ap.add_argument("--source", required=True)
     ap.add_argument("--params", required=True)
@@ -95,13 +211,15 @@ def main():
     ap.add_argument("--out", required=True)
     args = ap.parse_args()
 
+    display = args.display_name or args.plugin
+
     source = pathlib.Path(args.source).read_text(encoding="utf-8")
     meta, body = split_header(source)
 
     substitutions = {
         "{{PARAMETER_REFERENCE}}": pathlib.Path(args.params).read_text(encoding="utf-8"),
         "{{PRESET_LIBRARY}}": pathlib.Path(args.presets).read_text(encoding="utf-8"),
-        "{{PLUGIN}}": args.plugin,
+        "{{PLUGIN}}": display,
         "{{VERSION}}": args.version,
     }
     for token, value in substitutions.items():
@@ -112,12 +230,14 @@ def main():
         sys.exit("manual.py: unsubstituted placeholder(s): %s" % ", ".join(sorted(set(missing))))
 
     md = markdown.Markdown(extensions=EXTENSIONS, extension_configs=EXTENSION_CONFIGS)
-    content = md.convert(body)
+    base_dir = pathlib.Path(args.source).resolve().parent
+    content = figures(inline_images(md.convert(body), base_dir))
+    content = keep_headings_with_content(content)
 
     accent = meta.get("accent", "#2E8B7A")
     css = pathlib.Path(args.css).read_text(encoding="utf-8").replace("ACCENT", accent)
 
-    title = "%s %s — Manual" % (args.plugin, args.version)
+    title = "%s %s — Manual" % (display, args.version)
     built = datetime.date.today().isoformat()
 
     document = """<!DOCTYPE html>
@@ -148,8 +268,8 @@ def main():
 """.format(
         title=html.escape(title),
         css=css,
-        logo=logo_markup(args.logo, args.plugin),
-        plugin=html.escape(args.plugin),
+        logo=logo_markup(args.logo, display),
+        plugin=html.escape(display),
         tagline=html.escape(meta.get("tagline", "")),
         subtitle=html.escape(meta.get("subtitle", "CLAP instrument for Linux and Windows")),
         version=html.escape(args.version),

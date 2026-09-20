@@ -13,7 +13,7 @@ namespace saeurekiste {
 namespace {
 
 const char *const kWaveformNames[] = {"Sawtooth", "Square"};
-const char *const kModeNames[] = {"MIDI", "Sequencer"};
+const char *const kModeNames[] = {"MIDI", "Sequencer", "Live"};
 const char *const kRateNames[] = {"1/32", "1/16T", "1/16", "1/8T", "1/8"};
 const char *const kScaleNames[] = {"Minor",  "Major",    "Minor Pent", "Major Pent",
                                    "Dorian", "Phrygian", "Blues",      "Chromatic"};
@@ -28,6 +28,11 @@ const char *const kSweepSpeedNames[] = {"Normal", "Fast", "Slow"};
 const char *const kDistNames[] = {"Soft Clip", "Overdrive", "Tube",  "Valve Stack",
                                   "Fuzz",      "Rectifier", "Crush"};
 const char *const kOnOffNames[] = {"Off", "On"};
+const char *const kDelaySyncNames[] = {"Free", "Synced"};
+// A preset stores the *name*, so this list may not be reordered.
+const char *const kDelayDivNames[] = {"1/32", "1/16T", "1/16", "1/8T", "1/8",
+                                      "1/8.", "1/4T", "1/4",  "1/2"};
+const char *const kDelayModeNames[] = {"Mono", "Stereo", "Ping-Pong"};
 
 // Where the numbers come from.
 //
@@ -278,7 +283,7 @@ const ParamDesc kParams[kNumParams] = {
    // only which steps are accented and leaves the notes exactly where they
    // were. A generator that reshuffled everything on every tweak would be a
    // slot machine rather than an instrument.
-   STEP(kParamRandSeed, "rand_seed", "Seed", "Generator", 0.0, 9999.0, 1.0, "",
+   STEP(kParamRandSeed, "rand_seed", "Seed", "Generator", 0.0, 4294967295.0, 1.0, "",
         "Which pattern. Step it with the - and + buttons beside the grid and the "
         "pattern regenerates as you go, which is how this is meant to be used: hold "
         "the settings still and walk through seeds until one of them is the one."),
@@ -425,6 +430,80 @@ const ParamDesc kParams[kNumParams] = {
          "that otherwise has only odd ones, and what makes a distortion sound like a "
          "circuit rather than like arithmetic. It does nothing at all to Soft Clip, "
          "which is symmetric by construction and stays as it was."),
+
+   // ----------------------------------------------------------------- delay
+   //
+   // The last stage in the box, and the second one the service notes know
+   // nothing about. Every part of it is an equation out of a named source --
+   // see dsp/delay.h for which, and for the one place it leaves them, which is
+   // the feedback going past unity.
+   ENUM(kParamDelayOn, "delay_on", "Enable", "Delay", 0.0, kOnOffNames,
+        "Whether the delay is in the path at all. Off is the default and off is "
+        "what every preset written before this stage existed loads as, so nothing "
+        "that already sounded a particular way has moved. Off is a true bypass: the "
+        "lines stop being read and the repeats stop being mixed, but what is already "
+        "in them is kept, so switching back on carries on from where it was rather "
+        "than from silence."),
+   ENUM(kParamDelaySync, "delay_sync", "Sync", "Delay", 1.0, kDelaySyncNames,
+        "Where the delay time comes from. Synced takes it from the host's tempo and "
+        "the Division chip, which is what keeps the repeats in time with the "
+        "sequencer through a tempo change. Free takes it from the Time knob and "
+        "ignores the tempo, which is the setting for the delays that are not "
+        "supposed to be in time -- a slapback under 100 ms, or a length deliberately "
+        "against the grid."),
+   LOG(kParamDelayTime, "delay_time", "Time", "Delay", 0.5880456, 20.0, 2000.0, "ms",
+       "The delay time when Sync is Free, from a slapback to two seconds. It does "
+       "nothing when Sync is Synced. The read head glides to a new setting over "
+       "about 50 ms rather than jumping, so turning this knob bends the repeats the "
+       "way a tape delay does instead of clicking -- which is a sound in its own "
+       "right and is the reason the smoothing is that slow."),
+   ENUM(kParamDelayDivision, "delay_div", "Division", "Delay", 5.0, kDelayDivNames,
+        "The delay time as a note value, when Sync is Synced. A dotted eighth is the "
+        "one this instrument is usually reached for with: it puts a repeat between "
+        "every pair of sixteenths and turns a plain line into a rolling one. The "
+        "triplet values do the same against a straight pattern and the straight ones "
+        "reinforce it. Half a note at a slow tempo is longer than the buffer holds "
+        "and is clamped to three seconds."),
+   LIN(kParamDelayFeedback, "delay_feedback", "Feedback", "Delay", 0.0, 130.0, 35.0, "%",
+       "How much of each repeat is fed back in to make the next one. Up to 100 % the "
+       "stage is the IIR comb filter its source prints, and the repeats die away at "
+       "a rate this sets. Past 100 % they do not: the source's own stability "
+       "condition is broken on purpose and the loop is held up by the soft clipper "
+       "in it instead, so the repeats grow, saturate and then sit there as a "
+       "self-oscillating drone under whatever is played over them. That is what the "
+       "top thirty per cent of this knob is for. It cannot run away -- the clipper "
+       "bounds it -- but it will not stop on its own either, and Delay off or Mix at "
+       "zero is how it is stopped."),
+   PCT(kParamDelayMix, "delay_mix", "Mix", "Delay", 0.25,
+       "How much of the repeats is heard against the dry instrument. A crossfade, "
+       "the same one Dist Mix is, so at 100 % only the delay is heard and the "
+       "instrument itself is gone -- which is worth knowing before turning it all "
+       "the way up. At zero the stage is bypassed however everything else is set."),
+   ENUM(kParamDelayMode, "delay_mode", "Routing", "Delay", 1.0, kDelayModeNames,
+        "How the two delay lines are wired. Mono is one line heard in both channels: "
+        "the repeats sit exactly where the instrument does. Stereo is two lines, the "
+        "right one running at two thirds of the left, so the repeats interleave and "
+        "spread. Ping-Pong crosses the input and the feedback, which walks each "
+        "repeat from one side to the other and back. Width opens or closes whichever "
+        "of the two stereo modes is set, and has nothing to do in Mono."),
+   LIN(kParamDelayWidth, "delay_width", "Width", "Delay", 0.0, 200.0, 100.0, "%",
+       "How wide the repeats are spread, as a mid/side matrix over the delay's own "
+       "output and nothing else -- the dry instrument stays where it is. 100 % is "
+       "the two lines as they come out, 0 % folds them to the middle, and above that "
+       "they are pushed outwards past where a pair of speakers puts them. It does "
+       "nothing in Mono, where the two sides are the same signal and there is no "
+       "side to widen."),
+
+   // ----------------------------------------------------- live mode's octave
+   STEP(kParamPatternOctave, "pattern_octave", "Pattern Oct", "Sequencer", -4.0, 4.0, 0.0, "oct",
+        "Moves the whole running pattern by octaves, without touching a single "
+        "step. It is what replaces the keyboard in Live mode, where the keys are "
+        "busy selecting patterns -- but it is not limited to Live mode and adds to "
+        "the held-key transpose in the other two, so a line written low can be "
+        "played an octave up without rewriting it or holding a key. A step that "
+        "would land outside MIDI's own range is clamped rather than wrapped, so a "
+        "pattern pushed four octaves up flattens at the top instead of folding "
+        "back into the bass."),
 };
 
 #undef LIN
@@ -439,6 +518,33 @@ const ParamDesc kParams[kNumParams] = {
 // host cannot read rather than as a wrong one.
 
 } // namespace
+
+// How many beats each delay Division is. A quarter note is one beat, a triplet
+// is two thirds of the straight value it is named after, and a dotted one is
+// one and a half of it.
+double delayDivisionBeats(int division) {
+   switch (division) {
+   case kDelayDiv32:
+      return 0.125;
+   case kDelayDiv16T:
+      return 1.0 / 6.0;
+   case kDelayDiv16:
+      return 0.25;
+   case kDelayDiv8T:
+      return 1.0 / 3.0;
+   case kDelayDiv8Dot:
+      return 0.75;
+   case kDelayDiv4T:
+      return 2.0 / 3.0;
+   case kDelayDiv4:
+      return 1.0;
+   case kDelayDiv2:
+      return 2.0;
+   case kDelayDiv8:
+   default:
+      return 0.5;
+   }
+}
 
 // Steps per beat for each Rate setting. 1/16 is four to the beat.
 double stepsPerBeat(int rate) {

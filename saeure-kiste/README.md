@@ -22,7 +22,7 @@ the Muffler, the soft attack, the volume envelope as a control, the three accent
 sweep speeds, and the widened ranges. Every one of them defaults to the stock
 circuit, so the plugin is a TB-303 until you ask it not to be.
 
-Fifty-one parameters, twenty-seven presets.
+Sixty-three parameters, twenty-seven presets.
 
 Not affiliated with or endorsed by Roland Corporation. *TB-303* is their
 trademark and is used here only to name what was modelled. Not affiliated with
@@ -137,6 +137,49 @@ sounds exactly as it did. That is checked rather than asserted: the whole
 factory library renders byte for byte what it rendered before, at 44.1 and
 48 kHz.
 
+### The delay
+
+The second stage the machine does not have, built the same way the drive stage
+was -- out of the literature, with the source beside every part of it in
+`src/dsp/delay.h`. It sits after everything else and it is **off by default**,
+so nothing that already sounded a particular way has moved.
+
+| Control | |
+|---|---|
+| **Enable** | Whether the stage is in the path. Off keeps what is in the lines, so switching back on carries on rather than starting from silence. |
+| **Sync** | Free takes the time from the Time knob; Synced takes it from the host's tempo and the Division chip. |
+| **Time** | 20 ms to two seconds, when Sync is Free. Turning it bends the repeats: the read head glides to a new setting over about 50 ms, the way a tape delay does. |
+| **Division** | The time as a note value, a thirty-second to a half note, when Sync is Synced. A dotted eighth is the default. |
+| **Feedback** | 0 to **130 %**. See below. |
+| **Mix** | The repeats against the dry instrument, as a crossfade. At zero the stage is bypassed. |
+| **Routing** | Mono, Stereo, or Ping-Pong. |
+| **Width** | A mid/side matrix over the repeats and nothing else -- the dry instrument does not move. Nothing to do in Mono. |
+
+| Part | Source |
+|---|---|
+| The line, and its feedback | Zölzer, *DAFX* 2/e, eq 2.61 and 2.62 -- the IIR comb filter |
+| Reading it at a fractional delay | *DAFX* 2.5.4 |
+| Stereo and Ping-Pong | Pirkle, *Designing Audio Effect Plugins in C++* 2/e, figures 14.12 and 14.13 |
+| Width | M. Gruhn, musicdsp.org entry 256, public domain |
+
+**Feedback above 100 %, and why it does not blow up.** Up to unity the stage is
+the comb filter its source prints and the repeats die away. Past it they do not:
+*DAFX* states the stability condition outright -- above unity "the signal would
+grow endlessly" -- and this breaks it on purpose. The loop is closed through the
+same soft clipper the instrument's own output stage uses, so instead of
+overflowing, the repeats grow, saturate, and sit there as a self-oscillating
+drone to play over. Thirty seconds at the top of the knob peaks at 1.000 and
+stays finite, and the self-test asserts it. It will not stop on its own: Enable
+off, or Mix at zero, is how it is stopped.
+
+**Ping-Pong does not follow its figure exactly**, and that is deliberate.
+Pirkle's diagram crosses the inputs as well as the feedback, which is right for
+a stereo source and does nothing at all for a monophonic one -- both lines would
+be fed the same signal and both taps would stay equal for ever. Here the
+instrument goes into the left line only and the feedback crosses, so the repeats
+alternate. The self-test checks that the first repeat is on one side and the
+second is on the other.
+
 ### The mods
 
 Ten more, on their own row. Every one of them was a hard-coded constant in the
@@ -182,7 +225,9 @@ cell width, for a pattern longer than sixteen, with the rest scrolled to:
 - **slide**, **accent** and **vibrato** lanes below. Click or drag.
 - **CLEAR**, two **shift** buttons that walk the pattern sideways under the bar,
   the **seed** with its - and + buttons, **GEN**, and **MIDI**, which drags the
-  pattern into the host.
+  pattern into the host. The seed runs **0 to 4,294,967,295** -- wide enough to
+  take a Unix timestamp, so seeding from the clock gives a line you have never
+  heard. Click the reading to type one.
 - a **scrollbar** under the lanes, for a pattern longer than the grid draws. The
   wheel works anywhere over the grid, and while the sequencer runs the grid
   follows the playing step.
@@ -195,6 +240,35 @@ sixteenths, 128 is eight, which is long enough to hold a melody. The generator
 fills exactly the length that is set, and because its draws are per step and in
 order, turning Steps up *extends* the line the seed already described instead of
 replacing it.
+
+### Live mode: patterns from a pad
+
+Set **Mode** to **Live** and the keyboard stops transposing the pattern and
+starts selecting them. Everything else about the sequencer is unchanged.
+
+That one swap is the point. Transposing from the keys is the machine's own
+behaviour and it is the wrong thing entirely in front of a pad controller,
+where what the pads should do is change pattern. In Live mode:
+
+- a key the map does not know about **runs the pattern**, at the pitch it was
+  written at;
+- a mapped key **selects its pattern**, or steps the bank one either way;
+- stepping **stops at the ends** rather than wrapping -- nothing happening at
+  the end of the bank beats landing on pattern 1 halfway through a bar;
+- **Pattern Oct**, the `OCT` reading with its `-` and `+` above the grid, moves
+  the whole running pattern by octaves, since the keyboard no longer does. It
+  works in the other two modes too, where it adds to the held-key transpose,
+  and it is an ordinary automatable parameter. Click the reading to zero it.
+
+**To build the map**, press `MAP`. The bank becomes the pad layout; click a
+pattern, or the `PREV` or `NEXT` button, then play the note you want to reach
+it. The cell shows the note from then on. Right-click a cell to unbind it,
+right-click `MAP` to clear the whole map. One note does one thing: learning a
+note onto a new target takes it off whatever it did before.
+
+**The map is saved with the project, not with the preset** -- a pad layout
+belongs to the rig, and browsing presets mid-set must not remap your
+controller.
 
 ### The pattern bank
 

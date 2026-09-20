@@ -77,6 +77,46 @@ body {
    color: #1B5A48;
 }
 
+/* ----------------------------------------------------------------- figures
+ *
+ * A screenshot of the interface, with its alt text repeated underneath as a
+ * caption. Kept whole: an interface photographed across a page break is worse
+ * than one a little further down the page. The rule under it is the same
+ * hairline the tables use, so a figure reads as part of the furniture rather
+ * than as something pasted on. */
+figure {
+   margin: 5mm 0 6mm;
+   page-break-inside: avoid;
+   text-align: center;
+}
+
+figure img {
+   max-width: 100%;
+   border: 1px solid #D5DBD8;
+   border-radius: 2px;
+}
+
+/* Nothing is scaled up. A screenshot lands at its own pixel size -- which at
+ * 96dpi puts a one-knob panel at about 48mm and a seven-knob one at 160mm --
+ * so the figures come out in the same proportion to each other as the panels
+ * they photograph, and none of them is blown up into blur. Only a whole window
+ * is wider than the text column, and max-width brings that one back. */
+
+figcaption {
+   font-size: 8.5pt;
+   color: #5A6B64;
+   margin-top: 2mm;
+   font-style: italic;
+}
+
+/* A heading and the block under it, bound together by manual.py so that
+ * wkhtmltopdf cannot leave the heading stranded at the foot of a page. The
+ * stylesheet's own page-break-after on the heading is ignored by its WebKit;
+ * page-break-inside on a block is not. */
+.keep {
+   page-break-inside: avoid;
+}
+
 /* ---------------------------------------------------------------- headings */
 
 h1, h2, h3, h4 {

@@ -102,8 +102,13 @@ bool paramValueToText(const ParamDesc &desc, double raw, char *out, uint32_t out
       break;
    }
    case ParamKind::Stepped:
-      n = std::snprintf(out, outSize, "%d%s%s", static_cast<int>(real), desc.unit[0] ? " " : "",
-                        desc.unit);
+      // %.0f rather than %d, and long long rather than int, because a stepped
+      // parameter's range is whatever the plugin says it is: SaeureKiste's
+      // generator seed spans the whole of a 32-bit word so that a Unix
+      // timestamp can be typed into it, and casting that to int overflows --
+      // which printed "-2147483648" and would not read back.
+      n = std::snprintf(out, outSize, "%lld%s%s", static_cast<long long>(real),
+                        desc.unit[0] ? " " : "", desc.unit);
       break;
    case ParamKind::Percent:
       n = std::snprintf(out, outSize, "%.1f %%", real * 100.0);

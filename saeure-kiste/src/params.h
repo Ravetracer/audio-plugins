@@ -140,6 +140,30 @@ enum ParamId : uint32_t {
    kParamDistMix,
    kParamDistBias,
 
+   // The delay.
+   //
+   // The second stage on this instrument that the machine does not have, and
+   // built the same way the first one was: out of the literature, with the
+   // source named beside each part of it in dsp/delay.h. It sits after
+   // everything else, which is where a box plugged into the back of the
+   // machine would have sat.
+   kParamDelayOn,
+   kParamDelaySync,
+   kParamDelayTime,
+   kParamDelayDivision,
+   kParamDelayFeedback,
+   kParamDelayMix,
+   kParamDelayMode,
+   kParamDelayWidth,
+
+   // Live mode's pattern transpose.
+   //
+   // In MIDI and Sequencer mode a held key moves the pattern by semitones,
+   // which is what the machine's own keyboard did. Live mode gives the keys to
+   // the pattern map instead, so the transpose has to be a control -- and an
+   // octave is the one a bass line is actually moved by.
+   kParamPatternOctave,
+
    kNumParams
 };
 
@@ -148,7 +172,15 @@ enum ParamId : uint32_t {
 enum WaveformKind { kWaveSawtooth = 0, kWaveSquare, kNumWaveforms };
 
 // Where the notes come from.
-enum PlayMode { kModeMidi = 0, kModeSequencer, kNumPlayModes };
+//
+// Live is Sequencer with the keyboard doing something else. In Sequencer mode
+// a held key transposes the pattern, which is the machine's own behaviour and
+// is wrong for a set played off a pad controller: there the pads have to
+// select patterns, and the pattern has to play at the pitch it was written at.
+// So in Live mode a key that the pattern map knows about switches patterns, a
+// key it does not know about simply runs the pattern as written, and the
+// Pattern Oct parameter is what moves it.
+enum PlayMode { kModeMidi = 0, kModeSequencer, kModeLive, kNumPlayModes };
 
 // The muted clipper on the VCA output. Two kinds of clipping rather than one,
 // because the modification offers two.
@@ -172,6 +204,30 @@ enum ChainKind { kChainStay = 0, kChainNext, kChainFirst, kChainRandom, kNumChai
 // the sequencer stays a pure function of the host's beat position: a loop, a
 // seek or a scrub lands on exactly the pattern it should.
 int chainPatternAt(int mode, int start, int chainLength, long cycle);
+
+// Whether the delay takes its time from the Time knob or from the host's
+// tempo. Two positions rather than a flag, because it is drawn as a chip.
+enum DelaySyncKind { kDelayFree = 0, kDelaySynced, kNumDelaySyncKinds };
+
+// The note values the delay can lock to, from a thirty-second to a half note.
+// A wider list than the sequencer's, because a delay is usually longer than a
+// step: the dotted eighth in the middle of it is the one everybody reaches for.
+enum DelayDivision {
+   kDelayDiv32 = 0,
+   kDelayDiv16T,
+   kDelayDiv16,
+   kDelayDiv8T,
+   kDelayDiv8,
+   kDelayDiv8Dot,
+   kDelayDiv4T,
+   kDelayDiv4,
+   kDelayDiv2,
+   kNumDelayDivisions
+};
+
+// How many beats one of those is. What the delay time is worked out from, at
+// whatever tempo the host is reporting.
+double delayDivisionBeats(int division);
 
 // The sequencer's clock, as a fraction of a beat per step.
 enum RateKind { kRate32 = 0, kRate16T, kRate16, kRate8T, kRate8, kNumRates };

@@ -15,6 +15,30 @@ preset, which exists for exactly this.
 
 ## 2. Smaller things
 
+- **The pattern map has no chromatic-run shortcut.** Every pad is learned one
+  at a time, which is right for an arbitrary layout and tedious for the common
+  one -- sixteen pads onto patterns 1 to 16 is sixteen clicks and sixteen
+  notes. "Learn this note as pattern N and let the next notes follow" would be
+  a handful of lines on top of what is there.
+- **Nothing maps to anything but patterns.** Mute, a chain mode, the octave and
+  GEN are all things a pad could usefully reach, and the map's format already
+  has room: the negative half of the action byte has two values in it and 125
+  spare.
+- **The delay's stereo ratio is fixed at 3:2.** In Stereo routing the right-hand
+  line runs at two thirds of the left, which is one of the simple ratios
+  [Pirkle] 14.4.2 recommends and is a good default -- but it is a constant in
+  `dsp/delay.h` rather than a control, which is the opposite of the rule this
+  plugin is built on. It was left fixed because the DELAY panel has no room for
+  a ninth column and the window is already 60 px wider than it was. A ratio
+  chip stacked under Routing would be the cheapest way to expose it.
+- **The delay has no filter in its feedback path.** Every repeat is a copy of
+  the last one with the same spectrum, which is a digital delay and is what the
+  sources print. A tape or analogue echo loses its top on each pass, and one
+  shelving filter in the loop is the whole of the difference. There is no
+  column for the knob either.
+- **No factory preset uses the delay.** It is off in all twenty-seven, which is
+  deliberate -- it is what makes them render byte for byte what they did before
+  the stage existed -- but it means nothing in the library demonstrates it.
 - **The VCO waveforms are ideal.** A linear falling ramp and a hard square. The
   real integrator's ramp curves slightly and its reset takes a finite time.
   Worth measuring off reference audio rather than guessing, and it is the one

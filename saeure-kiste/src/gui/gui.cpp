@@ -28,9 +28,13 @@ namespace {
 // ten mods and the three panels that go with them live in a section that opens
 // and closes, and a closed window is the page anybody actually plays from.
 // Two cells wider than it was, which is what the drive stage needed: Type,
-// Bias and Dist Mix on a row that was exactly full at 1180. Every other row is
-// narrower than the window, so the extra columns cost nothing anywhere else.
-constexpr int kContentW = 1348;
+// Bias and Dist Mix on a row that was exactly full at 1180.
+//
+// Row 1 is now the widest rather than row 0: the sequencer, the generator and
+// the delay side by side come to exactly this, with the sequencer's Mode and
+// Rate stacked into one column and the generator's Seed moved out to the step
+// grid where its own buttons already are. Row 0 has the slack instead.
+constexpr int kContentW = 1408;
 
 // -------------------------------------------------------------------- panels
 //
@@ -56,16 +60,26 @@ constexpr uint32_t kOutParams[] = {kParamVolume};
 // The volume envelope. Nothing on the machine reaches it at all -- its decay is
 // fixed by R123 and C42 -- so the whole panel is the Devil Fish's.
 constexpr uint32_t kAmpParams[] = {kParamSoftAttack, kParamAmpDecay, kParamAmpSustain};
-constexpr uint32_t kSeqParams[] = {kParamMode, kParamSeqRate, kParamSeqSteps, kParamGate,
-                                   kParamSwing};
+// Mode and Rate are both chips and share a column, which is what makes room on
+// this row for the delay beside the generator.
+constexpr uint32_t kSeqParams[] = {kParamMode | kStacked, kParamSeqRate | kStacked,
+                                   kParamSeqSteps, kParamGate, kParamSwing};
 constexpr uint32_t kVibParams[] = {kParamVibDepth, kParamVibRate, kParamVibDelay};
 // Scale and Root are stacked in one column: two chips fit where one knob goes,
 // and without that the generator is one column too wide to sit beside the
 // sequencer on a row this window can afford.
 constexpr uint32_t kRandParams[] = {
-   kParamRandSeed,    kParamRandScale | kStacked, kParamRandRoot | kStacked,
-   kParamRandNotes,   kParamRandAccent,           kParamRandSlide,
-   kParamRandOctave,  kParamRandVibrato,
+   kParamRandScale | kStacked, kParamRandRoot | kStacked, kParamRandNotes,
+   kParamRandAccent,           kParamRandSlide,           kParamRandOctave,
+   kParamRandVibrato,
+};
+// The delay. Four chips in two stacked columns, then its four knobs: the two
+// that say how long and how many, and the two that say how much and how wide.
+constexpr uint32_t kDelayParams[] = {
+   kParamDelayOn | kStacked,   kParamDelaySync | kStacked,
+   kParamDelayMode | kStacked, kParamDelayDivision | kStacked,
+   kParamDelayTime,            kParamDelayFeedback,
+   kParamDelayMix,             kParamDelayWidth,
 };
 // The mods. Ten numbers the schematic does not give, in the order they act:
 // the filter's envelope first, then the accent, then the two shapes and the
@@ -83,26 +97,29 @@ constexpr uint32_t kModParams[] = {
 constexpr PanelSpec kPanelSpecs[] = {
    PANEL("VCO", 2, 1, kVcoParams),        PANEL("VCF", 7, 1, kVcfParams),
    PANEL("DRIVE", 5, 1, kDriveParams),    PANEL("OUTPUT", 1, 1, kOutParams),
-   PANEL("SEQUENCER", 5, 1, kSeqParams),  PANEL("GENERATOR", 7, 1, kRandParams),
-   PANEL("MODS", 10, 1, kModParams),      PANEL("SLIDE", 1, 1, kSlideParams),
-   PANEL("ACCENT", 4, 1, kAccentParams),  PANEL("VIBRATO", 3, 1, kVibParams),
-   PANEL("AMP", 3, 1, kAmpParams),
+   PANEL("SEQUENCER", 4, 1, kSeqParams),  PANEL("GENERATOR", 6, 1, kRandParams),
+   PANEL("DELAY", 6, 1, kDelayParams),    PANEL("MODS", 10, 1, kModParams),
+   PANEL("SLIDE", 1, 1, kSlideParams),    PANEL("ACCENT", 4, 1, kAccentParams),
+   PANEL("VIBRATO", 3, 1, kVibParams),    PANEL("AMP", 3, 1, kAmpParams),
 };
 #undef PANEL
 
 constexpr int kNumPanels = static_cast<int>(sizeof(kPanelSpecs) / sizeof(kPanelSpecs[0]));
 
 // Which panels share a row, in order.
-constexpr int kRowStart[] = {0, 4, 6, 8};
-constexpr int kRowCount[] = {4, 2, 2, 3};
+constexpr int kRowStart[] = {0, 4, 7, 9};
+constexpr int kRowCount[] = {4, 3, 2, 3};
 constexpr int kNumRows = 4;
 // Rows from here on are the collapsible section, drawn below the preset bar.
 constexpr int kAdvancedRow = 2;
 
-// The three bank parameters are not on any panel. They are drawn beside the
-// step grid, where they are used, and they are named here so the check that
-// every parameter has a home still counts them.
-constexpr uint32_t kPaneParams[] = {kParamPattern, kParamChainMode, kParamChainLength};
+// The bank parameters and the generator's seed are not on any panel. They are
+// drawn beside the step grid, where they are used -- the seed has its own
+// label and its own - and + buttons up there next to GEN, which is where
+// anybody reaching for it is already looking -- and they are named here so the
+// check that every parameter has a home still counts them.
+constexpr uint32_t kPaneParams[] = {kParamPattern, kParamChainMode, kParamChainLength,
+                                    kParamRandSeed, kParamPatternOctave};
 constexpr int kNumPaneParams = static_cast<int>(sizeof(kPaneParams) / sizeof(kPaneParams[0]));
 
 // The layout is a table, and a table is easy to break by adding a parameter to

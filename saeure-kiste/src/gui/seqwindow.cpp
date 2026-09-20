@@ -479,6 +479,12 @@ private:
       mSeqLeftRect = {0, 0, 0, 0};
       mSeqRightRect = {0, 0, 0, 0};
       mSeqMidiRect = {0, 0, 0, 0};
+      mSeqMapRect = {0, 0, 0, 0};
+      mSeqPrevPatRect = {0, 0, 0, 0};
+      mSeqNextPatRect = {0, 0, 0, 0};
+      mSeqOctDownRect = {0, 0, 0, 0};
+      mSeqOctUpRect = {0, 0, 0, 0};
+      mSeqOctLabelRect = {0, 0, 0, 0};
       if (hasPattern()) {
          const double bankW = hasBank() ? kBankW + kGap : 0.0;
          mSeqRect.x = kMargin;
@@ -498,8 +504,10 @@ private:
          mSeqGenRect = {bx, by, 38.0, bh};
          bx -= 20.0;
          mSeqSeedUpRect = {bx, by, 18.0, bh};
-         bx -= 62.0;
-         mSeqSeedLabelRect = {bx, by, 60.0, bh};
+         // Wide enough for the whole of a 32-bit seed. Ten digits is what a
+         // Unix timestamp takes and the range exists so that one can be used.
+         bx -= 90.0;
+         mSeqSeedLabelRect = {bx, by, 88.0, bh};
          bx -= 20.0;
          mSeqSeedDownRect = {bx, by, 18.0, bh};
          bx -= 30.0;
@@ -510,6 +518,21 @@ private:
          mSeqClearRect = {bx, by, 46.0, bh};
          bx -= 48.0;
          mSeqMidiRect = {bx, by, 42.0, bh};
+         // Live mode's group: the map switch, the two pattern steps, and the
+         // pattern's own octave. Left of everything that edits the pattern,
+         // because none of these does -- they are for playing it.
+         bx -= 50.0;
+         mSeqMapRect = {bx, by, 44.0, bh};
+         bx -= 44.0;
+         mSeqNextPatRect = {bx, by, 38.0, bh};
+         bx -= 42.0;
+         mSeqPrevPatRect = {bx, by, 38.0, bh};
+         bx -= 26.0;
+         mSeqOctUpRect = {bx, by, 18.0, bh};
+         bx -= 58.0;
+         mSeqOctLabelRect = {bx, by, 56.0, bh};
+         bx -= 20.0;
+         mSeqOctDownRect = {bx, by, 18.0, bh};
          y += static_cast<int>(mSeqRect.h) + kGap;
       }
 
@@ -604,6 +627,20 @@ private:
    // ------------------------------------------------------------------- paint
 
    bool needsRepaint() {
+      // Leaving Live mode leaves the map behind with it: the bank has to go
+      // back to selecting patterns, or the next click on it does nothing and
+      // looks broken.
+      if (mMapMode && hasPattern() && !mSpec.pattern->seqLive()) {
+         mMapMode = false;
+         mSpec.pattern->seqSetLearnTarget(kNoteNone);
+         return true;
+      }
+      // While the map is open the window repaints every frame, because the
+      // thing it is waiting for -- a MIDI note -- arrives on the audio thread
+      // and there is nothing here to notice it otherwise. It is a mode you are
+      // in for a few seconds at a time.
+      if (mMapMode)
+         return true;
       if (mDirty)
          return true;
       for (uint32_t i = 0; i < mSpec.paramCount; ++i) {
@@ -790,10 +827,16 @@ private:
       return {cell.x + 5, cell.y + (half ? 17.0 : 34.0), cell.w - 10, 22.0};
    }
 
-   void openEntry(uint32_t id) {
+   void openEntry(uint32_t id) { openEntryAt(id, valueRect(cellRectFor(id))); }
+
+   // The same field, told where to draw itself. Everything on a panel goes
+   // through openEntry(); the seed is not on a panel, and a control whose
+   // range spans a 32-bit word has to be typeable or it cannot be reached.
+   void openEntryAt(uint32_t id, const Rect &where) {
       const ParamDesc &d = mSpec.params[id];
       if (isChip(d))
          return;
+      mEntryRect = where;
       mBrowserOpen = false;
       closeMenu();
       char text[128];
@@ -2503,11 +2546,60 @@ private:
       return step >= kMaxSteps ? -1 : step;
    }
 
+   // PREV and NEXT are two buttons with two jobs. In map mode they are learn
+   // targets, because a pad that steps the bank is the first thing anybody
+   // assigns; the rest of the time they do the stepping themselves, which is
+   // what makes the two agree by construction -- both go through
+   // seqStepPattern().
+   void mapTargetOrStep(int action, int delta, unsigned button) {
+      if (mMapMode) {
+         if (button == kButtonLeft)
+            mSpec.pattern->seqSetLearnTarget(action);
+         else
+            mSpec.pattern->seqClearMap(action);
+      } else {
+         mSpec.pattern->seqStepPattern(delta);
+      }
+      mDirty = true;
+   }
+
    void seqEdit(int step, const Step &value) {
       if (step < 0 || step >= kMaxSteps)
          return;
       mSpec.pattern->seqSetStep(editPattern(), step, value);
       mDirty = true;
+   }
+
+   // Whether the step is held into the one after it -- see stepsTied().
+   bool seqTied(int pattern, int step) const {
+      if (step < 0 || step + 1 >= kMaxSteps)
+         return false;
+      return stepsTied(mSpec.pattern->seqStep(pattern, step),
+                       mSpec.pattern->seqStep(pattern, step + 1));
+   }
+
+   // Write a long note over the steps from `from` to `to`, either way round and
+   // both ends included: every step takes the note and the anchor's octave, and
+   // every one but the last slides into the next. A long note is nothing more
+   // than that, so dragging one across eight steps writes the eight steps
+   // somebody would otherwise have entered and tied by hand.
+   //
+   // Dragging back over a run shortens it rather than erasing it: the step the
+   // drag now ends on stops sliding, and whatever was painted past it stays as
+   // a note of its own. Pulling a slide out of the middle in the SLIDE lane
+   // splits the run the same way, and putting it back joins it again -- that
+   // needs no code here, because the slide flag *is* the tie.
+   void seqPaintRun(int from, int to, int note) {
+      const int lo = from < to ? from : to;
+      const int hi = from < to ? to : from;
+      const int octave = mSpec.pattern->seqStep(editPattern(), from).octave;
+      for (int step = lo; step <= hi; ++step) {
+         Step st = mSpec.pattern->seqStep(editPattern(), step);
+         st.note = note;
+         st.octave = octave;
+         st.slide = step < hi;
+         seqEdit(step, st);
+      }
    }
 
    // ----------------------------------------------------------- bank layout
@@ -2603,7 +2695,20 @@ private:
          std::snprintf(title, sizeof(title), "PATTERN %d", pat + 1);
       setColor(cr, live ? t.accent : t.textMute);
       drawText(cr, mSeqRect.x + kSeqPad, mSeqRect.y + 15, title, 9.5, true, Align::Left);
-      if (!live) {
+      if (mMapMode) {
+         const int target = mSpec.pattern->seqLearnTarget();
+         char hint[128];
+         if (target == kNoteNone)
+            std::snprintf(hint, sizeof(hint),
+                          "- MAP: click a pattern, PREV or NEXT, then play the note for it");
+         else if (target == kNotePrevPattern || target == kNoteNextPattern)
+            std::snprintf(hint, sizeof(hint), "- play the note for %s",
+                          target == kNotePrevPattern ? "PREV" : "NEXT");
+         else
+            std::snprintf(hint, sizeof(hint), "- play the note for pattern %d", target + 1);
+         setColor(cr, t.accent);
+         drawText(cr, mSeqRect.x + kSeqPad + 76, mSeqRect.y + 15, hint, 9.0, false, Align::Left);
+      } else if (!live) {
          setColor(cr, t.textMute);
          drawText(cr, mSeqRect.x + kSeqPad + 76, mSeqRect.y + 15,
                   "- Mode is set to MIDI, the host is playing it", 9.0, false, Align::Left);
@@ -2619,13 +2724,49 @@ private:
       drawSeqButton(cr, mSeqSeedDownRect, "-");
       drawSeqButton(cr, mSeqSeedUpRect, "+");
       drawSeqButton(cr, mSeqGenRect, "GEN");
-      {
-         char seed[24];
-         std::snprintf(seed, sizeof(seed), "SEED %d", mSpec.pattern->seqSeed());
-         setColor(cr, t.textDim);
+      if (mEntryParam == static_cast<int>(kParamRandSeed)) {
+         // Typed, because a range this wide cannot be reached with two step
+         // buttons. Drawn in the seed's own box rather than in a panel cell,
+         // which is the whole reason the field carries its rect with it.
+         drawEntryField(cr, mSeqSeedLabelRect);
+      } else {
+         char seed[32];
+         std::snprintf(seed, sizeof(seed), "SEED %u", mSpec.pattern->seqSeed());
+         setColor(cr, mSeqSeedLabelRect.contains(mMouseX, mMouseY) ? t.text : t.textDim);
          drawText(cr, mSeqSeedLabelRect.x + mSeqSeedLabelRect.w * 0.5,
                   mSeqSeedLabelRect.y + mSeqSeedLabelRect.h - 4.0, seed, 8.0, false,
                   Align::Center);
+      }
+
+      // Live mode's group. PREV and NEXT step the bank and are useful in any
+      // mode; MAP is what turns the bank into the pad layout, and it is only
+      // reachable where a pad layout means something.
+      drawSeqButton(cr, mSeqOctDownRect, "-");
+      drawSeqButton(cr, mSeqOctUpRect, "+");
+      {
+         const int oct = mSpec.pattern->seqPatternOctave();
+         char label[24];
+         std::snprintf(label, sizeof(label), "OCT %+d", oct);
+         setColor(cr, oct != 0 ? t.accent : t.textDim);
+         drawText(cr, mSeqOctLabelRect.x + mSeqOctLabelRect.w * 0.5,
+                  mSeqOctLabelRect.y + mSeqOctLabelRect.h - 4.0, label, 8.0, oct != 0,
+                  Align::Center);
+      }
+      drawStepButton(cr, mSeqPrevPatRect, "PREV", kNotePrevPattern);
+      drawStepButton(cr, mSeqNextPatRect, "NEXT", kNoteNextPattern);
+      {
+         const bool armed = mMapMode;
+         roundedRect(cr, mSeqMapRect.x, mSeqMapRect.y, mSeqMapRect.w, mSeqMapRect.h, 3);
+         setColor(cr, armed ? t.accent : (mSeqMapRect.contains(mMouseX, mMouseY) ? t.track
+                                                                                : t.knobFace),
+                  mSpec.pattern->seqLive() ? 1.0 : 0.5);
+         cairo_fill_preserve(cr);
+         setColor(cr, t.panelEdge, mSpec.pattern->seqLive() ? 1.0 : 0.5);
+         cairo_set_line_width(cr, 1.0);
+         cairo_stroke(cr);
+         setColor(cr, armed ? t.bgBottom : t.textDim, mSpec.pattern->seqLive() ? 1.0 : 0.45);
+         drawText(cr, mSeqMapRect.x + mSeqMapRect.w * 0.5, mSeqMapRect.y + mSeqMapRect.h - 5.0,
+                  "MAP", 8.0, armed, Align::Center);
       }
 
       // The playhead, behind everything, so the column it marks reads as lit
@@ -2733,11 +2874,25 @@ private:
             const Step st = mSpec.pattern->seqStep(pat, first + c);
             if (st.note != note)
                continue;
+            // A tied run -- consecutive steps on the same pitch, each sliding
+            // into the next -- is one long note and is drawn as one bar. Only
+            // the step that starts it draws; the ones it holds through are
+            // skipped, and a run scrolled in from the left starts at the first
+            // visible column so it reads as continuing off the edge.
+            if (c > 0 && seqTied(pat, first + c - 1))
+               continue;
+            int last = c;
+            while (last + 1 < cols && seqTied(pat, first + last))
+               ++last;
             // An accented step is drawn bright, because an accent is the one
-            // thing you look for when reading somebody's pattern.
+            // thing you look for when reading somebody's pattern. A run takes
+            // the accent of the step that articulates it -- the ones it holds
+            // through never retrigger, so theirs is the accent lane's business
+            // and not the bar's.
             const double alpha = first + c < length ? (st.accent ? 1.0 : 0.62) : 0.28;
             setColor(cr, st.accent ? t.highlight : t.accent, alpha);
-            roundedRect(cr, gx + c * cw + 2.0, ry + 1.5, cw - 4.0, kSeqRowH - 3.0, 2.0);
+            roundedRect(cr, gx + c * cw + 2.0, ry + 1.5, (last - c) * cw + cw - 4.0,
+                        kSeqRowH - 3.0, 2.0);
             cairo_fill(cr);
          }
       }
@@ -2799,6 +2954,8 @@ private:
       // Stay never leaves the selected pattern, so shading a chain it does not
       // use would only claim something untrue.
       const bool chained = chainMode != kChainStay;
+      const bool mapping = mMapMode && mSpec.pattern->seqLive();
+      const int target = mapping ? mSpec.pattern->seqLearnTarget() : kNoteNone;
 
       roundedRect(cr, mBankRect.x, mBankRect.y, mBankRect.w, mBankRect.h, 6);
       setColor(cr, t.panelFill);
@@ -2808,7 +2965,8 @@ private:
       cairo_stroke(cr);
 
       setColor(cr, t.accent, 0.85);
-      drawText(cr, mBankRect.x + kSeqPad, mBankRect.y + 15, "PATTERNS", 9.5, true, Align::Left);
+      drawText(cr, mBankRect.x + kSeqPad, mBankRect.y + 15, mapping ? "PATTERN MAP" : "PATTERNS",
+               9.5, true, Align::Left);
 
       for (int i = 0; i < bankCount(); ++i) {
          const Rect r = bankCellRect(i);
@@ -2838,6 +2996,26 @@ private:
          std::snprintf(num, sizeof(num), "%d", i + 1);
          setColor(cr, sel ? t.text : (used ? t.textDim : t.textMute), used || sel ? 1.0 : 0.75);
          drawText(cr, r.x + r.w * 0.5, r.y + r.h - 7.0, num, 8.0, sel, Align::Center);
+
+         // In map mode the number is replaced by the note that selects it, so
+         // the grid reads as the controller rather than as the bank. A cell
+         // waiting for its note is filled in the accent, which is the only
+         // thing on screen that is.
+         if (mapping) {
+            const int note = mSpec.pattern->seqMappedNote(i);
+            const bool arming = target == i;
+            if (arming || note >= 0) {
+               roundedRect(cr, r.x, r.y, r.w, r.h, 3.0);
+               setColor(cr, t.accent, arming ? 0.85 : 0.22);
+               cairo_fill(cr);
+            }
+            char label[8];
+            setColor(cr, arming ? t.bgBottom : (note >= 0 ? t.text : t.textMute),
+                     note >= 0 || arming ? 1.0 : 0.6);
+            drawText(cr, r.x + r.w * 0.5, r.y + r.h - 7.0,
+                     note >= 0 ? noteLabel(note, label, sizeof(label)) : num, 8.0, arming,
+                     Align::Center);
+         }
       }
 
       // DEL empties the selected slot. It is the same edit CLEAR makes on the
@@ -2887,6 +3065,41 @@ private:
       if (!hasParam(id))
          return fallback;
       return static_cast<int>(std::floor(mDelegate.guiParamValue(id) + 0.5));
+   }
+
+   // A MIDI note as it is written on a keyboard. Key 36 is C2, which is the
+   // same convention the manual uses for the transpose and the one the dragged
+   // MIDI file is written in, so a pad named here is the pad named there.
+   static const char *noteLabel(int note, char *buf, size_t size) {
+      static const char *const kNames[12] = {"C",  "C#", "D",  "D#", "E",  "F",
+                                             "F#", "G",  "G#", "A",  "A#", "B"};
+      const int n = note < 0 ? 0 : (note > 127 ? 127 : note);
+      std::snprintf(buf, size, "%s%d", kNames[n % 12], n / 12 - 1);
+      return buf;
+   }
+
+   // PREV or NEXT. Outside map mode it is an ordinary button; inside it, it
+   // is a learn target and says which note it answers to, exactly as the bank
+   // cells do -- the two are the same gesture and have to look like it.
+   void drawStepButton(cairo_t *cr, const Rect &r, const char *label, int action) {
+      if (!mMapMode || !mSpec.pattern->seqLive()) {
+         drawSeqButton(cr, r, label);
+         return;
+      }
+      const Theme &t = mSpec.theme;
+      const int note = mSpec.pattern->seqMappedNote(action);
+      const bool arming = mSpec.pattern->seqLearnTarget() == action;
+      char buf[8];
+      roundedRect(cr, r.x, r.y, r.w, r.h, 3);
+      setColor(cr, arming || note >= 0 ? t.accent : t.knobFace, arming ? 0.85 : 0.22);
+      cairo_fill_preserve(cr);
+      setColor(cr, t.panelEdge);
+      cairo_set_line_width(cr, 1.0);
+      cairo_stroke(cr);
+      setColor(cr, arming ? t.bgBottom : (note >= 0 ? t.text : t.textDim));
+      drawText(cr, r.x + r.w * 0.5, r.y + r.h - 5.0,
+               note >= 0 ? noteLabel(note, buf, sizeof(buf)) : label, 8.0, arming,
+               Align::Center);
    }
 
    void drawSeqButton(cairo_t *cr, const Rect &r, const char *label, bool enabled = true) {
@@ -3013,6 +3226,18 @@ private:
 
       const int cell = bankCellAt(x, y);
       if (cell >= 0) {
+         // In map mode the grid says what each pad does rather than which
+         // pattern is being edited, so a click arms a target instead of
+         // selecting. Nothing about the selected pattern moves while the map
+         // is being built, which is what lets it be built while one plays.
+         if (mMapMode && mSpec.pattern->seqLive()) {
+            if (button == kButtonLeft)
+               mSpec.pattern->seqSetLearnTarget(cell);
+            else if (button == kButtonRight)
+               mSpec.pattern->seqClearMap(cell);
+            mDirty = true;
+            return true;
+         }
          if (!hasParam(mSpec.patternParam))
             return true;
          // The wheel steps through the bank rather than jumping to whichever
@@ -3092,13 +3317,61 @@ private:
          mDirty = true;
          return true;
       }
+      // The seed wraps at both ends rather than stopping, because it names a
+      // pattern rather than measuring anything: one below zero is the last
+      // seed, not an error. Done here in unsigned arithmetic so the whole
+      // 32-bit range is reachable from the two buttons.
       if (mSeqSeedDownRect.contains(x, y)) {
-         mSpec.pattern->seqSetSeed(mSpec.pattern->seqSeed() - 1);
+         const uint32_t seed = mSpec.pattern->seqSeed();
+         mSpec.pattern->seqSetSeed(seed == 0 ? mSpec.pattern->seqSeedMax() : seed - 1);
          mDirty = true;
          return true;
       }
       if (mSeqSeedUpRect.contains(x, y)) {
-         mSpec.pattern->seqSetSeed(mSpec.pattern->seqSeed() + 1);
+         const uint32_t seed = mSpec.pattern->seqSeed();
+         mSpec.pattern->seqSetSeed(seed >= mSpec.pattern->seqSeedMax() ? 0 : seed + 1);
+         mDirty = true;
+         return true;
+      }
+      if (mSeqSeedLabelRect.contains(x, y)) {
+         if (button == kButtonLeft)
+            openEntryAt(kParamRandSeed, mSeqSeedLabelRect);
+         return true;
+      }
+
+      // Live mode's group.
+      if (mSeqOctDownRect.contains(x, y)) {
+         mSpec.pattern->seqSetPatternOctave(mSpec.pattern->seqPatternOctave() - 1);
+         mDirty = true;
+         return true;
+      }
+      if (mSeqOctUpRect.contains(x, y)) {
+         mSpec.pattern->seqSetPatternOctave(mSpec.pattern->seqPatternOctave() + 1);
+         mDirty = true;
+         return true;
+      }
+      if (mSeqOctLabelRect.contains(x, y)) {
+         mSpec.pattern->seqSetPatternOctave(0); // the label is the reset
+         mDirty = true;
+         return true;
+      }
+      if (mSeqPrevPatRect.contains(x, y)) {
+         mapTargetOrStep(kNotePrevPattern, -1, button);
+         return true;
+      }
+      if (mSeqNextPatRect.contains(x, y)) {
+         mapTargetOrStep(kNoteNextPattern, +1, button);
+         return true;
+      }
+      if (mSeqMapRect.contains(x, y)) {
+         if (!mSpec.pattern->seqLive())
+            return true; // a pad layout does nothing in the other two modes
+         if (button != kButtonLeft) {
+            mSpec.pattern->seqClearMap(kNoteNone); // the whole map, at once
+         } else {
+            mMapMode = !mMapMode;
+            mSpec.pattern->seqSetLearnTarget(kNoteNone);
+         }
          mDirty = true;
          return true;
       }
@@ -3170,9 +3443,16 @@ private:
             st.note = -1;
          else
             st.note = note;
+         // A step that has become a rest keeps no slide: there is nothing left
+         // to slide out of, and the lane would show a slide on an empty step.
+         if (st.note < 0)
+            st.slide = false;
          seqEdit(col, st);
          mSeqDragMode = 0;
          mSeqDragNote = st.note;
+         mSeqPaintAnchor = col;
+         mSeqPaintNote = st.note;
+         mSeqPaintRan = false;
          return true;
       }
 
@@ -3214,7 +3494,28 @@ private:
          if (y < seqPitchY() || y >= seqPitchY() + 12.0 * kSeqRowH)
             return;
          const int row = static_cast<int>((y - seqPitchY()) / kSeqRowH);
-         st.note = mSeqDragNote < 0 ? -1 : 11 - (row < 0 ? 0 : (row > 11 ? 11 : row));
+         const int note = mSeqDragNote < 0 ? -1 : 11 - (row < 0 ? 0 : (row > 11 ? 11 : row));
+         // Along one row, the drag draws a single long note tied across the
+         // steps it covers. Leave the row and it is a new note, and a new run
+         // starts from there -- which is what keeps a diagonal drag a melody
+         // rather than one impossible chord.
+         if (note >= 0 && note == mSeqPaintNote && mSeqPaintAnchor >= 0) {
+            // A drag that has never left the step it started on leaves that
+            // step exactly as the click made it. Otherwise clicking a step in
+            // the middle of a long note to move its pitch would drop its slide
+            // on the first pixel of pointer jitter.
+            if (col != mSeqPaintAnchor)
+               mSeqPaintRan = true;
+            if (mSeqPaintRan)
+               seqPaintRun(mSeqPaintAnchor, col, note);
+            return;
+         }
+         st.note = note;
+         if (note < 0)
+            st.slide = false;
+         mSeqPaintAnchor = col;
+         mSeqPaintNote = note;
+         mSeqPaintRan = false;
       } else {
          st.setFlag(mSeqDragMode - 1, mSeqPaintValue);
       }
@@ -3419,7 +3720,7 @@ private:
       }
 
       if (mEntryParam >= 0) {
-         const bool inside = valueRect(cellRectFor(static_cast<uint32_t>(mEntryParam))).contains(x, y);
+         const bool inside = mEntryRect.contains(x, y);
          const bool second = be.button == kButtonLeft && mLastClickParam == mEntryParam &&
                              be.time - mLastClickTime < 400;
          if (inside && !second)
@@ -3628,6 +3929,7 @@ private:
 
    void onButtonRelease() {
       mSeqDragMode = -1;
+      mSeqPaintAnchor = -1;
       mSeqScrollDrag = false;
       if (mDrag >= 0) {
          mDelegate.guiEndEdit(static_cast<uint32_t>(mDrag));
@@ -3967,6 +4269,7 @@ private:
    std::string mBrowserStatus;
    bool mSaveOpen = false;
    int mEntryParam = -1; // knob whose value is being typed, or -1
+   Rect mEntryRect{0, 0, 0, 0}; // and where its field is drawn
    std::string mEntryText;
    bool mEntryFailed = false;
    bool mEntryFresh = false; // the current value is shown selected; typing replaces it
@@ -3994,9 +4297,24 @@ private:
    Rect mSeqSeedLabelRect{0, 0, 0, 0};
    Rect mSeqLeftRect{0, 0, 0, 0};
    Rect mSeqRightRect{0, 0, 0, 0};
+   Rect mSeqMapRect{0, 0, 0, 0};
+   Rect mSeqPrevPatRect{0, 0, 0, 0};
+   Rect mSeqNextPatRect{0, 0, 0, 0};
+   Rect mSeqOctDownRect{0, 0, 0, 0};
+   Rect mSeqOctUpRect{0, 0, 0, 0};
+   Rect mSeqOctLabelRect{0, 0, 0, 0};
+   // Whether the bank is showing what each pad does rather than selecting
+   // patterns. The window's, not the plugin's: it is a thing you are in the
+   // middle of doing, like the pattern clipboard beside it.
+   bool mMapMode = false;
    int mSeqDragMode = -1; // -1 none, 0 pitch, 1 + lane for a flag lane
    int mSeqDragNote = -1;
    bool mSeqPaintValue = false;
+   // The long note being drawn: the step it started on and the note it is on.
+   // Both only mean anything while a pitch drag is running.
+   int mSeqPaintAnchor = -1;
+   int mSeqPaintNote = -1;
+   bool mSeqPaintRan = false; // whether it has reached a second step yet
    // Where the grid is scrolled to, in steps, and the thumb drag that moves
    // it. The window's, not the plugin's: which part of a pattern somebody is
    // looking at is not worth saving into a project, let alone a preset.

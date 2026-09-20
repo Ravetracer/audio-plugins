@@ -94,6 +94,17 @@ Step Step::unpack(uint16_t packed) {
    return s;
 }
 
+int steppedPattern(int current, int delta, int count) {
+   const int n = count < 1 ? 1 : (count > kMaxPatterns ? kMaxPatterns : count);
+   const int from = current < 0 ? 0 : (current > n - 1 ? n - 1 : current);
+   const int to = from + delta;
+   return to < 0 ? 0 : (to > n - 1 ? n - 1 : to);
+}
+
+bool stepsTied(const Step &held, const Step &next) {
+   return held.note >= 0 && held.slide && next.note == held.note && next.octave == held.octave;
+}
+
 void defaultPattern(uint16_t *steps) {
    // The same sixteen steps the offline renderer plays, so that opening the
    // plugin and pressing play gives the thing the README describes: a root, an

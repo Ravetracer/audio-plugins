@@ -1,37 +1,42 @@
+---
+accent: #7CB814
+tagline: Acid, from the schematic up
+subtitle: CLAP and VST3 instrument for Linux and Windows
+---
+
 # SäureKiste — manual
 
-*A monophonic acid bass synthesiser for Linux. CLAP.*
+*A monophonic acid bass synthesiser. Linux and Windows, CLAP and VST3.*
 
-Version 0.6.0
-
----
-
-> This manual's prose is written out in full rather than generated, unlike the
-> rest of this repository, which builds its parameter reference and preset
-> library from the plugin itself. The consequence is that the parameter table
-> below can drift from `src/params.cpp`; it is maintained by hand and should be
-> re-read against the source when a parameter changes.
+Version 0.7.0
 
 ---
+
+[TOC]
 
 ## 1. What it is
 
-SaeureKiste models the main board of a Roland TB-303 as the February 1982
-service notes draw it: a relaxation-oscillator VCO, a four-stage transistor
+![The whole instrument. One row of knobs, the sequencer and its bank below, and a second row of controls behind the ADVANCED button.](images/window.png)
+
+SäureKiste models the main board of the popular silverbox — the little bass
+machine every acid record was made on — as its February 1982 service notes
+draw it: a relaxation-oscillator VCO, a four-stage transistor
 ladder filter, a VCA, a decay-only envelope, an accent circuit, and a slide lag
-on the pitch CV. One stage is added that the machine does not have — an
-overdrive after the filter — and it is marked as such everywhere it appears.
+on the pitch CV. Two stages are added that the machine does not have — a drive
+stage of seven models after the filter, and a delay after that — and both are
+marked as such everywhere they appear.
 
 It is **monophonic** and it tells the host so.
 
-It plays two ways: from the host, or from its own sixteen-step sequencer, which
-draws on a bank of sixty-four patterns.
+It plays two ways: from the host, or from its own sequencer, which runs 1 to 128
+steps and draws on a bank of sixty-four patterns.
 
-It also models **Robin Whittle's Devil Fish** modification of the same machine,
-from his own manual — see §11. Every one of those controls defaults to the stock
-circuit, so the plugin is a TB-303 until you ask it not to be.
+It also models a well-known hardware **modification** of the same machine, from
+its author's own published manual — see §10. Every one of those controls
+defaults to the stock circuit, so the plugin is the original until you ask it
+not to be.
 
-Fifty-one parameters, twenty-seven presets.
+Sixty-three parameters, twenty-seven presets.
 
 Not affiliated with or endorsed by Roland Corporation. *TB-303* is their
 trademark, used here only to name what was modelled. Not affiliated with or
@@ -44,8 +49,9 @@ modification that was modelled.
 
 In **MIDI** the host plays it, and the two things the machine's sequencer used
 to say per step are recovered from what a piano roll already has. In
-**Sequencer** the plugin plays its own sixteen steps and a held MIDI note
-transposes them — see §6.
+**Sequencer** the plugin plays its own pattern and a held MIDI note transposes
+it. In **Live** it plays its own pattern too, but the keys select patterns
+instead of transposing — see §6.
 
 Everything below applies to both.
 
@@ -66,7 +72,7 @@ An accented note is three things at once:
 
 The brightness does not stop when the note does. The accent charges a capacitor
 which then discharges over **68 ms** — long enough that a note landing a
-sixteenth later is still sitting in the tail of it. That is where a 303 line
+sixteenth later is still sitting in the tail of it. That is where an acid line
 gets its breathing quality, and **Sweep Time** is that time constant.
 
 ### Slide
@@ -89,6 +95,8 @@ Eight are the machine's front panel. Six are not, and are marked **(added)**.
 
 ### VCO
 
+![The VCO panel.](images/panel-vco.png)
+
 | Control | Range | Default | |
 |---|---|---|---|
 | **Waveform** | Sawtooth / Square | Sawtooth | Switch S1. The sawtooth falls rather than rises — the oscillator is an integrator that ramps down and is snapped back up. The square arrives at the filter **6.7 dB down**, because the schematic prints both swings: 12 V to 5.5 V for the saw and 8 V to 5 V for the square. That difference is reproduced rather than normalised away. |
@@ -96,15 +104,20 @@ Eight are the machine's front panel. Six are not, and are marked **(added)**.
 
 ### VCF
 
+![The VCF panel. Overdrive and Filter FM are the two added controls.](images/panel-vcf.png)
+
 | Control | Range | Default | |
 |---|---|---|---|
 | **Cutoff** | 100 Hz – 2.5 kHz | 500 Hz | VR3. The centre is 500 Hz because the factory alignment procedure puts it there: with cutoff centred and resonance full, TM3 is trimmed until the filter rings at 2 ms ± 0.5 ms, and 2 ms is 500 Hz. |
-| **Resonance** | 0 – 100 % | 35 % | VR4. It stops just short of oscillation, because the machine does — the ringing waveform printed for that alignment check dies away. A 303 that sustains a tone is a modified 303. |
+| **Resonance** | 0 – 100 % | 35 % | VR4. It stops just short of oscillation, because the machine does — the ringing waveform printed for that alignment check dies away. A silverbox that sustains a tone is a modified one. |
 | **Env Mod** | 0 – 100 % | 50 % | VR5, and the one control that does two things at once. See §4. |
 | **Decay** | 200 ms – 2.5 s | 600 ms | VR6. The range is printed on the schematic. The envelope has no attack worth the name and no sustain at all — it is triggered and it falls. An accented note ignores this knob. |
 | **Tracking** *(added)* | 0 – 100 % | 0 % | Filter key follow. The machine has **none**: its pitch CV reaches the oscillator and stops, so a note two octaves up meets the same filter as the root. 0 % is the machine. |
 
 ### Accent
+
+
+![The ACCENT panel, in the half behind ADVANCED.](images/panel-accent.png)
 
 | Control | Range | Default | |
 |---|---|---|---|
@@ -114,11 +127,16 @@ Eight are the machine's front panel. Six are not, and are marked **(added)**.
 
 ### Slide
 
+
+![The SLIDE panel, in the half behind ADVANCED.](images/panel-slide.png)
+
 | Control | Range | Default | |
 |---|---|---|---|
-| **Slide Time** *(added)* | 10 – 300 ms | 60 ms | Fixed on the hardware by C35 (0.22 µF) and its resistor network; a control here because the notes now come from a host. 60 ms is where a 303 sits. |
+| **Slide Time** *(added)* | 10 – 300 ms | 60 ms | Fixed on the hardware by C35 (0.22 µF) and its resistor network; a control here because the notes now come from a host. 60 ms is where the original sits. |
 
 ### Drive *(the whole panel is added)*
+
+![The DRIVE panel.](images/panel-drive.png)
 
 | Control | Range | Default | |
 |---|---|---|---|
@@ -166,12 +184,63 @@ wave; matching their levels removes what little is left; and none of them had
 any filtering of its own. What tells these apart is that they are built
 differently — a linear region that survives, an operating point off centre,
 four stages in series with a tone stack between them, a rectifier, a quantiser —
-and the self-test now measures that rather than taking it on trust: each model's
-Drive is searched for the setting that gives it 25 % THD, and their harmonic
-distributions are compared there. Two models that measure the same at the same
-distortion are one model with two names.
+and it is measured rather than taken on trust: each model's Drive is set to
+wherever it gives 25 % total harmonic distortion, and the harmonics it makes
+there are compared with the others'. Any two clippers meet at the top of the
+knob, so that is the setting where a difference has to show if it is real.
+
+### Delay *(the whole panel is added)*
+
+![The DELAY panel. Enable and Sync share a column, Routing and Division the next.](images/panel-delay.png)
+
+The machine has no delay and never had one. This is the second stage here that
+comes out of the literature rather than off the schematic — the first is the
+drive — and it sits after everything else, where a box plugged into the back of
+the machine would have sat.
+
+| Control | Range | Default | |
+|---|---|---|---|
+| **Enable** | Off / On | Off | Whether the stage is in the path. Off is a true bypass, but the lines keep what is in them, so switching back on carries on rather than starting from silence. |
+| **Sync** | Free / Synced | Synced | Where the time comes from: the Time knob, or the host's tempo and the Division chip. |
+| **Time** | 20 – 2000 ms | 300 ms | The delay time when Sync is Free. Does nothing when it is Synced. |
+| **Division** | 1/32 – 1/2 | 1/8. | The delay time as a note value, when Sync is Synced. |
+| **Feedback** | 0 – 130 % | 35 % | How much of each repeat makes the next one. See below. |
+| **Mix** | 0 – 100 % | 25 % | The repeats against the dry instrument, as a crossfade. At 100 % the instrument itself is gone. At zero the stage is bypassed. |
+| **Routing** | Mono / Stereo / Ping-Pong | Stereo | How the two lines are wired. See below. |
+| **Width** | 0 – 200 % | 100 % | How far the repeats are spread, over the delay's own output only — the dry instrument does not move. Nothing to do in Mono. |
+
+**The three modes.** Mono is one line heard in both channels; the repeats sit
+where the instrument does. Stereo is two lines, the right one running at two
+thirds of the left, so the repeats interleave — two lines at the *same* time
+would not be a stereo delay at all, only a wider mono one. Ping-Pong sends the
+instrument into the left line and crosses the feedback, so each repeat walks
+from one side to the other and back.
+
+That last one is the one place the implementation leaves its source. The book's
+figure crosses the *inputs* as well, which works for a stereo source and does
+nothing at all for a monophonic one: both lines would be fed the same signal,
+both taps would stay equal for ever, and the mode would be the mono delay with
+extra arithmetic. What the figure is actually for is that the first repeat
+lands on one side and the second on the other, and that is what you get.
+
+**Feedback above 100 %**, and why it does not blow up. Up to 100 % the stage is
+the IIR comb filter its source prints, and the repeats die away. Past it they do
+not: the source states the stability condition outright — above unity "the
+signal would grow endlessly" — and that is broken here on purpose. What holds
+the loop up instead is the same soft clipper the instrument's own output stage
+uses, inside the feedback path. The repeats grow, saturate, and then sit there
+as a self-oscillating drone that can be played over. It cannot run away, and it
+will not stop by itself either: Enable off, or Mix at zero, is how it is
+stopped.
+
+**Turning Time while it runs** bends the repeats rather than clicking. The read
+head glides to a new setting over about 50 ms, which is a tape delay's behaviour
+and is worth having on purpose; a host moving the tempo under a synced delay
+does the same thing.
 
 ### Output
+
+![The OUTPUT panel.](images/panel-output.png)
 
 | Control | Range | Default | |
 |---|---|---|---|
@@ -179,15 +248,17 @@ distortion are one model with two names.
 
 ### Mods *(the whole panel is added)*
 
+![The MODS panel: ten numbers the schematic does not give.](images/panel-mods.png)
+
 Ten numbers that the schematic does not give. They used to be constants in the
 engine, which meant shipping one particular guess; they are controls instead,
 with those guesses as their defaults. Nothing moved — a preset that does not
 mention them sounds exactly as it did.
 
 They are also close to the list of things people soldered into their own
-machines, and there is a reason that list is short and specific: no two 303s
+machines, and there is a reason that list is short and specific: no two of these machines
 agreed anyway. Matched transistor pairs, a posistor and twenty years of drift
-saw to that, so “the” 303 sound was never one sound. This is where you pick
+saw to that, so “the” silverbox sound was never one sound. This is where you pick
 yours.
 
 | Control | Range | Default | |
@@ -197,10 +268,10 @@ yours.
 | **Acc Sweep** | 0 – 6 oct | 3.5 | How far a full accent opens the filter. This is the control that decides whether an accent reads as one at all: an accented note is also running a much shorter envelope, so too little here and the shortening wins and the accent comes out *darker*. It did, at two octaves. |
 | **Acc Build** | 0 – 100 % | 75 % | How much of C62 one accent fills. Below 100 % an accent lands on what the last one left, so a run of them builds. |
 | **Acc Gain** | 0 – 200 % | 90 % | How much louder an accent is. |
-| **Acc Decay** | 20 ms – 2.5 s | 200 ms | The decay an accented note is forced onto by the 4066. **Set it equal to Decay and accents stop being shorter** — the modification the Devil Fish put a front-panel switch on, and the most-requested change to this circuit there has ever been. |
+| **Acc Decay** | 20 ms – 2.5 s | 200 ms | The decay an accented note is forced onto by the 4066. **Set it equal to Decay and accents stop being shorter** — the change the hardware modification put a front-panel switch on, and the most-requested one to this circuit there has ever been. |
 | **Droop** | 1 – 400 Hz | 25 Hz | The tilt on the square. Down for a clean square, up to thin it towards a pulse. Does nothing on the sawtooth. |
 | **Ladder** | 0 – 200 % | 100 % | How hard the feedback is driven into its own saturation. Down and the filter is cleaner and rings harder; up and it fights back. |
-| **Res Range** | 50 – 130 % | 100 % | How much feedback Resonance can ask for. 100 % is the machine — just below oscillation. **Above it the filter sings**, which a stock 303 cannot do. |
+| **Res Range** | 50 – 130 % | 100 % | How much feedback Resonance can ask for. 100 % is the machine — just below oscillation. **Above it the filter sings**, which a stock machine cannot do. |
 | **Drift** | 0 – 100 % | 0 % | Oscillator instability. Deterministic: the wander is seeded at reset, so a render is still repeatable to the sample. |
 
 ## 4. Env Mod, and why it is strange
@@ -211,13 +282,13 @@ and it is the most useful page in them.
 The complaint it opens with is this. In an ordinary synthesiser the envelope
 only ever *opens* the filter, from a resting point the cutoff knob sets. So
 asking for a deeper sweep means asking the filter to travel further up — into a
-range where, as Roland put it, *significant aural characteristic changes do not
+range where, as the service notes put it, *significant aural characteristic changes do not
 occur*. You get a brighter note and not much more movement.
 
-The TB-303 does something about it. Q9 sets the bias for the antilog pair Q10
+The circuit does something about it. Q9 sets the bias for the antilog pair Q10
 and Q11, and the Env Mod control is wired so that turning it up feeds more
 envelope to Q10 **and** shifts that bias, which lowers the filter's resting
-cutoff. Roland's own word for the arrangement is *a gimmick*.
+cutoff. The service notes' own word for the arrangement is *a gimmick*.
 
 The effect, on the knob:
 
@@ -236,12 +307,12 @@ top: **C18 = 0.018 µF**, then C19, C24 and C26 = **0.033 µF** each.
 
 They are driven by one current, so each pole sits at 1/(2πRC) and the odd one
 out is the first stage the signal meets — at 0.033/0.018 = **1.83 times** the
-others. A 303's ladder is therefore three coincident poles plus a fourth nearly
+others. The ladder is therefore three coincident poles plus a fourth nearly
 an octave above them.
 
 That is not a detail. It is why the filter measures closer to 18 dB per octave
 than to 24 near its corner and only reaches the full four-pole slope an octave
-up. Measured out of this build, resonance at zero, cutoff knob at 500 Hz:
+up. Measured from the plugin, resonance at zero, cutoff knob at 500 Hz:
 
 | Band | Slope |
 |---|---|
@@ -254,6 +325,8 @@ run out of headroom. That is where the growl at high resonance comes from, and
 it is also what stops the resonance running away.
 
 ## 6. The sequencer
+
+![The SEQUENCER panel. Mode and Rate are stacked into one column.](images/panel-sequencer.png)
 
 Set **Mode** to Sequencer and the plugin plays itself.
 
@@ -300,6 +373,8 @@ which part of the pattern is on show — *PATTERN 1 33-64/128*.
 
 ### The grid
 
+![The step grid: the octave row, the piano roll, and the three flag lanes under it.](images/grid.png)
+
 Sixteen steps across, below the panels — or thirty-two of a longer pattern, as
 above.
 
@@ -308,6 +383,22 @@ above.
   right-click anywhere in the column) to clear the step, and **drag to paint**.
   An accented step is drawn bright — an accent is the first thing you look for
   when reading somebody else's pattern.
+- **Drag along one row and you draw a long note.** It covers as many steps as
+  you drag it over and is drawn as one continuous bar, and what it writes is
+  the note on every step with a slide out of all but the last — which is what a
+  held note has always been on this machine, entered in one gesture instead of
+  eight. Drag back over it to shorten it. Leave the row and it is a new note,
+  so a diagonal drag still paints a melody.
+
+  The slide *is* the tie, so the SLIDE lane edits the length of a long note:
+  turn one off in the middle and the bar splits into two notes at that step,
+  turn it back on and it is one note again. A slide between two *different*
+  pitches is a glide rather than a tie, and stays drawn as two notes, because
+  that is what you hear.
+
+![A note dragged from step 4 to step 9. One bar, and the SLIDE lane shows the five slides that hold it together — on every step but the last.](images/grid-long-note.png)
+
+![The same run with the slide on step 6 turned off. It is two notes now, and putting the slide back makes it one again.](images/grid-note-split.png)
 - The **OCT** row above it moves a step up to **two octaves either way**. Click
   the top half to step up, the bottom half to step down, one octave a click, as
   far as +2 and −2; the right button puts a step straight back to the middle.
@@ -329,7 +420,75 @@ All of it applies to whichever pattern the bank has selected — which is not
 necessarily the one sounding, because a running chain moves on without the
 editor following it. The playhead is only drawn when the two are the same.
 
+### Live mode, and playing patterns from a pad
+
+Set **Mode** to **Live** and the keyboard stops transposing the pattern and
+starts selecting them instead. Everything else about the sequencer is the same.
+
+That swap is the whole feature. In Sequencer mode a held key moves the pattern
+by semitones, which is what the machine's own keyboard did and is the wrong
+thing entirely when you are standing in front of a pad controller and the thing
+you want the pads to do is change pattern. In Live mode:
+
+- **A key the map does not know about simply runs the pattern**, at the pitch
+  it was written at. That is how you start it without a transport, exactly as
+  before — you just no longer have to pick the right key.
+- **A mapped key selects its pattern**, or steps the bank one either way.
+- **Stepping stops at the ends.** Next on the last pattern stays on the last,
+  prev on the first stays on the first. A pad that does nothing at the end of
+  the bank is better than one that lands on pattern 1 halfway through a bar.
+- **Pattern Oct** moves the whole running pattern by octaves — see below.
+
+![Set Mode to Live and the keyboard stops transposing the pattern and starts selecting them.](images/panel-sequencer-live.png)
+
+**Building the map.** Press **MAP**, on the row above the grid; the bank turns
+into the pad layout and says so. Then, for each pad:
+
+1. Click what you want it to do — a pattern in the bank, or the **PREV** or
+   **NEXT** button.
+2. Play the note you want to do it. That is the whole of the learning.
+
+![MAP lit, the bank turned into the pad layout, and the row that does it: the pattern octave, PREV and NEXT, and MAP itself. PREV and NEXT show the notes they answer to.](images/live-row.png)
+
+![The bank as a pad layout. Pattern 5 is reached by C3; the header says PATTERN MAP rather than PATTERNS so it cannot be mistaken for the ordinary bank.](images/live-map.png)
+
+The cell or button then shows the note that reaches it. **Right-click** one to
+unbind it, and right-click **MAP** to clear the whole map at once. Press MAP
+again to go back to the ordinary bank. Selecting a pattern with the mouse is
+unaffected while the map is open, so a layout can be built while a pattern
+plays.
+
+Two things worth knowing:
+
+- **One note does one thing.** Learning a note onto a new target takes it off
+  whatever it did before, so a pad cannot quietly end up doing two jobs.
+- **The map is saved with the project, not with the preset.** A pad layout
+  belongs to your rig rather than to a sound, and browsing presets in the
+  middle of a set must not silently remap the controller. Nothing in a preset
+  file mentions it.
+
+![Out of map mode the same two buttons are just PREV and NEXT, and step the bank when clicked.](images/live-row-plain.png)
+
+PREV and NEXT are ordinary buttons the rest of the time, and step the bank when
+clicked — the same call the pads make, so the two cannot drift apart.
+
+### Moving the whole pattern: Pattern Oct
+
+**OCT**, with its **−** and **+** beside the MAP button, moves the entire
+running pattern by octaves without touching a single step. Click the reading
+itself to put it back to zero.
+
+It exists because Live mode takes the keyboard away, but it is not limited to
+Live mode: in MIDI and Sequencer mode it adds to the held-key transpose, so a
+line written low can be played an octave up without rewriting it or holding
+anything down. It is an ordinary parameter, so a host automates it like a knob.
+A step that would land outside MIDI's own range is clamped rather than wrapped,
+so a pattern pushed four octaves up flattens at the top instead of folding back
+into the bass.
+
 ### The pattern bank
+
+![The bank. The pattern being edited is ringed, written ones are filled.](images/bank.png)
 
 Beside the grid, eight by eight: **sixty-four patterns**. Click one to edit it,
 or roll the wheel over the grid to step through them. A pattern with something
@@ -423,6 +582,8 @@ a triplet swing both land on whole ticks rather than between two of them.
 
 ### Vibrato *(added)*
 
+![The VIBRATO panel, in the half behind ADVANCED.](images/panel-vibrato.png)
+
 | Control | Range | Default | |
 |---|---|---|---|
 | **Vib Depth** | 0 – 200 cents | 25 | How far a vibrato step bends. In MIDI mode the mod wheel (CC1) scales it, since there is no step to carry the bit. The top of the range is a whole tone either way — past vibrato, and into something the note is doing on purpose. |
@@ -430,6 +591,8 @@ a triplet swing both land on whole ticks rather than between two of them.
 | **Vib Delay** | 0 – 400 ms | 60 ms | How long the note waits first, after which it ramps in over 80 ms. At zero it is already wobbling when the note starts, which sounds like a mistake rather than like playing. A slide does not restart the wait. |
 
 ## 7. The pattern generator
+
+![The GENERATOR panel. The seed itself is up beside the grid, with GEN.](images/panel-generator.png)
 
 A seed, a scale, a root and five densities. **The same settings always give the
 same sixteen steps**, so a line worth keeping is a number you can write down
@@ -469,7 +632,7 @@ Measured over 400 seeds: the root is **44 %** of all generated notes, rests are
 
 | Control | Default | |
 |---|---|---|
-| **Seed** | 1 | Which pattern. 0 – 9999. |
+| **Seed** | 1 | Which pattern. **0 – 4,294,967,295**, which is the whole of a 32-bit word and is wide enough to take a Unix timestamp — so "seed it from the clock" is a thing you can actually do here, and you will not hear the same line twice. The **−** and **+** buttons step it and wrap at both ends; **click the reading to type one**, which is the only way across a range this size. It is the one control in this table that is **not** on the GENERATOR panel: it is up beside the step grid, next to the − and + buttons that step it and the GEN button that rolls it, which is where it is used. It is an ordinary parameter either way and a host automates it as one. |
 | **Scale** | Minor | Which notes it may use. Minor is where nearly every acid line lives; Chromatic is for when it should not make sense. |
 | **Root** | C | What the scale is built on. It moves the notes inside the octave rather than transposing the result — to move the line, hold a MIDI note. |
 | **Notes** | 78 % | How many steps get a note at all. The rests matter more than they look: a pattern with a note on every step has no shape. |
@@ -484,6 +647,10 @@ Presets are text files in your own preset directory
 (`$XDG_CONFIG_HOME/SaeureKiste/presets`, or `%APPDATA%\SaeureKiste\presets` on
 Windows), and the twenty-seven factory presets are compiled into the plugin.
 The browser opens by clicking the preset name on the bar.
+
+![The preset bar: the two arrows step through the library, the name opens the browser, SAVE writes a new one, and ADVANCED opens the lower half of the window.](images/preset-bar.png)
+
+![The browser. The folders are down the left; the count beside each is how many presets it holds.](images/preset-browser.png)
 
 **The library has folders.** Down the left of the browser is a column of them:
 *All*, then *Factory Presets*, then whatever you have made, then *Unfiled* for
@@ -535,7 +702,7 @@ was written, so the patterns inside a preset travel with it.
 | **Normal Decay** | Acc Decay matched to Decay: accents stay louder and brighter but stop being shorter. |
 | **Oscillator** | Res Range at 120 %, so the ladder sings instead of ringing. |
 | **Tired Machine** | Drift at 55 %. Nothing quite holds still. |
-| **Plain Envelope** | Env Bias at zero — Roland's gimmick switched off, for comparison. |
+| **Plain Envelope** | Env Bias at zero — the gimmick switched off, for comparison. |
 
 ### Driving their own sequencer
 
@@ -551,6 +718,8 @@ was written, so the patterns inside a preset travel with it.
 | **Basement** | *Dark.* The square an octave down, cutoff almost shut, a decay long enough that the filter never finishes closing. Minor seconds and tritones, seven notes in sixteen steps, and Acc Decay at 600 ms so an accent swells instead of stabbing. |
 
 ## 9. The window
+
+![The window with ADVANCED open: the mods and the three panels that go with them.](images/window-advanced.png)
 
 One row of knobs across a wide, shallow panel, which is the shape of the machine
 it models — and a second row of them behind a button, because ten of the
@@ -573,91 +742,28 @@ controls are for tuning the engine rather than for playing it.
   transfer function the DSP uses, unequal capacitor included — sweeping down
   after every note the way the envelope does.
 
-## 10. Offline rendering
+## 10. The modified machine
 
-```sh
-./build/saeurekiste-render --list
-./build/saeurekiste-render --preset dark_engine --out acid.wav --seconds 16
-./build/saeurekiste-render --all --outdir /tmp/acid --bpm 138
-./build/saeurekiste-render --hold --key 40 --seconds 4
-./build/saeurekiste-render --all --demo-moves --outdir demos --seconds 16
-./build/saeurekiste-render --selftest
-```
-
-The renderer plays a sixteen-step acid line by default, because the accent tail
-and the non-retriggering slide are both inaudible in a single held note.
-`--hold` gives the held note back.
-
-A preset in **Sequencer** mode is rendered differently and the renderer works
-that out for itself: a running transport and no notes at all, with the length
-rounded up to a whole number of times round the pattern and never fewer than
-three, so a demo ends where the loop does rather than halfway through a bar.
-
-### Moving knobs while it renders
-
-A demo that holds every control still for sixteen seconds is a photograph of a
-preset. `--demo-moves` makes it a recording of somebody playing one:
-
-```sh
-./build/saeurekiste-render --all --demo-moves --outdir demos \
-   --seconds 16 --tail 3 --rate 48000
-```
-
-Three controls move, all three **relative to whatever the preset sets**, so a
-demo shows the instrument's range without losing what makes it that preset:
-
-| | Over the take |
-|---|---|
-| **Cutoff** | down about an octave and a half, up to an octave above where it started, then settling a little under it |
-| **Resonance** | a quarter of its travel, so the sweep gets more vocal as it goes |
-| **Drive** | a third of its travel, starting halfway in, so the end leans into the clipper |
-
-Resonance and Drive **reflect rather than clamp**: a preset already near the top
-travels the same distance downward instead, because a knob sitting against the
-ceiling for sixteen seconds is the thing this exists to avoid. The moves run
-over the held seconds and not the tail, so the last note decays wherever the
-sweep left the filter.
-
-For anything else, `--move` writes one out by hand, in real units, and can be
-given more than once:
-
-```sh
---move "Cutoff=200 Hz..2 kHz"          # a straight ramp over the take
---move "Cutoff=800..2400..600"         # there and back
---move "Drive=20%..90%@8:16"           # only the second half
-```
-
-Interpolation happens in the parameter's own domain, so a Log control like
-Cutoff sweeps evenly **in octaves** rather than crawling through its top one.
-
-Without either flag nothing moves and a render is byte-for-byte what it always
-was.
-
-`--seed 1 --seeds 8` prints what the generator makes, as the grid draws it.
-
-The engine holds no random state, so the same preset at the same sample rate
-renders the same samples every time.
-
-## 11. The Devil Fish
-
-Robin Whittle has modified TB-303s as the **Devil Fish** since the early
-nineties. He publishes a manual for it, and it is a good source of a different
-kind from the service notes: it documents what each addition *does*, in numbers,
+The silverbox has one famous hardware modification, made and sold since the
+early nineties, which adds eight controls the original never had. Its author
+publishes a manual for it, and that manual is a good source of a different kind
+from the service notes: it documents what each addition *does*, in numbers,
 rather than printing a schematic. Everything in this chapter comes from it.
 
-**Every control here defaults to the stock circuit.** Whittle's manual has a
-section called *Limiting the Devil Fish to TB-303 sounds*, a table of where to
+**Every control here defaults to the stock circuit.** That manual has a section
+on limiting the modification to the original's own sounds, a table of where to
 leave each control so the machine behaves like an unmodified one; those are the
-defaults. It is checked rather than asserted: all twenty-seven presets render
-byte for byte what they did before any of this existed.
+defaults. It is not merely claimed, either: left where they are, these controls
+give back exactly the audio the instrument made before any of them existed —
+the same samples, not merely a similar sound.
 
 ### The controls
 
 **Overdrive** *(VCF)* is the oscillator's level into the filter. It is not
 `Drive` — this one is in front of the ladder and `Drive` is behind it. 0 dB is
 the fixed level the machine has. Above that the ladder's input pair stops being
-linear and starts switching, which is Whittle's "the filter operates under
-duress"; the top of the range is his 66.6 times normal. At the bottom the
+linear and starts switching, which is the manual's "the filter operates under
+duress"; the top of the range is its 66.6 times normal. At the bottom the
 oscillator is gone altogether, and that setting is only interesting with
 `Res Range` past 100 %: the filter sings on its own and Overdrive reintroduces
 the oscillator by hand.
@@ -665,8 +771,8 @@ the oscillator by hand.
 **Filter FM** *(VCF)* feeds the amplifier's own output back into the filter
 frequency, at audio rate. It is loudest where the signal is loudest, so it bites
 hardest on accented notes and wherever Overdrive is up, and it needs resonance
-to have anything to work with. A little is edge. A lot is what Whittle calls a
-spluttering chaotic mess, and he is right. While it is up the filter
+to have anything to work with. A little is edge. A lot is what that manual calls a
+spluttering chaotic mess, and that is exactly what it is. While it is up the filter
 coefficients are recomputed every sample instead of every eighth, which is what
 audio-rate modulation costs and why it is off by default.
 
@@ -680,13 +786,15 @@ volume control.
 **Soft Attack** *(AMP)* is how fast the amplifier opens on an unaccented note,
 0.3 to 30 ms. The machine's is fixed by C41 and R134 at 2.2 ms, which is the
 default and is as good as instant; an accented note always uses it whatever this
-says. Turned up, the note swells instead of starting — the one thing a 303
+says. Turned up, the note swells instead of starting — the one thing the original
 cannot do.
+
+![The AMP panel, in the half behind ADVANCED. The whole of it is added: nothing on the original machine reaches its volume envelope.](images/panel-amp.png)
 
 **Amp Decay** and **Amp Sustain** *(AMP)* are the volume envelope, which the
 machine gives you no way to reach: R123 and C42 fix its decay at 1.5 s, reaching
 a tenth in about 3.45 s, and that is the default. It is long enough that over a
-sixteenth note nothing happens, which is why the 303's amplifier holds while the
+sixteenth note nothing happens, which is why the machine's amplifier holds while the
 filter falls. Shorten it and the notes start closing on their own. Amp Sustain
 is where the decay falls to instead of silence, so a held note can run
 indefinitely.
@@ -700,12 +808,13 @@ succession.
 | **Fast** | The opposite. The output is the pulse that was just added rather than what has accumulated, so a residue makes the next one *smaller* and the first accent of a run is the strongest. |
 | **Slow** | Rises more gently to about twice as far, and takes longer to cool, so it is still settling through the notes that follow. |
 
-Whittle describes what these three do without giving component values — there is
-no Devil Fish schematic — so Normal is the machine and the other two are fitted
-to his description. `Sweep Time` and `Acc Build` remain the controls.
+The manual describes what these three do without giving component values — there
+is no schematic for the modification — so Normal is the machine and the other
+two are fitted
+to that description. `Sweep Time` and `Acc Build` remain the controls.
 
 **Accent Hold** *(ACCENT)* accents every note whatever its step or velocity says.
-His front panel has a pushbutton for it.
+The modification's front panel has a pushbutton for it.
 
 ### The widened ranges
 
@@ -729,16 +838,19 @@ real units.
 The part of the modification that is jacks: the external audio input into the
 filter, the audio Filter FM input, the Filter Out tap, and the CV and gate
 sockets. Those want an audio input port and a second output, which is a
-different shape of plugin. Whittle's MIDI retrofits need nothing at all here.
+different shape of plugin. The modification's MIDI retrofits need nothing at all here.
 
-## 12. Where the numbers came from
+## 11. Where the numbers came from
 
-`tools/analysis/README.md` lists every number in the engine and says whether it
-was read off the schematic, printed in the service notes, derived, or fitted.
+Every number in this instrument is one of four things: read off the schematic,
+printed in the service notes, derived from the two, or fitted because neither
+gives it.
 
-The ones that were guesses are all **controls** now, on the Mods panel, with
-those guesses as their defaults — so that file is a list of defaults rather than
-a list of decisions made on your behalf.
+**The fitted ones are all controls.** They are the Mods panel, and the number
+that was guessed is that control's default — so the guesses are a starting
+point you can disagree with rather than decisions made on your behalf and
+buried. That is the rule the whole instrument is built on: anything that could
+be read off the circuit is fixed, and anything that could not is a knob.
 
-The honest summary: this instrument is fitted to a circuit diagram and an
-alignment procedure. It has never been listened to against a real TB-303.
+The honest summary: this is fitted to a circuit diagram and an alignment
+procedure. It has never been listened to against a real one.

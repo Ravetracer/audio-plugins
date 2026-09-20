@@ -43,6 +43,17 @@ version="$(sed -n 's/^project([A-Za-z0-9_]* VERSION \([0-9.]*\).*/\1/p' "${src}/
 # three") and a C++ identifier is not.
 doc_ns="$(printf '%s' "$name" | tr '[:upper:]' '[:lower:]')"
 
+# What the instrument is called, as opposed to what it is filed under. The
+# CMake project, the binary, the preset directory and this manual's own file
+# name all have to survive a file system and a C++ identifier, so they are
+# plain ASCII; the name on the cover and in the prose does not, and for
+# SaeureKiste the two differ by an umlaut. It is read from the plugin's own
+# identity header rather than configured here, so there is one place that says
+# what the thing is called.
+display="$(sed -n 's/^constexpr char kPluginName\[\] = "\(.*\)";.*/\1/p' \
+   "${src}/src/${doc_ns}.h" 2>/dev/null | head -1)"
+[ -n "$display" ] || display="$name"
+
 for tool in python3 wkhtmltopdf; do
    command -v "$tool" >/dev/null 2>&1 || { echo "${tool} not found -- cannot build the manual" >&2; exit 1; }
 done
@@ -72,7 +83,7 @@ mkdir -p "$out_dir"
 base="${name}-${version}-Manual"
 
 python3 "${here}/manual.py" \
-   --plugin "$name" --version "$version" \
+   --plugin "$name" --display-name "$display" --version "$version" \
    --source "${src}/docs/manual.md" \
    --params "${work}/params.md" --presets "${work}/presets.md" \
    --css "${here}/manual.css" \
@@ -89,7 +100,7 @@ wkhtmltopdf \
    --page-size A4 \
    --margin-top 16mm --margin-bottom 16mm --margin-left 16mm --margin-right 16mm \
    --encoding utf-8 \
-   --title "${name} ${version} — Manual" \
+   --title "${display} ${version} — Manual" \
    "${out_dir}/${base}.html" "${out_dir}/${base}.pdf"
 
 pages="$(pdfinfo "${out_dir}/${base}.pdf" 2>/dev/null | sed -n 's/^Pages: *//p')"

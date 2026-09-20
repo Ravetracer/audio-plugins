@@ -82,6 +82,20 @@ struct Step {
    }
 };
 
+// Whether `held` is held *into* `next`, the step that follows it: the same
+// pitch, and a slide out of it.
+//
+// That pair is what a tie is made of. A slid step's gate runs past the next
+// step's onset, and the engine reads a note arriving while another is still
+// held as a slide and does not retrigger -- so a run of tied steps is one long
+// note, however many steps it covers. The window draws such a run as one bar
+// and paints one when a note is dragged across several steps.
+//
+// The octave has to match as well as the note, because a slide between two
+// different pitches is a glide, which is the other thing slide does and is not
+// a tie.
+bool stepsTied(const Step &held, const Step &next);
+
 // The whole bank as it travels through a preset load. Flat rather than
 // two-dimensional, because every path that touches it -- the preset text, the
 // state blob, the plugin's own store -- walks it in one pass.
@@ -110,6 +124,24 @@ bool patternEmpty(const uint16_t *steps);
 // carries what the pattern actually uses, rounded up to the machine's sixteen,
 // and the reader clears whatever a shorter line does not mention.
 int patternUsedLength(const uint16_t *steps);
+
+// ------------------------------------------------------------------ live map
+//
+// What one MIDI note does in Live mode. A note carries exactly one of these,
+// so the map is 128 of them and inverts trivially; several notes may do the
+// same thing, which is what lets two pads either side of a controller both
+// step forward.
+enum NoteAction {
+   kNoteNone = -1,        // this note does nothing but run the pattern
+   kNotePrevPattern = -2, // step back one, and stop at the first
+   kNoteNextPattern = -3, // step on one, and stop at the last
+   // Anything from 0 upwards selects that pattern outright.
+};
+
+// Where stepping lands. Clamped rather than wrapped, at both ends: a set
+// played off pads wants the button to stop doing anything at the end of the
+// bank, not to jump back to pattern 1 in the middle of a bar.
+int steppedPattern(int current, int delta, int count);
 
 // ------------------------------------------------------------------ generator
 //
@@ -213,16 +245,51 @@ public:
    // The generator. The window does not know what a scale is or which
    // parameter holds the seed -- it only has three buttons, and the plugin
    // reads its own table.
-   virtual int seqSeed() const = 0;
+   //
+   // The seed is unsigned and spans the whole of a 32-bit word, so it is wide
+   // enough to take a Unix timestamp. That is more than a knob can be dragged
+   // across, which is why the window types it as well as stepping it, and it
+   // is why this is uint32_t rather than int: the top half of the range does
+   // not fit in a signed one.
+   virtual uint32_t seqSeed() const = 0;
+   virtual uint32_t seqSeedMax() const = 0;
    // Writes the seed back as a proper parameter edit, so the host sees it, and
    // regenerates from it.
-   virtual void seqSetSeed(int seed) = 0;
+   virtual void seqSetSeed(uint32_t seed) = 0;
    // Regenerates from the seed that is set. Deterministic, and what the - and
    // + buttons use.
    virtual void seqGenerate() = 0;
    // Picks a new seed and generates from that: what GEN does, and what a
    // player expects from a button called GEN -- a new pattern every press.
    virtual void seqGenerateNew() = 0;
+
+   // ------------------------------------------------------------- live mode
+   //
+   // The window draws the map and arms the learning; the plugin owns it and is
+   // the only thing that ever sees a MIDI note.
+
+   // Whether Mode is Live. What decides whether the map is drawn at all.
+   virtual bool seqLive() const = 0;
+
+   // Which target the next incoming note will be bound to -- a NoteAction, or
+   // a pattern index, or kNoteNone for "not waiting for one".
+   virtual int seqLearnTarget() const = 0;
+   virtual void seqSetLearnTarget(int target) = 0;
+
+   // Which note is bound to a target, or -1. Takes the same target values as
+   // seqSetLearnTarget, so the window asks about a bank cell and the two step
+   // buttons the same way.
+   virtual int seqMappedNote(int target) const = 0;
+   // Unbinds every note that points at a target, and, with kNoteNone, the lot.
+   virtual void seqClearMap(int target) = 0;
+
+   // Prev and next by mouse. The same call the mapped notes go through, so the
+   // buttons and the pads cannot drift apart.
+   virtual void seqStepPattern(int delta) = 0;
+
+   // The whole pattern's transpose, in octaves.
+   virtual int seqPatternOctave() const = 0;
+   virtual void seqSetPatternOctave(int octaves) = 0;
 
    // Writes the selected pattern to a temporary .mid file and returns the path,
    // or an empty string if there was nothing to write or nowhere to write it.

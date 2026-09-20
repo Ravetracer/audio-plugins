@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.16)
-project(SaeureKiste VERSION 0.6.0 LANGUAGES CXX)
+project(SaeureKiste VERSION 0.7.0 LANGUAGES CXX)
 
 # SaeureKiste builds as a CLAP and as a VST3, for Linux and for Windows.
 #
@@ -167,6 +167,7 @@ add_library(SaeureKiste-impl STATIC
    src/params.cpp
    src/dsp/acid_engine.cpp
    src/dsp/drive.cpp
+   src/dsp/delay.cpp
    src/pattern.cpp
    src/midifile.cpp
    ${SAEUREKISTE_GUI_SOURCES}
@@ -246,9 +247,12 @@ if(SAEUREKISTE_BUILD_TOOLS)
    # dsp/drive.cpp is in here as well as in the plugin: the self-test measures
    # the drive models' transfer curves and harmonic content directly, which is
    # the only way to assert that they sound different from each other rather
-   # than merely render different samples.
+   # than merely render different samples. dsp/delay.cpp is there for the same
+   # reason -- what a delay has to be held to is where its repeats land and
+   # that the feedback stays bounded past unity, and neither is visible from
+   # outside the plugin.
    add_executable(saeurekiste-render tools/render.cpp src/preset.cpp src/params.cpp src/pattern.cpp
-                  src/midifile.cpp src/dsp/drive.cpp)
+                  src/midifile.cpp src/dsp/drive.cpp src/dsp/delay.cpp)
    target_link_libraries(saeurekiste-render PRIVATE plugincore::shared)
    target_include_directories(saeurekiste-render PRIVATE
       "${CLAP_INCLUDE_DIR}"

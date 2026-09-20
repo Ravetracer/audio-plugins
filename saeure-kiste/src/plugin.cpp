@@ -15,6 +15,7 @@
 #include "plugincore/dsp/denormals.h"
 #include "plugincore/dsp/fastmath.h"
 #include "dsp/acid_engine.h"
+#include "dsp/delay.h"
 #include "entry.h"
 #include "factories.h"
 #include "midifile.h"
@@ -84,7 +85,7 @@ constexpr uint32_t kStateMagic = 0x54534B53u; // 'SKST' little-endian
 // pattern and is read as the first sixteen steps of a 128-step pattern, the
 // rest rests, which is exactly the line it described. Nothing else about the
 // format moved, so a project saved by 0.4.0 opens with its bank intact.
-constexpr uint32_t kStateVersion = 2;
+constexpr uint32_t kStateVersion = 3;
 
 // How many steps per pattern a blob of a given version carries.
 constexpr int kStateStepsInVersion1 = 16;
@@ -114,6 +115,10 @@ public:
          mValues[i].store(paramTable()[i].def, std::memory_order_relaxed);
          mMods[i].store(0.0, std::memory_order_relaxed);
       }
+      // An empty pattern map: every note runs the pattern and none of them
+      // selects one, which is what Live mode does before anything is learned.
+      for (int note = 0; note < 128; ++note)
+         mNoteMap[note].store(static_cast<int8_t>(kNoteNone), std::memory_order_relaxed);
       mPlugin.desc = &kDescriptor;
       mPlugin.plugin_data = this;
       mPlugin.init = [](const clap_plugin_t *p) { return self(p)->init(); };
@@ -130,6 +135,7 @@ public:
          // key left in it would run the sequencer with nothing pressed.
          plug->forgetHeldNotes();
          plug->mEngine.reset();
+         plug->mDelay.reset();
       };
       mPlugin.process = [](const clap_plugin_t *p, const clap_process_t *pr) {
          return self(p)->process(pr);
@@ -163,6 +169,7 @@ private:
    bool activate(double sampleRate, uint32_t /*minFrames*/, uint32_t maxFrames) {
       mSampleRate = sampleRate;
       mEngine.prepare(sampleRate, maxFrames);
+      mDelay.prepare(sampleRate);
       mParamsDirty.store(true, std::memory_order_release);
       return true;
    }
@@ -179,6 +186,25 @@ private:
    }
 
    double realValue(uint32_t id) const { return paramToReal(paramTable()[id], effective(id)); }
+
+   // The delay's settings. Not part of EngineParams: the stage is not in the
+   // engine, it is after it, and one of its controls -- the synced time --
+   // needs the tempo, which syncEngineParams() has no business knowing about.
+   void syncDelayParams() {
+      const bool synced = static_cast<int>(realValue(kParamDelaySync)) == kDelaySynced;
+      double seconds = realValue(kParamDelayTime) * 0.001;
+      if (synced) {
+         const double bpm = mTempo > 1.0 ? mTempo : 120.0;
+         seconds = delayDivisionBeats(static_cast<int>(realValue(kParamDelayDivision))) * 60.0 /
+                   bpm;
+      }
+      mDelay.setParams(static_cast<int>(realValue(kParamDelayOn)) != 0,
+                       static_cast<int>(realValue(kParamDelayMode)),
+                       static_cast<float>(seconds),
+                       static_cast<float>(realValue(kParamDelayFeedback)) * 0.01f,
+                       static_cast<float>(realValue(kParamDelayMix)),
+                       static_cast<float>(realValue(kParamDelayWidth)) * 0.01f);
+   }
 
    void syncEngineParams() {
       EngineParams p;
@@ -394,6 +420,17 @@ private:
       const uint8_t advanced = plug->mAdvancedOpen.load(std::memory_order_relaxed) ? 1u : 0u;
       blob.append(reinterpret_cast<const char *>(&advanced), sizeof(advanced));
 
+      // Version 3: Live mode's pattern map, one signed byte per MIDI note.
+      // It is here rather than in the preset on purpose -- a pad layout
+      // belongs to the rig, so it has to survive the project and must not
+      // follow a preset from one machine to another. Appended after everything
+      // version 2 wrote, so a version 2 blob simply stops before it and reads
+      // as a map with nothing in it.
+      for (int note = 0; note < 128; ++note) {
+         const int8_t action = plug->mNoteMap[note].load(std::memory_order_relaxed);
+         blob.append(reinterpret_cast<const char *>(&action), sizeof(action));
+      }
+
       size_t written = 0;
       while (written < blob.size()) {
          const int64_t n =
@@ -460,6 +497,20 @@ private:
       uint8_t advanced = 0;
       if (readExactly(stream, &advanced, sizeof(advanced)))
          plug->mAdvancedOpen.store(advanced != 0, std::memory_order_relaxed);
+
+      // The pattern map, from version 3 on. Read as a block and applied only
+      // if all of it arrived: a half-read map would leave some pads bound and
+      // the rest not, which is worse than none of them.
+      int8_t map[128];
+      if (readExactly(stream, map, sizeof(map)))
+         for (int note = 0; note < 128; ++note) {
+            const int action = map[note];
+            const bool valid = action == kNoteNone || action == kNotePrevPattern ||
+                               action == kNoteNextPattern ||
+                               (action >= 0 && action < kMaxPatterns);
+            plug->mNoteMap[note].store(
+               static_cast<int8_t>(valid ? action : kNoteNone), std::memory_order_relaxed);
+         }
 
       plug->mParamsDirty.store(true, std::memory_order_release);
       plug->notifyParamValuesChanged();
@@ -644,9 +695,16 @@ private:
    // should. Inside the block the loop splits at every step boundary, so notes
    // are sample-accurate and not quantised to the block size.
 
+   // Both of the modes the pattern plays in. Everything that asks "is the
+   // pattern the player?" asks this; Live differs only in what the keyboard is
+   // for, and that is asked separately.
    bool sequencerMode() const {
-      return static_cast<int>(realValue(kParamMode)) == kModeSequencer;
+      const int mode = static_cast<int>(realValue(kParamMode));
+      return mode == kModeSequencer || mode == kModeLive;
    }
+
+   // Live: the keys select patterns instead of transposing them.
+   bool liveMode() const { return static_cast<int>(realValue(kParamMode)) == kModeLive; }
 
    // Where the odd steps land. 50 % is straight, 66.7 % is triplet swing.
    double swingAmount() const { return (realValue(kParamSwing) * 0.01 - 0.5) * 2.0; }
@@ -768,7 +826,8 @@ private:
       if (st.note < 0)
          return; // a rest. Whatever was sounding still ends at its own gate.
 
-      int key = 36 + st.note + 12 * st.octave + mTranspose;
+      int key = 36 + st.note + 12 * st.octave + mTranspose +
+                12 * static_cast<int>(realValue(kParamPatternOctave));
       key = key < 0 ? 0 : (key > 127 ? 127 : key);
 
       // Where this note's gate ends. A slid step holds past the *next* step's
@@ -997,11 +1056,14 @@ private:
          mFramesPerStep = 8.0;
    }
 
+   // The held stack is kept in Live mode as well as in Sequencer mode, because
+   // it is what "a held key runs the pattern with no transport" is built on.
+   // What Live mode drops is the transpose: the pattern plays at the pitch it
+   // was written at, and Pattern Oct is what moves it.
    void pushTranspose(int16_t key) {
       if (mHeldKeyCount < static_cast<int>(sizeof(mHeldKeys) / sizeof(mHeldKeys[0])))
          mHeldKeys[mHeldKeyCount++] = key;
-      if (mHeldKeyCount > 0)
-         mTranspose = mHeldKeys[mHeldKeyCount - 1] - 36;
+      mTranspose = liveMode() || mHeldKeyCount <= 0 ? 0 : mHeldKeys[mHeldKeyCount - 1] - 36;
    }
 
    void popTranspose(int16_t key) {
@@ -1013,7 +1075,90 @@ private:
             break;
          }
       }
-      mTranspose = mHeldKeyCount > 0 ? mHeldKeys[mHeldKeyCount - 1] - 36 : 0;
+      mTranspose = liveMode() || mHeldKeyCount <= 0 ? 0 : mHeldKeys[mHeldKeyCount - 1] - 36;
+   }
+
+   // ------------------------------------------------------------- live map
+   //
+   // What a note does in Live mode, and the learning of it.
+   //
+   // The map is 128 relaxed atomics rather than a lock: the window writes a
+   // slot when a note is learned and the audio thread reads one per note-on,
+   // which is the same arrangement the pattern itself uses and for the same
+   // reason. It is per instance -- two tracks of this plugin have two maps --
+   // and it lives in the state blob rather than in presets, because a pad
+   // layout belongs to a rig and not to a sound: browsing presets mid-set must
+   // not silently remap the controller.
+
+   // Returns true if the note was the map's and must not do anything else.
+   bool liveNoteConsumed(int16_t key, uint32_t frame) {
+      if (!liveMode() || key < 0 || key > 127)
+         return false;
+
+      // Learning takes priority over whatever the note is already bound to,
+      // so a note can be moved from one target to another by learning it
+      // again rather than by clearing it first.
+      const int target = mLearnTarget.exchange(kNoteNone, std::memory_order_acq_rel);
+      if (target != kNoteNone) {
+         // One note, one action: a note learned onto a new target stops doing
+         // whatever it did before, which is what makes the map invertible and
+         // what stops a pad quietly doing two things at once.
+         mNoteMap[key].store(static_cast<int8_t>(target), std::memory_order_relaxed);
+         return true;
+      }
+
+      const int action = mNoteMap[key].load(std::memory_order_relaxed);
+      if (action == kNoteNone)
+         return false; // an ordinary key: it runs the pattern, as written
+
+      const int from = seqPattern();
+      int want = from;
+      if (action == kNotePrevPattern)
+         want = steppedPattern(from, -1, kMaxPatterns);
+      else if (action == kNoteNextPattern)
+         want = steppedPattern(from, +1, kMaxPatterns);
+      else
+         want = action < 0 || action >= kMaxPatterns ? from : action;
+
+      if (want != from)
+         setPatternFromAudioThread(want, frame);
+      return true;
+   }
+
+   // The Pattern parameter, moved from inside process(). It goes out to the
+   // host as a proper parameter change rather than only into the table, so the
+   // number under the bank follows, automation records it, and a host that is
+   // showing the parameter shows the pattern that is actually playing.
+   void setPatternFromAudioThread(int pattern, uint32_t frame) {
+      const ParamDesc &d = paramTable()[kParamPattern];
+      const double v = clampv(static_cast<double>(pattern + 1), d.min, d.max);
+      mValues[kParamPattern].store(v, std::memory_order_relaxed);
+      mParamsDirty.store(true, std::memory_order_relaxed);
+      if (!mOut || !mOut->try_push)
+         return;
+      clap_event_param_gesture_t g{};
+      g.header.size = sizeof(g);
+      g.header.time = frame;
+      g.header.space_id = CLAP_CORE_EVENT_SPACE_ID;
+      g.header.type = CLAP_EVENT_PARAM_GESTURE_BEGIN;
+      g.param_id = kParamPattern;
+      mOut->try_push(mOut, &g.header);
+
+      clap_event_param_value_t ev{};
+      ev.header.size = sizeof(ev);
+      ev.header.time = frame;
+      ev.header.space_id = CLAP_CORE_EVENT_SPACE_ID;
+      ev.header.type = CLAP_EVENT_PARAM_VALUE;
+      ev.param_id = kParamPattern;
+      ev.note_id = -1;
+      ev.port_index = -1;
+      ev.channel = -1;
+      ev.key = -1;
+      ev.value = v;
+      mOut->try_push(mOut, &ev.header);
+
+      g.header.type = CLAP_EVENT_PARAM_GESTURE_END;
+      mOut->try_push(mOut, &g.header);
    }
 
    // --------------------------------------------------------- PatternAccess
@@ -1078,14 +1223,22 @@ private:
    // Uniform noise over twelve semitones does not sound like a bass line and
    // never did.
 
-   int seqSeed() const override { return static_cast<int>(realValue(kParamRandSeed)); }
+   uint32_t seqSeed() const override {
+      return static_cast<uint32_t>(realValue(kParamRandSeed));
+   }
 
-   void seqSetSeed(int seed) override {
+   uint32_t seqSeedMax() const override {
+      return static_cast<uint32_t>(paramTable()[kParamRandSeed].max);
+   }
+
+   // The - and + buttons wrap rather than stopping, which is what they always
+   // did and is the right behaviour for a control whose ends mean nothing: the
+   // seed is a name for a pattern, not a quantity, so there is no "too far".
+   // The window passes a value it has already wrapped for that reason; this
+   // clamps as well, because a host automating the parameter can send anything.
+   void seqSetSeed(uint32_t seed) override {
       const ParamDesc &d = paramTable()[kParamRandSeed];
-      const int wrapped = seed < static_cast<int>(d.min)
-                             ? static_cast<int>(d.max)
-                             : (seed > static_cast<int>(d.max) ? static_cast<int>(d.min) : seed);
-      const double v = static_cast<double>(wrapped);
+      const double v = clampv(static_cast<double>(seed), d.min, d.max);
       mValues[kParamRandSeed].store(v, std::memory_order_relaxed);
       mParamsDirty.store(true, std::memory_order_release);
       // Through the host, so automation and undo see it like any knob move.
@@ -1093,6 +1246,55 @@ private:
       pushGuiEdit(kParamRandSeed, v, EditKind::Value);
       pushGuiEdit(kParamRandSeed, 0.0, EditKind::GestureEnd);
       seqGenerate();
+   }
+
+   // --------------------------------------------------- live map, for the window
+
+   bool seqLive() const override { return liveMode(); }
+
+   int seqLearnTarget() const override { return mLearnTarget.load(std::memory_order_relaxed); }
+
+   void seqSetLearnTarget(int target) override {
+      mLearnTarget.store(target, std::memory_order_release);
+   }
+
+   int seqMappedNote(int target) const override {
+      for (int note = 0; note < 128; ++note)
+         if (mNoteMap[note].load(std::memory_order_relaxed) == target)
+            return note;
+      return -1;
+   }
+
+   void seqClearMap(int target) override {
+      for (int note = 0; note < 128; ++note)
+         if (target == kNoteNone ||
+             mNoteMap[note].load(std::memory_order_relaxed) == target)
+            mNoteMap[note].store(static_cast<int8_t>(kNoteNone), std::memory_order_relaxed);
+   }
+
+   void seqStepPattern(int delta) override {
+      const int want = steppedPattern(seqPattern(), delta, kMaxPatterns);
+      const ParamDesc &d = paramTable()[kParamPattern];
+      const double v = clampv(static_cast<double>(want + 1), d.min, d.max);
+      mValues[kParamPattern].store(v, std::memory_order_relaxed);
+      mParamsDirty.store(true, std::memory_order_release);
+      pushGuiEdit(kParamPattern, 0.0, EditKind::GestureBegin);
+      pushGuiEdit(kParamPattern, v, EditKind::Value);
+      pushGuiEdit(kParamPattern, 0.0, EditKind::GestureEnd);
+   }
+
+   int seqPatternOctave() const override {
+      return static_cast<int>(realValue(kParamPatternOctave));
+   }
+
+   void seqSetPatternOctave(int octaves) override {
+      const ParamDesc &d = paramTable()[kParamPatternOctave];
+      const double v = clampv(static_cast<double>(octaves), d.min, d.max);
+      mValues[kParamPatternOctave].store(v, std::memory_order_relaxed);
+      mParamsDirty.store(true, std::memory_order_release);
+      pushGuiEdit(kParamPatternOctave, 0.0, EditKind::GestureBegin);
+      pushGuiEdit(kParamPatternOctave, v, EditKind::Value);
+      pushGuiEdit(kParamPatternOctave, 0.0, EditKind::GestureEnd);
    }
 
    // The pattern as a standard MIDI file, for the window to drag into the host.
@@ -1162,7 +1364,7 @@ private:
       const uint32_t salt = ++mGenSalt ^ static_cast<uint32_t>(ticks);
       const uint32_t seed = nextGeneratorSeed(static_cast<uint32_t>(realValue(kParamRandSeed)),
                                               salt, static_cast<uint32_t>(d.max));
-      seqSetSeed(static_cast<int>(seed)); // writes the parameter and regenerates
+      seqSetSeed(seed); // writes the parameter and regenerates
    }
 
    // ------------------------------------------------------------------ process
@@ -1175,6 +1377,11 @@ private:
       case CLAP_EVENT_NOTE_ON: {
          const auto *ev = reinterpret_cast<const clap_event_note_t *>(hdr);
          if (sequencerMode()) {
+            // In Live mode the map gets first refusal: a note it knows about
+            // selects a pattern and does nothing else, so a pad does not also
+            // start the sequencer.
+            if (liveNoteConsumed(ev->key, hdr->time))
+               break;
             // The pattern is the player. A note does not sound -- it moves the
             // whole pattern, which is what the machine's own keyboard did.
             pushTranspose(ev->key);
@@ -1187,7 +1394,7 @@ private:
       case CLAP_EVENT_NOTE_OFF: {
          const auto *ev = reinterpret_cast<const clap_event_note_t *>(hdr);
          if (sequencerMode())
-            popTranspose(ev->key);
+            popTranspose(ev->key); // harmless for a mapped key: it is not on the stack
          else
             mEngine.noteOff(ev->port_index, ev->channel, ev->key, ev->note_id);
          break;
@@ -1230,6 +1437,8 @@ private:
          const uint8_t vel = ev->data[2] & 0x7F;
          if (status == 0x90 && vel > 0) {
             if (sequencerMode()) {
+               if (liveNoteConsumed(key, hdr->time))
+                  break;
                pushTranspose(key);
                mSeqRestartWanted = true;
             } else {
@@ -1371,6 +1580,16 @@ private:
          frame = next;
       }
 
+      // The delay runs over the whole block rather than inside the split loop.
+      // It is the last stage in the box and it has no events of its own -- the
+      // splits are there so a note lands on the sample it is due on, and a
+      // delay line does not care which sample a note started on. Its settings
+      // are read once per block because one of them, the synced time, depends
+      // on the tempo, which is a property of the block rather than of the
+      // parameter table.
+      syncDelayParams();
+      mDelay.process(outL, outR, numFrames);
+
       // Published for the window's activity meter; the GUI never reads engine
       // state directly.
       mOut = nullptr; // nothing outside this call may push to the host's list
@@ -1379,7 +1598,10 @@ private:
       mNoteCounterMeter.store(mEngine.noteCounter(), std::memory_order_relaxed);
       publishOutputPeaks(outL, outR, numFrames);
 
-      return mEngine.isSilent() ? CLAP_PROCESS_SLEEP : CLAP_PROCESS_CONTINUE;
+      // Sleeping while the delay is still ringing would cut its tail off, so
+      // the stage gets a say in it as well as the engine.
+      return mEngine.isSilent() && !mDelay.ringing() ? CLAP_PROCESS_SLEEP
+                                                     : CLAP_PROCESS_CONTINUE;
    }
 
 
@@ -2084,6 +2306,14 @@ private:
    double mSeqOffA = 0.0;
    double mSeqOffB = 0.0;
    int mTranspose = 0;
+   // Live mode's pattern map: what each of the 128 MIDI notes does, as a
+   // NoteAction or a pattern index. Written by the window when a note is
+   // learned and read by the audio thread once per note-on.
+   std::atomic<int8_t> mNoteMap[128];
+   // The target the next note will be bound to, or kNoteNone. Armed by the
+   // window, cleared by the audio thread when it takes a note.
+   std::atomic<int> mLearnTarget{kNoteNone};
+
    // What sequencerMode() said on the previous block, so a change can be seen.
    bool mLastSeqMode = false;
    // Advanced on every GEN press, so two presses in the same nanosecond still
@@ -2120,6 +2350,7 @@ private:
 #endif
 
    AcidEngine mEngine;
+   DelayStage mDelay;
    double mSampleRate = 48000.0;
 };
 

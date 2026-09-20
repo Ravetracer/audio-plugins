@@ -4,6 +4,18 @@
 //
 //   ./saeurekiste-guihost [plugin.clap] [preset.saeurekiste] [seconds]
 //                         [--also <preset.saeurekiste|-> ...]
+//                         [--note <key>[@<seconds>] ...]
+//                         [--scale <factor>]
+//
+// --scale asks the editor for a GUI scale before the window is made, the way a
+// host on a HiDPI screen would. Its real use here is the manual: a screenshot
+// taken at 2 is legible when it is printed, and one taken at 1 is not.
+//
+// --note plays one MIDI note into the first instance, `seconds` after the
+// window opens (2 by default), and may be repeated. It exists because some of
+// the interface only answers to notes -- Live mode's pattern map is learned by
+// playing the note you want a pad to send -- and that half of the window
+// cannot be driven, photographed or tested without one.
 //
 // Each --also opens another instance of the same plugin in its own window,
 // loaded with its own preset ("-" for the defaults). One process, one module,
@@ -103,6 +115,13 @@ void hostRequestCallback(const clap_host_t *) {}
 int main(int argc, char **argv) {
    std::string pluginPath = "./SaeureKiste.clap";
    int liveSeconds = 600;
+   // Notes to play into the first instance: the key, and when.
+   struct TimedNote {
+      int key = 60;
+      double at = 2.0;
+   };
+   std::vector<TimedNote> notes;
+   double scale = 0.0; // 0 = leave the editor at whatever it defaults to
    // One entry per instance: the preset it opens with, or empty for the
    // defaults. The first is the positional argument, the rest come from --also.
    std::vector<std::string> presets(1);
@@ -111,7 +130,25 @@ int main(int argc, char **argv) {
       int positional = 0;
       for (int i = 1; i < argc; ++i) {
          const std::string arg = argv[i];
-         if (arg == "--also") {
+         if (arg == "--scale") {
+            if (i + 1 >= argc) {
+               std::fprintf(stderr, "--scale wants a factor\n");
+               return 1;
+            }
+            scale = std::atof(argv[++i]);
+         } else if (arg == "--note") {
+            if (i + 1 >= argc) {
+               std::fprintf(stderr, "--note wants a key, optionally key@seconds\n");
+               return 1;
+            }
+            const std::string spec = argv[++i];
+            TimedNote n;
+            const size_t at = spec.find('@');
+            n.key = std::atoi(spec.substr(0, at).c_str());
+            if (at != std::string::npos)
+               n.at = std::atof(spec.c_str() + at + 1);
+            notes.push_back(n);
+         } else if (arg == "--also") {
             if (i + 1 >= argc) {
                std::fprintf(stderr, "--also wants a preset path, or - for the defaults\n");
                return 1;
@@ -224,6 +261,10 @@ int main(int argc, char **argv) {
          return 1;
       }
       inst->gui = gui;
+      // Before get_size, so the host window is made at the scaled size rather
+      // than resized under a window that has already been placed.
+      if (scale > 0.0)
+         gui->set_scale(plug, scale);
       gui->get_size(plug, &inst->w, &inst->h);
 
 #if defined(_WIN32)
@@ -291,22 +332,67 @@ int main(int argc, char **argv) {
       clap_audio_buffer_t ab{};
       ab.data32 = chans;
       ab.channel_count = 2;
+      // The block's events, which are empty for every instance but the first
+      // and empty for that one too unless a --note is due.
+      std::vector<clap_event_note_t> pending;
       clap_input_events_t in{};
-      in.size = [](const clap_input_events_t *) -> uint32_t { return 0; };
-      in.get = [](const clap_input_events_t *, uint32_t) -> const clap_event_header_t * {
+      in.ctx = &pending;
+      in.size = [](const clap_input_events_t *l) -> uint32_t {
+         return static_cast<uint32_t>(
+            static_cast<std::vector<clap_event_note_t> *>(l->ctx)->size());
+      };
+      in.get = [](const clap_input_events_t *l, uint32_t i) -> const clap_event_header_t * {
+         auto *v = static_cast<std::vector<clap_event_note_t> *>(l->ctx);
+         return i < v->size() ? &(*v)[i].header : nullptr;
+      };
+      clap_input_events_t empty{};
+      empty.size = [](const clap_input_events_t *) -> uint32_t { return 0; };
+      empty.get = [](const clap_input_events_t *, uint32_t) -> const clap_event_header_t * {
          return nullptr;
       };
       clap_output_events_t out{};
       out.try_push = [](const clap_output_events_t *, const clap_event_header_t *) { return true; };
+
+      const auto started = std::chrono::steady_clock::now();
+      // Each note is played once, a quarter of a second long, at its own time.
+      std::vector<bool> sent(notes.size(), false), released(notes.size(), false);
+
       while (gRunning.load()) {
+         pending.clear();
+         const double now = std::chrono::duration<double>(
+                               std::chrono::steady_clock::now() - started).count();
+         for (size_t i = 0; i < notes.size(); ++i) {
+            clap_event_note_t ev{};
+            ev.header.size = sizeof(ev);
+            ev.header.space_id = CLAP_CORE_EVENT_SPACE_ID;
+            ev.note_id = -1;
+            ev.port_index = 0;
+            ev.channel = 0;
+            ev.key = static_cast<int16_t>(notes[i].key);
+            if (!sent[i] && now >= notes[i].at) {
+               ev.header.type = CLAP_EVENT_NOTE_ON;
+               ev.velocity = 0.8;
+               pending.push_back(ev);
+               sent[i] = true;
+               std::printf("note on  %d at %.2fs\n", notes[i].key, now);
+               std::fflush(stdout);
+            } else if (sent[i] && !released[i] && now >= notes[i].at + 0.25) {
+               ev.header.type = CLAP_EVENT_NOTE_OFF;
+               ev.velocity = 0.0;
+               pending.push_back(ev);
+               released[i] = true;
+            }
+         }
+         bool first = true;
          for (auto &inst : instances) {
             clap_process_t pr{};
             pr.frames_count = block;
             pr.audio_outputs = &ab;
             pr.audio_outputs_count = 1;
-            pr.in_events = &in;
+            pr.in_events = first ? &in : &empty;
             pr.out_events = &out;
             inst->plug->process(inst->plug, &pr);
+            first = false;
          }
          std::this_thread::sleep_for(std::chrono::milliseconds(10));
       }

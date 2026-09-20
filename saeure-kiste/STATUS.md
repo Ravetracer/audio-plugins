@@ -1,11 +1,124 @@
 # SäureKiste -- status
 
-Version 0.6.0. Linux and Windows, CLAP and VST3. 54 parameters, 27 presets,
-builds clean, self-test passes with no failures across 188 checks, and
+Version 0.7.0. Linux and Windows, CLAP and VST3. 63 parameters, 27 presets,
+builds clean, self-test passes with no failures across 233 checks, and
 `tools/check-instances.sh` passes with two editors open at once.
 
 Six of seven fixes were confirmed by backing the bug out and watching the suite
 fail; the seventh has no contract to assert. See `TODO.md` §3.
+
+0.7.0 makes a long note a thing that can be drawn, adds a delay, and gives the
+sequencer a mode meant for playing rather than for writing.
+
+**Live mode.** A third value of Mode, beside MIDI and Sequencer. In Sequencer
+mode a held key transposes the pattern, which is the machine's own behaviour
+and is the wrong thing entirely for a set played off a pad controller. In Live
+mode the keys belong to the bank instead:
+
+- Any key the map does not know about simply runs the pattern, at the pitch it
+  was written at.
+- A mapped key selects its pattern, or steps the bank one either way. Stepping
+  **clamps** at the first and the last rather than wrapping, which is what a
+  pad wants: nothing happening at the end of the bank is better than landing on
+  pattern 1 in the middle of a bar.
+- **Pattern Oct** moves the whole running pattern by octaves, since the
+  keyboard is no longer doing it. It is a parameter like any other, so it
+  automates, and it works in the other two modes as well, where it adds to the
+  held-key transpose.
+
+The map is learned from the window: **MAP** turns the bank into the pad layout,
+a click picks the target -- a pattern, or the PREV and NEXT buttons -- and the
+next incoming note is bound to it. A right click clears one, and a right click
+on MAP clears the lot. Each cell then shows the note that selects it.
+
+**The map is in the state blob and deliberately not in presets.** A pad layout
+belongs to the rig rather than to the sound, so browsing presets mid-set must
+not silently remap the controller. State is at version 3 for it; a version 2
+blob stops before the map and reads as one with nothing in it.
+
+**The generator seed now spans the whole of a 32-bit word** -- 0 to
+4,294,967,295, where it was 0 to 9999. A Unix timestamp fits in it, which is
+what makes "seed it from the clock and never hear the same line twice" an
+actual thing you can do here. Nothing had to be migrated: a stepped parameter
+stores its real value, so a project holding seed 1234 still reads 1234. The
+seed is typed as well as stepped now, because a range that wide cannot be
+reached with two buttons.
+
+One fix in `shared/` came out of it -- `paramValueToText` formatted a stepped
+parameter with `%d` through an `int`, which overflowed above 2^31 and printed
+"-2147483648". **That is a Verdalis bug too until proven otherwise**; see the
+root CLAUDE.md.
+
+
+**The delay.** The second stage on this instrument that the machine does not
+have, built the way the drive stage was: out of the literature, with the source
+named beside each part of it in `src/dsp/delay.h`. It is off by default, so no
+preset that already existed sounds any different.
+
+- Free or tempo-synced, 20 ms to two seconds or a thirty-second to a half note.
+- Mono, Stereo (two lines at 3:2) or Ping-Pong, with a mid/side Width over the
+  repeats and nothing else.
+- Feedback to 130 %. Past unity the source's own stability condition is broken
+  on purpose and the loop is held up by the suite's soft clipper instead, so it
+  self-oscillates into a drone rather than overflowing. Thirty seconds at the
+  top of the knob peaks at 1.000 and stays finite; the self-test asserts it.
+- The plugin no longer tells the host it may sleep while the delay is ringing.
+
+Two things the self-test caught before anything else did, both now regression
+checks. The read head glides to a new delay time, which is what makes turning
+Time bend the repeats -- but it was gliding up from zero on the *first* setting
+too, so the first repeat landed early and smeared. And Ping-Pong: [Pirkle]'s
+figure crosses the inputs as well as the feedback, which is right for a stereo
+source and produces no ping-pong at all for a monophonic one, because both
+lines get fed the same signal and both taps stay equal for ever.
+
+**The window is 60 px wider**, 1440 rather than 1380, and row 1 rather than row
+0 is now what sets that. Making room for the delay beside the generator took
+three things: the sequencer's Mode and Rate stacked into one column, the
+generator's Seed moved out to the step grid where its own -, + and GEN buttons
+already are, and those 60 px. The seed is still a parameter and still
+automatable; it is no longer a knob on a panel.
+
+**The manual has screenshots.** Twenty-two of them -- every panel, the step
+grid, a long note being drawn and then split, the pattern map being built, the
+preset browser, and the whole window open and closed. They come from
+`tools/make-screenshots.sh`, which drives the real editor and checks its own
+work, and they are committed rather than built at release time because
+`release.sh` cannot assume a display. The manual also gained the contents page
+its stylesheet was written for and never had, and headings no longer end up
+alone at the foot of a page: `page-break-after: avoid` is ignored by
+wkhtmltopdf's WebKit, so `manual.py` now binds each heading to the block under
+it in a `page-break-inside: avoid` box, which that build does honour.
+
+**The manual is now an end-user document and only that.** The offline-rendering
+chapter is gone, along with every reference to the repository, the source, the
+self-test and `tools/analysis/README.md`; the cover carries the plugin's own
+accent, its real name -- once, not twice -- and the right formats; and chapter 1
+had been saying "Fifty-one parameters", "Linux. CLAP." and "sixteen-step
+sequencer" for several releases. It also **names no brands** any more, on the
+user's instruction, apart from the trademark notice, which stays verbatim.
+
+**Long notes.**
+
+A note held over several steps was always expressible -- the same note on each
+of them, tied together with a slide, which is how the hardware does it -- but it
+had to be entered a step at a time and it read as a row of separate boxes. It is
+now one gesture and one shape:
+
+- Dragging a note along a row of the pitch grid writes a long note across the
+  steps it covers: every step takes the note, and every one but the last slides
+  into the next. Dragging back over a run shortens it.
+- A run of steps on the same pitch, each sliding into the next, is drawn as one
+  continuous bar rather than as separate boxes.
+- Turning a slide off in the SLIDE lane splits the run at that point; turning it
+  back on joins it again. That needs no code of its own, because the slide flag
+  *is* the tie -- `stepsTied()` in `src/pattern.cpp` is the whole rule, and the
+  self-test holds it to same pitch and same octave so a glide is never drawn as
+  one note.
+
+Nothing about the pattern's storage, the preset format, the state blob or the
+engine changed, so a 0.6.0 preset loads unchanged and a pattern written here
+still opens in 0.6.0 -- as a row of tied steps, which is what it is.
 
 0.6.0 rebuilds the drive stage out of the literature, and it exists because the
 first attempt at it was wrong.

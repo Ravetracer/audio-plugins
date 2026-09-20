@@ -49,7 +49,7 @@ audio-plugins/
 
 | # | Plugin | Folder | Status | Platforms | Formats | What it is |
 |---|--------|--------|--------|-----------|---------|------------|
-| 1 | **SäureKiste** | `saeure-kiste/` | 0.6.0 | Linux, Windows | CLAP, VST3 | a Roland TB-303 model, from the 1982 service notes, plus Robin Whittle's Devil Fish modification |
+| 1 | **SäureKiste** | `saeure-kiste/` | 0.7.0 | Linux, Windows | CLAP, VST3 | a Roland TB-303 model, from the 1982 service notes, plus Robin Whittle's Devil Fish modification |
 
 Naming follows the plugin, not a pattern: the CMake project, the installed
 artifact and the display name are CamelCase (`SaeureKiste`), the folder is
@@ -150,6 +150,42 @@ case is worth recording because it cost a user their DAW session:
 > the last window so an unloaded plugin cannot leave a dangling `wndProc`. X11
 > has no class registry, so this can only ever bite on Windows.
 > (Verdalis issue #1.)
+
+The fourth case is the manual toolchain, changed here in 0.7.0 and **not yet
+ported**. Four things, and the first two are bugs every Verdalis manual has:
+
+- `manual.py` printed the plugin's name as a letter-spaced wordmark when no
+  collection logo was found, *and* again as the cover title underneath it --
+  so every manual in both repositories has the name on the cover twice. The
+  fallback is gone; without a logo the cover starts at the name.
+- `make-manual.sh` now reads `kPluginName` out of `src/<ns>.h` and passes it as
+  `--display-name`, so the cover, the HTML title and the PDF metadata can say
+  something the file system cannot. SaeureKiste is the project, the binary and
+  the preset directory; SäureKiste is the instrument. Verdalis has no plugin
+  whose two names differ, so there it is a no-op that costs nothing and will be
+  there when one does.
+- A heading alone at the foot of a page. The stylesheet has
+  `page-break-after: avoid` on h1-h4 and wkhtmltopdf's WebKit ignores it; what
+  that build *does* honour is `page-break-inside: avoid` on a block, so
+  `manual.py` now wraps each heading and the block under it in one. A table
+  deeper than ten rows is left out of the pairing, or the fix opens the hole it
+  was closing.
+- Markdown images are resolved against the manual source's folder and inlined
+  as data URIs, and an image alone in a paragraph becomes a `<figure>` with its
+  alt text as the caption. That is what lets a manual carry screenshots and
+  still be one self-contained file. See `saeure-kiste/tools/make-screenshots.sh`
+  for how the images themselves are made; nothing about it is plugin-specific
+  except the coordinates.
+
+The third case is a one-line formatting bug found here in SäureKiste 0.7.0 and
+**not yet ported**: `paramValueToText` printed a `ParamKind::Stepped` value
+with `%d` through an `int`. That is fine for every range Verdalis has and wrong
+for any range past 2^31 -- SäureKiste's generator seed now spans a whole 32-bit
+word so a Unix timestamp can be typed into it, and the cast overflowed, printing
+"-2147483648" for a value near the top and failing to read back. It is now
+`%lld` through a `long long`. Nothing in Verdalis has a stepped parameter that
+wide, so this is a latent bug there rather than a live one; port it anyway,
+because the next wide range will not announce itself.
 
 The second case is the same shape and is **unfixed in Verdalis as of this
 writing**: the window held its `WindowSpec` by reference while every plugin's

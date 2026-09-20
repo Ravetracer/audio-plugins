@@ -63,6 +63,7 @@ const char *dlerrorCompat() { return "see GetLastError()"; }
 #   define RD_DLERROR() dlerror()
 #endif
 
+#include "dsp/delay.h"
 #include "dsp/drive.h"
 #include "params.h"
 #include <sstream>
@@ -401,6 +402,32 @@ struct EventList {
       };
    }
 };
+
+// One process() call with a given event list, output thrown away. What a test
+// uses when it cares about what the plugin *did* with an event rather than
+// about what came out of it.
+void runOneBlock(const clap_plugin_t *plugin, EventList &events, uint32_t frames = 64) {
+   std::vector<float> left(frames, 0.0f), right(frames, 0.0f);
+   float *channels[2] = {left.data(), right.data()};
+   clap_audio_buffer_t outBuf{};
+   outBuf.data32 = channels;
+   outBuf.channel_count = 2;
+
+   clap_output_events_t outEvents{};
+   outEvents.ctx = nullptr;
+   outEvents.try_push = [](const clap_output_events_t *, const clap_event_header_t *) {
+      return true;
+   };
+
+   clap_process_t proc{};
+   proc.frames_count = frames;
+   proc.audio_outputs = &outBuf;
+   proc.audio_outputs_count = 1;
+   proc.in_events = &events.in;
+   proc.out_events = &outEvents;
+   proc.steady_time = -1;
+   plugin->process(plugin, &proc);
+}
 
 clap_event_param_value_t makeParamValue(clap_id id, double value) {
    clap_event_param_value_t ev{};
@@ -1648,8 +1675,9 @@ int runSelfTest(const clap_plugin_entry_t *entry, double sampleRate) {
    check(count > 0, "parameter count > 0");
    std::printf("  %u parameters\n", count);
 
-   bool infoOk = true, textOk = true, roundTripOk = true, idsUnique = true;
+   bool infoOk = true, textOk = true, roundTripOk = true, idsUnique = true, namesUnique = true;
    std::vector<clap_id> seen;
+   std::vector<std::string> seenNames;
    for (uint32_t i = 0; i < count; ++i) {
       clap_param_info_t info{};
       if (!params->get_info(plugin, i, &info)) {
@@ -1660,6 +1688,19 @@ int runSelfTest(const clap_plugin_entry_t *entry, double sampleRate) {
          if (s == info.id)
             idsUnique = false;
       seen.push_back(info.id);
+
+      // Display names have to be unique as well as ids. `--param`, `--move`
+      // and any host with a flat parameter list all address a parameter by the
+      // name get_info() gives it, so two parameters sharing one is not
+      // cosmetic: `--param mode=Sequencer` would set both of them and say
+      // nothing. The delay's Routing chip is called that rather than Mode for
+      // exactly this reason.
+      for (const std::string &n : seenNames)
+         if (strcasecmp(n.c_str(), info.name) == 0) {
+            std::fprintf(stderr, "    '%s' is the name of two parameters\n", info.name);
+            namesUnique = false;
+         }
+      seenNames.emplace_back(info.name);
 
       if (!(info.min_value <= info.default_value && info.default_value <= info.max_value))
          infoOk = false;
@@ -1685,6 +1726,7 @@ int runSelfTest(const clap_plugin_entry_t *entry, double sampleRate) {
    }
    check(infoOk, "every get_info() is well formed");
    check(idsUnique, "parameter ids are unique");
+   check(namesUnique, "parameter names are unique");
    check(textOk, "value_to_text() works for all defaults");
    check(roundTripOk, "value_to_text -> text_to_value round-trips");
 
@@ -2026,6 +2068,357 @@ int runSelfTest(const clap_plugin_entry_t *entry, double sampleRate) {
          if (Step::unpack(a[i]).slide && Step::unpack(a[(i + 1) % kMaxSteps]).note < 0)
             slideIntoRest = true;
       check(!slideIntoRest, "no step slides into a rest");
+
+      // Live mode: the pattern map, end to end through the plugin.
+      //
+      // The map is learned from the window, which nothing here can reach, so
+      // it is written into a state blob instead -- which tests the state
+      // format at the same time and is the only way a saved layout ever comes
+      // back anyway. The blob's last 128 bytes are the map, one signed byte
+      // per MIDI note, appended after everything version 2 wrote.
+      {
+         const auto *st = static_cast<const clap_plugin_state_t *>(
+            plugin->get_extension(plugin, CLAP_EXT_STATE));
+         const auto *pr = static_cast<const clap_plugin_params_t *>(
+            plugin->get_extension(plugin, CLAP_EXT_PARAMS));
+         auto setParam = [&](uint32_t id, double v) {
+            EventList ev;
+            ev.params.push_back(makeParamValue(id, v));
+            ev.build();
+            runOneBlock(plugin, ev);
+         };
+         auto patternNow = [&]() {
+            double v = 0.0;
+            return pr && pr->get_value(plugin, saeurekiste::kParamPattern, &v)
+                      ? static_cast<int>(v)
+                      : -1;
+         };
+         // A note, played, with the map's answer read back from the parameter.
+         auto play = [&](int16_t key) {
+            EventList ev;
+            ev.notes.push_back(makeNote(CLAP_EVENT_NOTE_ON, 0, key, 0.8));
+            ev.build();
+            runOneBlock(plugin, ev);
+            EventList off;
+            off.notes.push_back(makeNote(CLAP_EVENT_NOTE_OFF, 0, key, 0.0));
+            off.build();
+            runOneBlock(plugin, off);
+            return patternNow();
+         };
+
+         std::string blob;
+         clap_ostream_t os{};
+         os.ctx = &blob;
+         os.write = [](const clap_ostream_t *s, const void *buf, uint64_t size) -> int64_t {
+            static_cast<std::string *>(s->ctx)->append(static_cast<const char *>(buf), size);
+            return static_cast<int64_t>(size);
+         };
+         check(st && st->save(plugin, &os), "state save, for the pattern map");
+         check(blob.size() > 128, "the blob is long enough to hold a map");
+         // Kept so the plugin can be put back exactly as it was found. A map
+         // left behind here would reach the checks further down, where every
+         // parameter is driven to its maximum -- and Mode's maximum is Live,
+         // so a mapped note would move the Pattern parameter under them.
+         const std::string pristine = blob;
+
+         // Four pads: one for pattern 4, one for pattern 1, and one each way.
+         auto bind = [&](int note, int action) {
+            blob[blob.size() - 128 + static_cast<size_t>(note)] = static_cast<char>(action);
+         };
+         bind(60, 3); // pattern 4, zero based
+         bind(61, 0); // pattern 1
+         bind(62, saeurekiste::kNoteNextPattern);
+         bind(63, saeurekiste::kNotePrevPattern);
+
+         struct ReadCtx {
+            const std::string *data;
+            size_t pos;
+         } rc{&blob, 0};
+         clap_istream_t is{};
+         is.ctx = &rc;
+         is.read = [](const clap_istream_t *s, void *buf, uint64_t size) -> int64_t {
+            auto *c = static_cast<ReadCtx *>(s->ctx);
+            const size_t n = std::min<size_t>(size, c->data->size() - c->pos);
+            std::memcpy(buf, c->data->data() + c->pos, n);
+            c->pos += n;
+            return static_cast<int64_t>(n);
+         };
+         check(st->load(plugin, &is), "a state blob with a pattern map loads");
+
+         // Live, and on pattern 1, set after the load so the blob carries the
+         // map and nothing else this test depends on.
+         setParam(saeurekiste::kParamMode, static_cast<double>(saeurekiste::kModeLive));
+         setParam(saeurekiste::kParamPattern, 1.0);
+
+         check(play(60) == 4, "a mapped note selects its pattern");
+         check(play(62) == 5, "the next-pattern note steps forward");
+         check(play(63) == 4, "the prev-pattern note steps back");
+         check(play(61) == 1, "and a mapped note reaches pattern 1");
+         check(play(63) == 1, "prev stops at the first pattern rather than wrapping");
+         setParam(saeurekiste::kParamPattern, static_cast<double>(saeurekiste::kMaxPatterns));
+         check(play(62) == saeurekiste::kMaxPatterns,
+               "next stops at the last pattern rather than wrapping");
+         check(play(64) == saeurekiste::kMaxPatterns,
+               "an unmapped note changes no pattern at all");
+
+         // And the map survives the round trip it arrived on.
+         std::string again;
+         clap_ostream_t os2{};
+         os2.ctx = &again;
+         os2.write = os.write;
+         st->save(plugin, &os2);
+         bool mapHeld = true;
+         for (int note = 60; note <= 63; ++note)
+            if (again[again.size() - 128 + static_cast<size_t>(note)] !=
+                blob[blob.size() - 128 + static_cast<size_t>(note)])
+               mapHeld = false;
+         check(mapHeld, "the pattern map is saved again as it was loaded");
+
+         setParam(saeurekiste::kParamMode, static_cast<double>(saeurekiste::kModeSequencer));
+         check(play(60) == saeurekiste::kMaxPatterns,
+               "the map does nothing outside Live mode");
+
+         ReadCtx back{&pristine, 0};
+         clap_istream_t is3 = is;
+         is3.ctx = &back;
+         st->load(plugin, &is3);
+         check(saeurekiste::kNoteNone ==
+                  static_cast<int8_t>(pristine[pristine.size() - 128 + 60]),
+               "the plugin starts with nothing mapped");
+      }
+
+      // Live mode's other half: the keyboard does not transpose, and the
+      // Pattern Oct parameter does. Read off the note port, because that is
+      // where the sequencer's own notes go and it is the only place the pitch
+      // of a step is visible from outside the plugin.
+      {
+         const auto *pr = static_cast<const clap_plugin_params_t *>(
+            plugin->get_extension(plugin, CLAP_EXT_PARAMS));
+         auto lowestSequencedKey = [&](int mode, int octave, int16_t heldKey) {
+            gParamOverrides.clear();
+            gParamOverrides.emplace_back(saeurekiste::kParamMode, static_cast<double>(mode));
+            gParamOverrides.emplace_back(saeurekiste::kParamPatternOctave,
+                                         static_cast<double>(octave));
+            gParamOverrides.emplace_back(saeurekiste::kParamPattern, 1.0);
+            plugin->reset(plugin);
+            renderPlugin(plugin, sampleRate, 512, 1.5, 0.2, heldKey, 0.9);
+            gParamOverrides.clear();
+            // The *first* note out, not the lowest: the key is released
+            // before the tail ends, and the steps that fire after that are
+            // untransposed again, so a minimum over the whole take would
+            // always find them.
+            for (const auto &ev : gNoteOut)
+               if (ev.header.type == CLAP_EVENT_NOTE_ON)
+                  return static_cast<int>(ev.key);
+            return -1;
+         };
+         (void)pr;
+         // C3 held. In Sequencer mode that is the machine's own behaviour --
+         // the whole pattern moves up by the interval from C2 -- and in Live
+         // mode it is not, because the keys belong to the pattern map.
+         const int seqHeld = lowestSequencedKey(saeurekiste::kModeSequencer, 0, 48);
+         const int liveHeld = lowestSequencedKey(saeurekiste::kModeLive, 0, 48);
+         const int seqPlain = lowestSequencedKey(saeurekiste::kModeSequencer, 0, 36);
+         check(seqHeld == seqPlain + 12, "a held key still transposes in Sequencer mode");
+         check(liveHeld == seqPlain, "a held key does not transpose in Live mode");
+
+         const int liveUp = lowestSequencedKey(saeurekiste::kModeLive, 1, 48);
+         const int liveDown = lowestSequencedKey(saeurekiste::kModeLive, -2, 48);
+         check(liveUp == liveHeld + 12, "Pattern Oct moves the whole pattern up an octave");
+         check(liveDown == liveHeld - 24, "and two octaves down");
+         const int seqUp = lowestSequencedKey(saeurekiste::kModeSequencer, 1, 48);
+         check(seqUp == seqHeld + 12, "and it adds to the held-key transpose");
+
+         // Back to the defaults. The overrides above are real parameter
+         // events, so clearing the override list does not undo them and the
+         // checks further down would run in Sequencer mode an octave up.
+         EventList restore;
+         restore.params.push_back(makeParamValue(saeurekiste::kParamMode, 0.0));
+         restore.params.push_back(makeParamValue(saeurekiste::kParamPatternOctave, 0.0));
+         restore.params.push_back(makeParamValue(saeurekiste::kParamPattern, 1.0));
+         restore.build();
+         runOneBlock(plugin, restore);
+         plugin->reset(plugin);
+      }
+
+      // Where a step lands when the bank is stepped, which is the rule the two
+      // pads and the two buttons all go through.
+      check(steppedPattern(0, -1, 64) == 0, "stepping back from the first stays there");
+      check(steppedPattern(63, 1, 64) == 63, "stepping on from the last stays there");
+      check(steppedPattern(5, 1, 64) == 6, "and in between it steps");
+      check(steppedPattern(5, -1, 64) == 4, "both ways");
+      check(steppedPattern(99, 1, 64) == 63, "a pattern outside the bank is brought into it");
+
+      // The delay. What it has to be held to is where its repeats land, that
+      // they decay when the feedback says they should, that the mode that
+      // alternates sides actually alternates them, and -- the one that matters
+      // -- that feedback past unity stays bounded. [DAFX] eq 2.61 says an IIR
+      // comb with |g| > 1 "would grow endlessly"; this stage deliberately
+      // allows it and holds the loop up with a soft clipper instead, so the
+      // check is that the clipper is really in the path.
+      {
+         constexpr double kRate = 48000.0;
+         constexpr float kTime = 0.1f; // 100 ms, so a repeat is 4800 frames on
+         const int lag = static_cast<int>(kTime * kRate);
+
+         // One impulse in, all wet, and nothing fed back: exactly one repeat,
+         // and it lands one delay time later.
+         auto impulseRun = [&](int mode, float feedback, float width, int frames,
+                               std::vector<float> &l, std::vector<float> &r) {
+            DelayStage d;
+            d.prepare(kRate);
+            d.setParams(true, mode, kTime, feedback, 1.0f, width);
+            l.assign(static_cast<size_t>(frames), 0.0f);
+            r.assign(static_cast<size_t>(frames), 0.0f);
+            l[0] = 1.0f;
+            r[0] = 1.0f;
+            // In blocks, because a host never hands over one long one and the
+            // read head, the write head and the tail counter all have to
+            // survive the seam.
+            for (int at = 0; at < frames; at += 512) {
+               const int n = at + 512 <= frames ? 512 : frames - at;
+               d.process(l.data() + at, r.data() + at, static_cast<uint32_t>(n));
+            }
+         };
+
+         std::vector<float> l, r;
+         impulseRun(kDelayMono, 0.0f, 1.0f, lag * 3, l, r);
+         // Interpolation spreads the impulse over two samples, so the repeat is
+         // looked for in a window rather than on one sample.
+         double atRepeat = 0.0, elsewhere = 0.0;
+         for (int i = 1; i < lag * 3; ++i) {
+            const double v = std::fabs(l[i]);
+            if (i >= lag - 2 && i <= lag + 2)
+               atRepeat = v > atRepeat ? v : atRepeat;
+            else
+               elsewhere = v > elsewhere ? v : elsewhere;
+         }
+         check(atRepeat > 0.9, "the repeat arrives one delay time later");
+         check(elsewhere < 1.0e-4, "and nothing arrives anywhere else");
+
+         // The same impulse with feedback: each repeat is quieter than the one
+         // before it, which is what the equation's g does.
+         impulseRun(kDelayMono, 0.5f, 1.0f, lag * 4, l, r);
+         double peaks[3] = {0.0, 0.0, 0.0};
+         for (int k = 0; k < 3; ++k)
+            for (int i = (k + 1) * lag - 2; i <= (k + 1) * lag + 2; ++i)
+               peaks[k] = std::fabs(l[i]) > peaks[k] ? std::fabs(l[i]) : peaks[k];
+         check(peaks[1] < peaks[0] * 0.8 && peaks[2] < peaks[1] * 0.8,
+               "each repeat is quieter than the one before it");
+
+         // Ping-pong: the first repeat is on one side and the second is on the
+         // other. A mono source makes this the thing most easily got wrong --
+         // cross the inputs as well and both sides stay identical for ever.
+         impulseRun(kDelayPingPong, 0.6f, 1.0f, lag * 4, l, r);
+         double firstL = 0.0, firstR = 0.0, secondL = 0.0, secondR = 0.0;
+         for (int i = lag - 2; i <= lag + 2; ++i) {
+            firstL = std::fabs(l[i]) > firstL ? std::fabs(l[i]) : firstL;
+            firstR = std::fabs(r[i]) > firstR ? std::fabs(r[i]) : firstR;
+         }
+         for (int i = 2 * lag - 2; i <= 2 * lag + 2; ++i) {
+            secondL = std::fabs(l[i]) > secondL ? std::fabs(l[i]) : secondL;
+            secondR = std::fabs(r[i]) > secondR ? std::fabs(r[i]) : secondR;
+         }
+         check(firstL > 0.5 && firstR < firstL * 0.1, "ping-pong puts the first repeat on one side");
+         check(secondR > 0.2 && secondL < secondR * 0.1, "and the second one on the other");
+
+         // Stereo: the two lines run at a ratio of each other, so the right
+         // channel's repeat does not land with the left channel's.
+         impulseRun(kDelayStereo, 0.0f, 1.0f, lag * 3, l, r);
+         int peakL = 0, peakR = 0;
+         for (int i = 1; i < lag * 3; ++i) {
+            if (std::fabs(l[i]) > std::fabs(l[peakL]))
+               peakL = i;
+            if (std::fabs(r[i]) > std::fabs(r[peakR]))
+               peakR = i;
+         }
+         check(peakL > peakR + 100, "a stereo delay's two lines do not land together");
+
+         // Width at zero folds the repeats to the middle; the mid/side matrix
+         // is the only thing that can do that, so this is the check that it is
+         // wired up at all.
+         impulseRun(kDelayStereo, 0.0f, 0.0f, lag * 3, l, r);
+         bool centred = true;
+         for (int i = 0; i < lag * 3; ++i)
+            if (std::fabs(l[i] - r[i]) > 1.0e-6f)
+               centred = false;
+         check(centred, "Width at zero folds the repeats to the centre");
+
+         // And the one that matters. Thirty seconds at the top of the Feedback
+         // knob, well past the stability condition the source states, with a
+         // note going in the whole time.
+         {
+            DelayStage d;
+            d.prepare(kRate);
+            d.setParams(true, kDelayPingPong, kTime, 1.3f, 1.0f, 1.5f);
+            std::vector<float> bl(512, 0.0f), br(512, 0.0f);
+            float worst = 0.0f;
+            bool finite = true;
+            for (int block = 0; block < 2812; ++block) { // ~30 s at 48 kHz
+               for (int i = 0; i < 512; ++i) {
+                  const float x = 0.5f * std::sin(static_cast<float>(block * 512 + i) * 0.01f);
+                  bl[i] = x;
+                  br[i] = x;
+               }
+               d.process(bl.data(), br.data(), 512);
+               for (int i = 0; i < 512; ++i) {
+                  if (!std::isfinite(bl[i]) || !std::isfinite(br[i]))
+                     finite = false;
+                  const float p = std::fabs(bl[i]) > std::fabs(br[i]) ? std::fabs(bl[i])
+                                                                     : std::fabs(br[i]);
+                  worst = p > worst ? p : worst;
+               }
+            }
+            std::printf("       feedback at 130 %% peaks at %.3f after 30 s\n",
+                        static_cast<double>(worst));
+            check(finite, "feedback past unity stays finite");
+            check(worst <= 1.001f, "feedback past unity stays bounded by the clipper");
+            check(d.ringing(), "and a delay that is still ringing says so");
+         }
+
+         // A delay that has been switched off is not ringing, so the host is
+         // allowed to let the plugin sleep.
+         {
+            DelayStage d;
+            d.prepare(kRate);
+            d.setParams(false, kDelayMono, kTime, 0.5f, 1.0f, 1.0f);
+            std::vector<float> bl(512, 0.0f), br(512, 0.0f);
+            d.process(bl.data(), br.data(), 512);
+            check(!d.ringing(), "a delay that is off is not ringing");
+         }
+
+         // The synced times are the note values they are named after.
+         check(delayDivisionBeats(kDelayDiv4) == 1.0, "a quarter note is one beat");
+         check(delayDivisionBeats(kDelayDiv8) == 0.5, "an eighth is half of one");
+         check(delayDivisionBeats(kDelayDiv8Dot) == 0.75, "a dotted eighth is three sixteenths");
+         check(std::fabs(delayDivisionBeats(kDelayDiv8T) - 1.0 / 3.0) < 1e-12,
+               "an eighth triplet is two thirds of an eighth");
+      }
+
+      // A long note is a run of tied steps, and stepsTied() is the whole of
+      // what ties two of them together. The grid draws such a run as one bar
+      // and a drag across the grid paints one, so a rule that let a glide or a
+      // rest through would join two notes that are not one note.
+      {
+         Step held;
+         held.note = 4;
+         held.slide = true;
+         Step next = held;
+         next.slide = false;
+         check(stepsTied(held, next), "a slide into the same note is a tie");
+         Step other = next;
+         other.note = 5;
+         check(!stepsTied(held, other), "a slide into another note is a glide, not a tie");
+         Step up = next;
+         up.octave = 1;
+         check(!stepsTied(held, up), "a slide into the same note an octave up is not a tie");
+         Step gated = held;
+         gated.slide = false;
+         check(!stepsTied(gated, next), "two notes without a slide stay two notes");
+         const Step rest;
+         check(!stepsTied(rest, next), "a rest holds nothing into the step after it");
+         check(!stepsTied(held, rest), "a slide into a rest is not a tie");
+      }
 
       // Over many seeds the root has to dominate, or it is not a bass line.
       int rootCount = 0, noteCount = 0;
