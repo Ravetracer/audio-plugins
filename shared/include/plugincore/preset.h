@@ -62,6 +62,54 @@ std::string formatPreset(const PresetContext &ctx, const PresetData &preset);
 // preset directory. Empty if that directory cannot be determined.
 std::string userPresetPath(const PresetContext &ctx, const std::string &name);
 
+// The same, in a named folder under the user preset directory. An empty
+// folder is the directory itself, so this is a superset of the call above.
+//
+// Folders are one level deep on purpose: a preset library is a shelf, not a
+// filesystem, and a tree deep enough to get lost in is a tree somebody will
+// get lost in. The folder name is sanitised exactly as the preset name is.
+std::string userPresetPathIn(const PresetContext &ctx, const std::string &folder,
+                             const std::string &name);
+
+// Turns a display name into something safe to use as a file or folder name.
+std::string presetFileStem(const std::string &name);
+
+// ------------------------------------------------------------------- packs
+//
+// A preset pack is one text file holding a whole folder's worth of presets, so
+// a library can be handed to somebody else as a single file. It is the preset
+// format again with a separator line between the presets, which means it can
+// be read, diffed and edited by hand like everything else here -- and that a
+// preset carrying plugin-specific lines the shared format knows nothing about
+// (SaeureKiste's patterns, for instance) survives a round trip, because a pack
+// carries each preset's *text* rather than a re-serialised copy of it.
+
+struct PresetPackEntry {
+   std::string name; // what the preset calls itself
+   std::string text; // the preset file, verbatim
+};
+
+// The extension a pack of this plugin's presets uses: the preset extension
+// with "pack" on the end, e.g. "saeurekistepack".
+std::string presetPackExtension(const PresetContext &ctx);
+
+// Where packs are kept: a "packs" directory beside the user preset directory.
+// Not created by the plugin until something is written into it.
+std::string presetPackDir(const PresetContext &ctx);
+
+// Writes the pack file's text. `packName` is what the folder was called.
+std::string formatPresetPack(const PresetContext &ctx, const std::string &packName,
+                             const std::vector<PresetPackEntry> &entries);
+
+// Reads one back. Returns false and fills `error` when the file is not a pack
+// for this plugin; an empty pack is an error too, because importing nothing
+// silently is indistinguishable from a bug.
+bool parsePresetPack(const PresetContext &ctx, const std::string &text, std::string &packName,
+                     std::vector<PresetPackEntry> &out, std::string &error);
+bool parsePresetPackFile(const PresetContext &ctx, const std::string &path,
+                         std::string &packName, std::vector<PresetPackEntry> &out,
+                         std::string &error);
+
 // Writes `text` to `path`, creating the directories above it. Returns false and
 // fills `error` on failure.
 bool writePresetFile(const std::string &path, const std::string &text, std::string &error);

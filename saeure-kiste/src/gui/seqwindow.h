@@ -116,7 +116,13 @@ constexpr double kArcSweep = 1.5 * 3.14159265358979323846;
 // The step grid's height in design pixels. A plugin has to know it to work out
 // how tall its window is; the window checks this number against the parts the
 // grid is made of, so the two cannot drift apart.
-constexpr int kSeqPaneHeight = 279;
+//
+// The last twelve of them are the scrollbar strip under the lanes. A pattern
+// may be up to kMaxSteps long and the grid draws at most thirty-two columns of
+// it, so anything longer is scrolled to; the strip is reserved whether or not
+// there is anything to scroll, because a grid that changed height when Steps
+// crossed sixteen would move every panel under it.
+constexpr int kSeqPaneHeight = 291;
 
 // Compile-time layout checks a plugin can run over its own panel table. Kept
 // here so every plugin gets the same ones; kept constexpr so a layout mistake
@@ -233,7 +239,7 @@ struct WindowSpec {
    // The step grid, drawn below the panels and above the preset bar. Null
    // leaves it out and the window is the shared one's layout exactly.
    PatternAccess *pattern;
-   int patternSteps;   // how many columns to draw, normally kMaxSteps
+   int patternSteps;   // the longest pattern the plugin has, normally kMaxSteps
    int patternCount;   // how many patterns the bank grid offers, normally kMaxPatterns
 
    // The three bank parameters. They are ordinary parameters -- automatable,

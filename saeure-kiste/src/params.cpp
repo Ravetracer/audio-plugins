@@ -22,6 +22,11 @@ const char *const kRootNames[] = {"C",  "C#", "D",  "D#", "E",  "F",
 const char *const kChainNames[] = {"Stay", "Next", "First", "Random"};
 const char *const kMufflerNames[] = {"Off", "Soft", "Hard"};
 const char *const kSweepSpeedNames[] = {"Normal", "Fast", "Slow"};
+// The drive stage's models, in the same order as DriveModel in dsp/drive.h.
+// A preset stores the *name*, so reordering this table would silently change
+// what an old preset loads as.
+const char *const kDistNames[] = {"Soft Clip", "Overdrive", "Tube",  "Valve Stack",
+                                  "Fuzz",      "Rectifier", "Crush"};
 const char *const kOnOffNames[] = {"Off", "On"};
 
 // Where the numbers come from.
@@ -128,13 +133,14 @@ const ParamDesc kParams[kNumParams] = {
    PCT(kParamDrive, "drive", "Drive", "Drive", 0.2,
        "The one stage that is not in the schematic. A 303 into a mixer is a clean, "
        "fairly quiet instrument; everything anybody recognises as acid went through "
-       "something else first. This is that something: a soft clipper after the filter, "
-       "compensated so that turning it up thickens rather than simply raising the "
-       "level. At zero the signal path is the machine's."),
+       "something else first. This is that something: how hard the signal is pushed "
+       "into whatever Type is set to, compensated so that turning it up thickens "
+       "rather than simply raising the level. At zero the signal path is the "
+       "machine's. Crush and Destroy read it as how much damage to do rather than as "
+       "a level, because neither of those is a clipper."),
    LOG(kParamTone, "tone", "Tone", "Drive", 0.739536, 800.0, 18000.0, "Hz",
        "A gentle lowpass after the drive, for taking the top off what the clipper "
        "adds. Also not in the schematic. At the top of its range it is doing nothing."),
-
    // ---------------------------------------------------------------- output
    LIN(kParamVolume, "volume", "Volume", "Output", -60.0, 0.0, -6.0, "dB",
        "VR8, the master. It stops at unity rather than offering makeup gain, because "
@@ -228,10 +234,14 @@ const ParamDesc kParams[kNumParams] = {
         "How long one step lasts, as a fraction of a beat. 1/16 is the grid a bass "
         "line is written on and is the default; the triplet settings are not something "
         "the hardware could do at all."),
-   STEP(kParamSeqSteps, "seq_steps", "Steps", "Sequencer", 1.0, 16.0, 16.0, "",
-        "How many steps the pattern runs before it repeats. The machine took 1 to 16, "
-        "and the useful part of that range is the bit that is not 16: fifteen steps "
-        "against a four-four bar walks the pattern around the beat."),
+   STEP(kParamSeqSteps, "seq_steps", "Steps", "Sequencer", 1.0, 128.0, 16.0, "",
+        "How many steps the pattern runs before it repeats. The machine took 1 to 16 "
+        "and this takes 1 to 128, which is two different instruments in one control. "
+        "Below sixteen is the machine's own trick: fifteen steps against a four-four "
+        "bar walks the pattern around the beat. Above it the sequencer stops being a "
+        "bass figure that repeats every bar and becomes a line long enough to have a "
+        "melody in it -- 64 is four bars of sixteenths, 128 is eight. The grid scrolls "
+        "to whatever does not fit, and the generator fills exactly this many steps."),
    PCT(kParamGate, "gate", "Gate", "Sequencer", 0.5,
        "How much of its own step a note holds for. It does not apply to a step marked "
        "Slide -- that one holds past the start of the next step on purpose, because "
@@ -377,6 +387,44 @@ const ParamDesc kParams[kNumParams] = {
         "says. Whittle's front panel has a pushbutton for it. Useful for hearing what "
         "the accent circuit is actually doing, and for a bar that has to lean on "
         "everything at once."),
+
+   // The drive stage's shape and its dry/wet, at the end of the table because
+   // the table is indexed by id and these two were appended to the enum. They
+   // belong to the Drive module, which is what the "Drive" in each row says
+   // and what puts them in the right chapter of the manual.
+   ENUM(kParamDistType, "dist_type", "Type", "Drive", 0.0, kDistNames,
+        "Which model the drive stage is. Each one is an equation out of the "
+        "literature rather than a name on a switch, and they are built differently "
+        "from each other rather than merely curved differently -- which is the only "
+        "way a set of these tells itself apart. Soft Clip is the stage this "
+        "instrument has always had and is the default. Overdrive keeps a linear "
+        "region below a third of full scale, so it follows the playing. Tube sits at "
+        "a work point off centre and is far harder on one half of the wave than the "
+        "other, which is where its even harmonics come from. Valve Stack is three "
+        "gain stages in series, each with its own DC blocker and a shelf where the "
+        "cathode capacitor would be. Fuzz is exponential from the first volt and has "
+        "no linear region at all. Hard Clip is a flat top. Rectifier folds the "
+        "negative half onto the positive one, which doubles the fundamental -- an "
+        "octave up over the note rather than an edge on it. Crush quantises to fewer "
+        "bits. See the manual for which source each one comes from."),
+   PCT(kParamDistMix, "dist_mix", "Dist Mix", "Drive", 1.0,
+       "How much of the driven signal is heard against the clean one. At 100 % the "
+       "stage is in the path, which is where it has always been and what every preset "
+       "written before this control assumes. Below that, the driven signal is mixed "
+       "back with the filter's own output -- which is how a hard model is made usable: "
+       "Fuzz or Rectifier at 25 % adds something to a line that is otherwise still the "
+       "machine, and a rectifier mixed in quietly is an octave under the note rather "
+       "than a fuzz box. At zero the stage is bypassed however Drive and Type are set, "
+       "and the only thing after the filter is Tone."),
+   BIPCT(kParamDistBias, "dist_bias", "Bias", "Drive", 0.0,
+         "Where the model sits on its own curve. At the centre each one is at the "
+         "operating point its source specifies -- the work point of the tube model, "
+         "the matched pair of the hard clipper, half-wave and full-wave in equal "
+         "measure for the rectifier. Away from the centre the two halves of the wave "
+         "are treated differently, which is what puts even harmonics into a sound "
+         "that otherwise has only odd ones, and what makes a distortion sound like a "
+         "circuit rather than like arithmetic. It does nothing at all to Soft Clip, "
+         "which is symmetric by construction and stays as it was."),
 };
 
 #undef LIN

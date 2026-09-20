@@ -21,15 +21,20 @@ preset, which exists for exactly this.
   remaining part of the signal path with no control over it.
 - **Filter coefficients update every 8 samples.** Inaudible on the envelopes
   this instrument has, but a fast automated cutoff sweep would show it.
-- **No clear-all for the bank.** COPY and PASTE landed in 0.3.0; emptying the
-  whole bank in one go still means CLEAR on each pattern, or loading Blank
-  Slate.
+- **No clear-all for the bank.** COPY and PASTE landed in 0.3.0 and DEL, which
+  empties the selected slot, in 0.5.0; emptying the whole bank in one go still
+  means DEL on each pattern, or loading Blank Slate.
 - **The chain has no per-pattern repeat count.** A pattern plays once before the
   chain moves on. Playing one twice and the next one once is the arrangement
   people reach for first, and it would want a number per slot rather than one
   Chain Length for the lot.
-- **Pattern length is global.** Steps applies to every pattern in the bank, so a
-  chain cannot mix a sixteen-step pattern with a twelve-step one.
+- **Pattern length is global.** Steps runs 1 to 128 as of 0.5.0, but it applies
+  to every pattern in the bank, so a chain still cannot mix a sixteen-step
+  pattern with a twelve-step one. Making it per pattern is the next step and
+  the reason it was not taken now: the length would stop being a plain
+  parameter -- not automatable, and another field in the state blob and the
+  preset text -- and that is a bigger change than widening a range. It was
+  deliberately left for later.
 - **No playback direction.** Forward only; the reference plugins offer reverse,
   ping-pong and random. The chain has Random; the steps inside a pattern do not.
 - **Pattern edits are not automatable or undoable.** They live outside the
@@ -86,6 +91,44 @@ preset, which exists for exactly this.
   threshold, the overlap a slide is made of, and nothing at all in MIDI mode.
 - **The generator still writes one octave either way.** The lane now takes two,
   by hand; Octaves, the generator's density control, does not reach them.
+
+## What 0.5.0 added, and what is not proven about it
+
+- **The file chooser has only been run on Linux.** `src/gui/filedialog.cpp`
+  asks zenity or kdialog there, found in PATH by hand, and calls
+  `GetOpenFileNameW` / `GetSaveFileNameW` on Windows. The Windows half
+  compiles and links against comdlg32 and has never been opened. The browser
+  works without any chooser at all -- EXPORT and IMPORT use the plugin's own
+  packs folder, and EXPORT AS... is hidden when there is nothing to open -- so
+  the worst case is one missing button.
+- **Nothing has imported a pack somebody else wrote.** The round trip is tested
+  both ways, in the self-test on the format and by hand through the window, but
+  every pack either end has seen was written by this build.
+- **The drive models are equations, not measurements of circuits.** Each one is
+  out of [DAFX] chapter 4 or [Pirkle] chapter 19, which is a far better source
+  than the fourteen invented shapes they replaced -- but a published model of a
+  triode is still not a measurement of one. Nobody has put a real Fuzz Face or
+  a real valve preamp next to these. What the self-test pins down is that each
+  model is bounded, distorts, keeps the character its source describes, and has
+  a harmonic distribution no other model shares at the same THD.
+- **The oversampling is two times and gentle.** Both books ask for it and there
+  was none at all before, so this is a large improvement over nothing -- but the
+  filters are two cascaded state-variable lowpasses at 0.45 of the base rate,
+  24 dB/octave, not the steep half-band filters [Pirkle] chapter 22 uses at 4x.
+  Hard models at high drive still fold a little. Soft Clip is not oversampled at
+  all, deliberately, so that presets written before the models existed render
+  what they always did.
+- **Six of the seven models carry a hand-measured loudness trim.** They are one
+  number each, taken through the whole plugin on the Machine Running preset at
+  55 % drive so that all six land within a decibel of each other. They are not
+  wrong -- a comparison between two distortions at different levels is a
+  comparison of level -- but they are fitted to one preset and one drive
+  setting, and a proper loudness match would measure the model rather than the
+  render.
+- **A 128-step pattern has never been through a DAW's loop.** The sequencer is
+  a pure function of the host's beat position and the length is only a number
+  in that function, so there is no reason for it to behave differently at 128
+  than at 16 -- but nobody has watched it.
 
 ## 3. What the self-test does and does not cover
 

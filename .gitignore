@@ -39,3 +39,8 @@ _designs/website-copy.md
 # Demo tracks. Music rendered with or referenced by these plugins, kept locally for
 # listening tests. Large, and not ours to redistribute.
 /DemoTracks/
+
+# Reference books. Copyrighted third-party material kept locally for working
+# from -- the same rule as a plugin's !dev/ folder. Never commit them, never
+# ship them, and never `git add -A` without looking.
+/Documents/

@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.16)
-project(SaeureKiste VERSION 0.4.0 LANGUAGES CXX)
+project(SaeureKiste VERSION 0.6.0 LANGUAGES CXX)
 
 # SaeureKiste builds as a CLAP and as a VST3, for Linux and for Windows.
 #
@@ -115,8 +115,12 @@ if(SAEUREKISTE_BUILD_GUI AND CMAKE_SYSTEM_NAME STREQUAL "Windows")
       # ole32/uuid/shell32: dragging a pattern out as a .mid file is an OLE
       # drag, and DoDragDrop, the CF_HDROP format and the interface GUIDs each
       # come from one of them.
-      set(SAEUREKISTE_GUI_DEPS_LIBRARIES cairo pixman-1 gdi32 msimg32 user32 ole32 uuid shell32)
-      set(SAEUREKISTE_GUI_SOURCES src/gui/gui.cpp src/gui/seqwindow.cpp src/gui/dragfile.cpp)
+      # comdlg32: the file chooser a preset pack is exported and imported
+      # through, which is the operating system's own on Windows.
+      set(SAEUREKISTE_GUI_DEPS_LIBRARIES cairo pixman-1 gdi32 msimg32 user32 ole32 uuid shell32
+          comdlg32)
+      set(SAEUREKISTE_GUI_SOURCES src/gui/gui.cpp src/gui/seqwindow.cpp src/gui/dragfile.cpp
+          src/gui/filedialog.cpp)
       # Cairo's headers declare everything dllimport unless told the library is
       # static, which is how it is built here.
       set(SAEUREKISTE_GUI_DEFINES CAIRO_WIN32_STATIC_BUILD)
@@ -131,7 +135,8 @@ if(SAEUREKISTE_BUILD_GUI AND NOT SAEUREKISTE_GUI_FOUND_WIN)
       pkg_check_modules(SAEUREKISTE_GUI_DEPS QUIET x11 cairo)
    endif()
    if(SAEUREKISTE_GUI_DEPS_FOUND)
-      set(SAEUREKISTE_GUI_SOURCES src/gui/gui.cpp src/gui/seqwindow.cpp src/gui/dragfile.cpp)
+      set(SAEUREKISTE_GUI_SOURCES src/gui/gui.cpp src/gui/seqwindow.cpp src/gui/dragfile.cpp
+          src/gui/filedialog.cpp)
       message(STATUS "SaeureKiste: building the plugin window (X11 + Cairo)")
    else()
       set(SAEUREKISTE_BUILD_GUI OFF)
@@ -161,6 +166,7 @@ add_library(SaeureKiste-impl STATIC
    src/preset.cpp
    src/params.cpp
    src/dsp/acid_engine.cpp
+   src/dsp/drive.cpp
    src/pattern.cpp
    src/midifile.cpp
    ${SAEUREKISTE_GUI_SOURCES}
@@ -237,8 +243,12 @@ set_target_properties(SaeureKiste PROPERTIES
 if(SAEUREKISTE_BUILD_TOOLS)
    # The preset text format is linked in as well as loaded through the plugin,
    # so the self-test can check that writing a preset and reading it back agree.
+   # dsp/drive.cpp is in here as well as in the plugin: the self-test measures
+   # the drive models' transfer curves and harmonic content directly, which is
+   # the only way to assert that they sound different from each other rather
+   # than merely render different samples.
    add_executable(saeurekiste-render tools/render.cpp src/preset.cpp src/params.cpp src/pattern.cpp
-                  src/midifile.cpp)
+                  src/midifile.cpp src/dsp/drive.cpp)
    target_link_libraries(saeurekiste-render PRIVATE plugincore::shared)
    target_include_directories(saeurekiste-render PRIVATE
       "${CLAP_INCLUDE_DIR}"

@@ -27,6 +27,15 @@ struct GuiPreset {
    std::string loadKey;
    std::string path;
    bool userContent = false;
+   // Which shelf of the library this preset is on: the name of the directory
+   // it was found in, one level under the user preset directory, or whatever
+   // the plugin calls its built-in set. Empty means the library's root, which
+   // is where a preset saved with no folder in its name lands.
+   //
+   // A plugin that does not group its presets leaves this empty on every entry
+   // and the browser draws one flat list, exactly as it did before folders
+   // existed.
+   std::string folder;
 };
 
 // Everything the window needs from the plugin.
@@ -64,6 +73,45 @@ public:
    // Writes the current parameter values into the user preset directory and
    // rescans it. Returns false and fills `error` if that did not work.
    virtual bool guiSavePreset(const std::string &name, std::string &error) = 0;
+
+   // ------------------------------------------------------- folders and packs
+   //
+   // All of these default to "this plugin does not do that", so a plugin that
+   // keeps a flat preset directory implements none of them and its browser is
+   // the list it always was.
+
+   // Whether the browser should offer folders and the pack buttons at all.
+   virtual bool guiPresetFoldersSupported() const { return false; }
+
+   // The pack files the plugin can see, as full paths. What the IMPORT list
+   // shows before it offers a file dialog.
+   virtual std::vector<std::string> guiPresetPacks() const { return {}; }
+
+   // Where a pack of `folder` would be written by default, full path. Empty
+   // when there is nowhere to write one.
+   virtual std::string guiPackPathFor(const std::string &folder) const {
+      (void)folder;
+      return {};
+   }
+
+   // Writes every preset in `folder` to one pack file at `path`.
+   virtual bool guiExportPack(const std::string &folder, const std::string &path,
+                              std::string &error) {
+      (void)folder;
+      (void)path;
+      error = "this plugin has no preset packs";
+      return false;
+   }
+
+   // Reads a pack in and adds its presets to the library as a folder, whose
+   // name comes back in `folder` so the browser can select it. Nothing is
+   // overwritten: a preset whose file is already there is saved beside it.
+   virtual bool guiImportPack(const std::string &path, std::string &folder, std::string &error) {
+      (void)path;
+      (void)folder;
+      error = "this plugin has no preset packs";
+      return false;
+   }
 
    // The version label in the header was clicked. Most plugins have nothing to
    // do with that, which is why it defaults to doing nothing.

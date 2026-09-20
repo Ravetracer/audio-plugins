@@ -21,6 +21,7 @@
 #include "seqwindow.h"
 
 #include "dragfile.h"
+#include "filedialog.h"
 
 #include "params.h"
 
@@ -1247,7 +1248,9 @@ private:
       setColor(cr, mSpec.theme.accent);
       drawText(cr, p.x + 20, p.y + 26, "SAVE PRESET", 11, true, Align::Left);
       setColor(cr, mSpec.theme.textMute);
-      drawText(cr, p.x + p.w - 20, p.y + 26, "to your own preset folder", 9, false, Align::Right);
+      drawText(cr, p.x + p.w - 20, p.y + 26,
+               hasFolders() ? "to your own preset library" : "to your own preset folder", 9,
+               false, Align::Right);
 
       const Rect f = saveFieldRect();
       setColor(cr, mSpec.theme.knobFace);
@@ -1263,8 +1266,15 @@ private:
       drawText(cr, f.x + 9, f.y + 20, shown.c_str(), 12, false, Align::Left);
 
       setColor(cr, mSpec.theme.textMute);
+      // Typing the folder is the whole of the "new folder" gesture: there is
+      // no second dialog, and a folder cannot be made empty, which is right
+      // for something whose only job is to hold presets.
       drawText(cr, p.x + 20, f.y + f.h + 20,
-               mSaveStatus.empty() ? "Type a name, then Enter. Esc cancels." : mSaveStatus.c_str(),
+               !mSaveStatus.empty() ? mSaveStatus.c_str()
+               : hasFolders()
+                  ? "Type a name, then Enter. \"Folder/Name\" saves into a folder and makes "
+                    "it if it is new. Esc cancels."
+                  : "Type a name, then Enter. Esc cancels.",
                9, false, Align::Left);
 
       auto dialogButton = [&](const Rect &r, const char *label, bool accent) {
@@ -1382,18 +1392,78 @@ private:
    }
 
    // ---------------------------------------------------------------- browser
+   //
+   // The library, grouped. A plugin that says nothing about folders gets the
+   // flat grid this always was; one that does gets a column of shelves down
+   // the left, the selected shelf's presets beside it, and a footer that can
+   // write a whole shelf out as one file or read one back in.
+
+   bool hasFolders() const { return mDelegate.guiPresetFoldersSupported(); }
+
+   // Every folder in the library, in the order the browser lists them:
+   // whatever the plugin calls its built-in set first, then the user's own
+   // alphabetically, then the library's root. Rebuilt whenever the browser
+   // opens or the library changes under it, which is the only time it can
+   // move.
+   void rebuildFolders() {
+      mFolders.clear();
+      if (!hasFolders())
+         return;
+      bool root = false;
+      for (const auto &preset : mDelegate.guiPresets()) {
+         if (preset.folder.empty()) {
+            root = true;
+            continue;
+         }
+         if (std::find(mFolders.begin(), mFolders.end(), preset.folder) == mFolders.end())
+            mFolders.push_back(preset.folder);
+      }
+      if (root)
+         mFolders.push_back(std::string()); // the root, drawn as "Unfiled"
+      if (mBrowserFolder >= static_cast<int>(mFolders.size()))
+         mBrowserFolder = -1;
+   }
+
+   // -1 is "All", which is the flat list this browser has always shown and is
+   // what it opens on.
+   std::string selectedFolder() const {
+      return mBrowserFolder >= 0 && mBrowserFolder < static_cast<int>(mFolders.size())
+                ? mFolders[static_cast<size_t>(mBrowserFolder)]
+                : std::string();
+   }
+
+   // The presets on the selected shelf, as indices into the plugin's list --
+   // loading still goes through the same index the plugin handed out, so
+   // filtering cannot make the browser load the wrong preset.
+   std::vector<int> browserItems() const {
+      std::vector<int> out;
+      const auto &list = mDelegate.guiPresets();
+      for (size_t i = 0; i < list.size(); ++i)
+         if (mBrowserFolder < 0 || list[i].folder == selectedFolder())
+            out.push_back(static_cast<int>(i));
+      return out;
+   }
+
+   int browserCols() const { return hasFolders() ? kBrowserCols - 1 : kBrowserCols; }
 
    int browserRows() const {
-      const int n = static_cast<int>(mDelegate.guiPresets().size());
-      return (n + kBrowserCols - 1) / kBrowserCols;
+      const int n = static_cast<int>(browserItems().size());
+      return (n + browserCols() - 1) / browserCols();
    }
+
+   double browserFolderW() const { return hasFolders() ? kBrowserFolderW : 0.0; }
+   double browserFooterH() const { return hasFolders() ? kBrowserFooterH : 0.0; }
 
    Rect browserPanel() const {
       const double maxH = currentH() - kHeaderH - 90;
+      const int folderRows = static_cast<int>(mFolders.size()) + 1; // + "All"
+      // Tall enough for whichever side needs more room, so a library with many
+      // folders and few presets in the one on screen still shows its shelves.
+      const int rows = std::max(browserRows(), hasFolders() ? folderRows : 0);
       Rect r;
       r.x = kMargin + 40;
       r.w = mSpec.contentW - 80;
-      r.h = std::min(maxH, 40.0 + browserRows() * kBrowserRowH + kBrowserPad);
+      r.h = std::min(maxH, 40.0 + rows * kBrowserRowH + kBrowserPad + browserFooterH());
       r.y = kHeaderH + (maxH - r.h) * 0.5 + 20;
       return r;
    }
@@ -1402,7 +1472,8 @@ private:
    // per wheel step; the factory set fits without scrolling.
    int browserVisibleRows() const {
       const Rect p = browserPanel();
-      return std::max(1, static_cast<int>((p.h - 40 - kBrowserPad) / kBrowserRowH));
+      return std::max(
+         1, static_cast<int>((p.h - 40 - kBrowserPad - browserFooterH()) / kBrowserRowH));
    }
 
    int browserMaxScroll() const { return std::max(0, browserRows() - browserVisibleRows()); }
@@ -1418,33 +1489,95 @@ private:
    void openBrowser() {
       mBrowserOpen = true;
       mBrowserHover = -1;
-      // Open with the current preset in view.
+      mImportOpen = false;
+      mBrowserStatus.clear();
+      rebuildFolders();
+      // Open with the current preset in view, on its own shelf rather than in
+      // the flat list: the folder a preset is in is part of where it is.
       const int cur = mDelegate.guiCurrentPreset();
-      const int row = cur >= 0 ? cur / kBrowserCols : 0;
+      const auto &list = mDelegate.guiPresets();
+      if (hasFolders() && cur >= 0 && cur < static_cast<int>(list.size())) {
+         const auto it =
+            std::find(mFolders.begin(), mFolders.end(), list[static_cast<size_t>(cur)].folder);
+         mBrowserFolder = it == mFolders.end() ? -1 : static_cast<int>(it - mFolders.begin());
+      }
+      const std::vector<int> items = browserItems();
+      const auto at = std::find(items.begin(), items.end(), cur);
+      const int position = at == items.end() ? 0 : static_cast<int>(at - items.begin());
       mBrowserScroll = std::min(browserMaxScroll(),
-                                std::max(0, row - browserVisibleRows() / 2));
+                                std::max(0, position / browserCols() - browserVisibleRows() / 2));
       closeMenu();
       mDirty = true;
    }
 
    // Row-major, so scrolling by rows keeps every column moving together. The
-   // row is relative to the scroll position; a negative or too-large row is a
-   // preset that is currently out of view and browserItemVisible() says so.
-   Rect browserItemRect(int index) const {
+   // position is the preset's place on the shelf on screen, not its index in
+   // the plugin's list; a negative or too-large row is out of view and
+   // browserItemVisible() says so.
+   Rect browserItemRect(int position) const {
       const Rect p = browserPanel();
-      const int col = index % kBrowserCols;
-      const int row = index / kBrowserCols - mBrowserScroll;
+      const int cols = browserCols();
+      const int col = position % cols;
+      const int row = position / cols - mBrowserScroll;
       Rect r;
-      r.w = (p.w - 2 * kBrowserPad - kBrowserScrollW) / kBrowserCols;
+      r.w = (p.w - 2 * kBrowserPad - kBrowserScrollW - browserFolderW()) / cols;
       r.h = kBrowserRowH;
-      r.x = p.x + kBrowserPad + col * r.w;
+      r.x = p.x + kBrowserPad + browserFolderW() + col * r.w;
       r.y = p.y + 40 + row * r.h;
       return r;
    }
 
-   bool browserItemVisible(int index) const {
-      const int row = index / kBrowserCols - mBrowserScroll;
+   bool browserItemVisible(int position) const {
+      const int row = position / browserCols() - mBrowserScroll;
       return row >= 0 && row < browserVisibleRows();
+   }
+
+   // The shelves. Row 0 is "All"; the rest are mFolders in order.
+   Rect browserFolderRect(int row) const {
+      const Rect p = browserPanel();
+      Rect r;
+      r.x = p.x + kBrowserPad;
+      r.w = kBrowserFolderW - kBrowserPad;
+      r.h = kBrowserRowH;
+      r.y = p.y + 40 + row * kBrowserRowH;
+      return r;
+   }
+
+   int browserFolderAt(double x, double y) const {
+      if (!hasFolders())
+         return -2;
+      for (int row = 0; row <= static_cast<int>(mFolders.size()); ++row)
+         if (browserFolderRect(row).contains(x, y))
+            return row - 1; // row 0 is "All", which is folder -1
+      return -2;
+   }
+
+   // The footer: export this shelf, export it somewhere else, import a pack.
+   Rect browserFooterRect(int which) const {
+      const Rect p = browserPanel();
+      const double w = 108.0;
+      Rect r;
+      r.h = 22.0;
+      r.y = p.y + p.h - kBrowserFooterH + 6.0;
+      r.x = p.x + kBrowserPad + which * (w + 8.0);
+      r.w = w;
+      return r;
+   }
+
+   // The list of packs the plugin can see, shown under IMPORT. The last entry
+   // is the desktop's own file chooser, when there is one.
+   Rect browserImportRect(int row) const {
+      const Rect anchor = browserFooterRect(2);
+      Rect r;
+      r.x = anchor.x;
+      r.w = 260.0;
+      r.h = kMenuRowH;
+      r.y = anchor.y - 4.0 - (browserImportCount() - row) * kMenuRowH;
+      return r;
+   }
+
+   int browserImportCount() const {
+      return static_cast<int>(mImportPacks.size()) + (fileDialogAvailable() ? 1 : 0);
    }
 
    Rect browserScrollbar() const {
@@ -1455,6 +1588,71 @@ private:
       r.y = p.y + 40;
       r.h = browserVisibleRows() * kBrowserRowH;
       return r;
+   }
+
+   // ------------------------------------------------------------- the packs
+
+   // Where a pack of the selected folder goes by default, and what the status
+   // line says afterwards. Writing it is the plugin's job; the window only
+   // knows which shelf is on screen.
+   void exportPack(bool chooseWhere) {
+      if (!hasFolders())
+         return;
+      const std::string folder = selectedFolder();
+      if (mBrowserFolder < 0) {
+         mBrowserStatus = "Pick a folder to export -- All is the whole library.";
+         mDirty = true;
+         return;
+      }
+      std::string path = mDelegate.guiPackPathFor(folder);
+      if (chooseWhere) {
+         mDelegate.guiKeyboardTaken(); // a modal dialog takes the keyboard too
+         path = saveFileDialog("Export preset pack", path, "Preset pack",
+                               packExtensionFromPath(path));
+         if (path.empty()) {
+            mDirty = true;
+            return; // cancelled
+         }
+      }
+      if (path.empty()) {
+         mBrowserStatus = "Nowhere to write a pack: no user config directory.";
+         mDirty = true;
+         return;
+      }
+      std::string error;
+      mBrowserStatus = mDelegate.guiExportPack(folder, path, error)
+                          ? "Wrote " + path
+                          : (error.empty() ? std::string("Could not write the pack.") : error);
+      mImportPacks = mDelegate.guiPresetPacks();
+      mDirty = true;
+   }
+
+   void importPack(const std::string &path) {
+      mImportOpen = false;
+      if (path.empty()) {
+         mDirty = true;
+         return;
+      }
+      std::string folder;
+      std::string error;
+      if (!mDelegate.guiImportPack(path, folder, error)) {
+         mBrowserStatus = error.empty() ? std::string("Could not read the pack.") : error;
+         mDirty = true;
+         return;
+      }
+      rebuildFolders();
+      const auto it = std::find(mFolders.begin(), mFolders.end(), folder);
+      mBrowserFolder = it == mFolders.end() ? -1 : static_cast<int>(it - mFolders.begin());
+      mBrowserScroll = 0;
+      mBrowserStatus = "Imported as \"" + folder + "\"";
+      mDirty = true;
+   }
+
+   // The extension a pack path ends in, so the file chooser can filter on it
+   // without the window having to know what the plugin calls its presets.
+   static std::string packExtensionFromPath(const std::string &path) {
+      const size_t dot = path.find_last_of('.');
+      return dot == std::string::npos ? std::string("pack") : path.substr(dot + 1);
    }
 
    // An enum chip opens a list anchored to itself. Stepping one value per click
@@ -1551,22 +1749,111 @@ private:
 
       const auto &list = mDelegate.guiPresets();
       const int cur = mDelegate.guiCurrentPreset();
-      for (size_t i = 0; i < list.size(); ++i) {
-         if (!browserItemVisible(static_cast<int>(i)))
+
+      // ---- the shelves
+      if (hasFolders()) {
+         const double top = p.y + 40;
+         const double bottom = top + browserVisibleRows() * kBrowserRowH;
+         setColor(cr, mSpec.theme.panelEdge, 0.8);
+         cairo_set_line_width(cr, 1.0);
+         cairo_move_to(cr, p.x + browserFolderW() + 2.0, top);
+         cairo_line_to(cr, p.x + browserFolderW() + 2.0, bottom);
+         cairo_stroke(cr);
+
+         for (int row = 0; row <= static_cast<int>(mFolders.size()); ++row) {
+            const Rect r = browserFolderRect(row);
+            if (r.y + r.h > bottom + 1.0)
+               break;
+            const int folder = row - 1;
+            const bool sel = folder == mBrowserFolder;
+            const bool hot = mFolderHover == folder;
+            if (sel || hot) {
+               setColor(cr, mSpec.theme.accent, sel ? 0.18 : 0.10);
+               roundedRect(cr, r.x, r.y + 1, r.w, r.h - 2, 3);
+               cairo_fill(cr);
+            }
+            const char *label = row == 0 ? "All"
+                               : mFolders[static_cast<size_t>(folder)].empty()
+                                  ? "Unfiled"
+                                  : mFolders[static_cast<size_t>(folder)].c_str();
+            setColor(cr, sel ? mSpec.theme.accent : mSpec.theme.text, hot ? 1.0 : 0.8);
+            drawText(cr, r.x + 8, r.y + r.h * 0.5 + 4, label, 10.5, sel, Align::Left);
+            // How many presets are on it, which is the one thing a shelf can
+            // say about itself without being opened.
+            int count = 0;
+            for (const auto &preset : list)
+               if (row == 0 || preset.folder == mFolders[static_cast<size_t>(folder)])
+                  ++count;
+            char num[12];
+            std::snprintf(num, sizeof(num), "%d", count);
+            setColor(cr, mSpec.theme.textMute);
+            drawText(cr, r.x + r.w - 8, r.y + r.h * 0.5 + 4, num, 9, false, Align::Right);
+         }
+      }
+
+      // ---- the presets on the shelf
+      const std::vector<int> items = browserItems();
+      for (size_t k = 0; k < items.size(); ++k) {
+         if (!browserItemVisible(static_cast<int>(k)))
             continue;
-         const Rect r = browserItemRect(static_cast<int>(i));
-         const bool hot = mBrowserHover == static_cast<int>(i);
-         const bool sel = cur == static_cast<int>(i);
+         const int index = items[k];
+         const Rect r = browserItemRect(static_cast<int>(k));
+         const bool hot = mBrowserHover == index;
+         const bool sel = cur == index;
          if (hot || sel) {
             setColor(cr, mSpec.theme.accent, hot ? 0.20 : 0.10);
             roundedRect(cr, r.x + 2, r.y + 1, r.w - 4, r.h - 2, 3);
             cairo_fill(cr);
          }
          setColor(cr, sel ? mSpec.theme.accent : mSpec.theme.text, hot ? 1.0 : 0.85);
-         drawText(cr, r.x + 10, r.y + r.h * 0.5 + 4, list[i].name.c_str(), 11, sel, Align::Left);
-         if (list[i].userContent) {
+         drawText(cr, r.x + 10, r.y + r.h * 0.5 + 4, list[static_cast<size_t>(index)].name.c_str(),
+                  11, sel, Align::Left);
+         if (list[static_cast<size_t>(index)].userContent) {
             setColor(cr, mSpec.theme.textMute);
             drawText(cr, r.x + r.w - 10, r.y + r.h * 0.5 + 4, "USER", 8, true, Align::Right);
+         }
+      }
+
+      // ---- the footer: a folder in, a folder out, and whatever the last one
+      // of those had to say about itself.
+      if (hasFolders()) {
+         drawSeqButton(cr, browserFooterRect(0), "EXPORT", mBrowserFolder >= 0);
+         if (fileDialogAvailable())
+            drawSeqButton(cr, browserFooterRect(1), "EXPORT AS...", mBrowserFolder >= 0);
+         drawSeqButton(cr, browserFooterRect(2), "IMPORT...");
+
+         const Rect last = browserFooterRect(2);
+         setColor(cr, mSpec.theme.textMute);
+         drawText(cr, last.x + last.w + 12.0, last.y + last.h - 6.0,
+                  mBrowserStatus.empty()
+                     ? "A pack is one file holding a whole folder. Save into a folder by "
+                       "typing \"Folder/Name\"."
+                     : mBrowserStatus.c_str(),
+                  9, false, Align::Left);
+
+         if (mImportOpen && browserImportCount() > 0) {
+            const int rows = browserImportCount();
+            const Rect first = browserImportRect(0);
+            setColor(cr, mSpec.theme.bgTop, 0.98);
+            roundedRect(cr, first.x - 4.0, first.y - 4.0, first.w + 8.0,
+                        rows * kMenuRowH + 8.0, 4.0);
+            cairo_fill_preserve(cr);
+            setColor(cr, mSpec.theme.accent, 0.6);
+            cairo_set_line_width(cr, 1.0);
+            cairo_stroke(cr);
+            for (int row = 0; row < rows; ++row) {
+               const Rect r = browserImportRect(row);
+               const bool hot = mImportHover == row;
+               if (hot) {
+                  setColor(cr, mSpec.theme.accent, 0.2);
+                  roundedRect(cr, r.x, r.y, r.w, r.h, 3.0);
+                  cairo_fill(cr);
+               }
+               const bool other = row == static_cast<int>(mImportPacks.size());
+               std::string label = other ? "Other file..." : fileNameOf(mImportPacks[row]);
+               setColor(cr, mSpec.theme.text, hot ? 1.0 : 0.85);
+               drawText(cr, r.x + 8, r.y + r.h - 6.0, label.c_str(), 10, other, Align::Left);
+            }
          }
       }
 
@@ -2094,6 +2381,21 @@ private:
    static constexpr double kSeqLabelW = 46.0;
    static constexpr double kSeqPad = 8.0;
    static constexpr double kSeqLaneGap = 5.0;
+   // The scrollbar strip under the lanes, for a pattern longer than the grid
+   // draws. Always reserved, drawn only when there is something to scroll.
+   static constexpr double kSeqScrollH = 12.0;
+
+   // How many columns the grid draws. Sixteen for a pattern of sixteen or
+   // fewer -- which is every pattern this instrument had before Steps reached
+   // 128, and is why a sixteen-step line looks exactly as it always did --
+   // and thirty-two for anything longer, at half the cell width.
+   //
+   // Two sizes rather than a continuum: a cell that changed width every time
+   // Steps moved would make the grid squirm under the pointer, and the second
+   // size is the last one at which the octave box, the note block and the
+   // three flag squares are all still things a person can hit.
+   static constexpr int kSeqColsShort = 16;
+   static constexpr int kSeqColsLong = 32;
 
    // The bank: eight by eight, and the two chain controls under it.
    static constexpr double kBankW = 232.0;
@@ -2108,11 +2410,59 @@ private:
 
    static double seqPaneHeight() { return kSeqPaneHeight; }
    static_assert(kSeqTitleH + kSeqNumH + kSeqOctH + 12.0 * kSeqRowH + kSeqLaneGap +
-                       kNumLanes * kSeqLaneH + kSeqPad ==
+                       kNumLanes * kSeqLaneH + kSeqScrollH + kSeqPad ==
                     static_cast<double>(kSeqPaneHeight),
                  "kSeqPaneHeight no longer matches the parts of the grid");
 
-   int seqCols() const { return mSpec.patternSteps > kMaxSteps ? kMaxSteps : mSpec.patternSteps; }
+   // How long the pattern is, from the Steps parameter, clamped to what this
+   // plugin says it can hold.
+   int seqLen() const {
+      const int n = hasPattern() ? mSpec.pattern->seqLength() : 0;
+      const int cap = mSpec.patternSteps > kMaxSteps ? kMaxSteps : mSpec.patternSteps;
+      return n < 1 ? 1 : (n > cap ? cap : n);
+   }
+
+   // How many columns are on screen. Never more than the plugin has, so a
+   // plugin with a twelve-step pattern still draws twelve.
+   int seqCols() const {
+      const int cap = mSpec.patternSteps > kMaxSteps ? kMaxSteps : mSpec.patternSteps;
+      const int want = seqLen() <= kSeqColsShort ? kSeqColsShort : kSeqColsLong;
+      return want > cap ? cap : want;
+   }
+
+   // The first step on screen. Zero whenever the whole pattern fits, which is
+   // what keeps a sixteen-step pattern behaving exactly as it did.
+   int seqMaxScroll() const { return seqLen() - seqCols() < 0 ? 0 : seqLen() - seqCols(); }
+   int seqScroll() const {
+      const int max = seqMaxScroll();
+      return mSeqScroll < 0 ? 0 : (mSeqScroll > max ? max : mSeqScroll);
+   }
+
+   // Which step a drawn column is.
+   int seqStepOfCol(int col) const { return seqScroll() + col; }
+
+   void seqScrollTo(int first) {
+      const int max = seqMaxScroll();
+      const int next = first < 0 ? 0 : (first > max ? max : first);
+      if (next != mSeqScroll) {
+         mSeqScroll = next;
+         mDirty = true;
+      }
+   }
+
+   // Bring the playing step into view, so a long pattern shows what it is
+   // doing rather than whichever page was last looked at. Only while the
+   // sequencer is running and only when the step has actually left the
+   // screen -- scrolling under an editing hand would be worse than useless.
+   void seqFollowPlayhead(int head) {
+      if (head < 0 || seqMaxScroll() == 0 || mSeqDragMode >= 0 || mSeqScrollDrag)
+         return;
+      const int first = seqScroll();
+      const int cols = seqCols();
+      if (head >= first && head < first + cols)
+         return;
+      seqScrollTo((head / cols) * cols);
+   }
    // Which pattern the grid is editing.
    int editPattern() const { return hasPattern() ? mSpec.pattern->seqPattern() : 0; }
    double seqCellW() const {
@@ -2122,18 +2472,41 @@ private:
    double seqOctY() const { return mSeqRect.y + kSeqTitleH + kSeqNumH; }
    double seqPitchY() const { return seqOctY() + kSeqOctH; }
    double seqLanesY() const { return seqPitchY() + 12.0 * kSeqRowH + kSeqLaneGap; }
+   double seqScrollY() const { return seqLanesY() + kNumLanes * kSeqLaneH + 2.0; }
 
-   // Which step a horizontal position is over, or -1.
+   // The scrollbar: a track the width of the grid with a thumb whose length is
+   // the visible fraction of the pattern.
+   Rect seqScrollTrack() const {
+      return {seqGridX(), seqScrollY(), seqCellW() * seqCols(), kSeqScrollH - 4.0};
+   }
+   Rect seqScrollThumb() const {
+      const Rect track = seqScrollTrack();
+      const int len = seqLen();
+      const double frac = static_cast<double>(seqCols()) / static_cast<double>(len);
+      const double w = std::max(24.0, track.w * (frac > 1.0 ? 1.0 : frac));
+      const double t = seqMaxScroll() > 0
+                          ? seqScroll() / static_cast<double>(seqMaxScroll())
+                          : 0.0;
+      return {track.x + (track.w - w) * t, track.y, w, track.h};
+   }
+
+   // Which *step* a horizontal position is over, or -1. The column it is in is
+   // relative to the scroll position; everything above this line works in
+   // steps, so that an edit lands on the step the pointer is over whatever is
+   // on screen.
    int seqColAt(double x) const {
       const double rel = (x - seqGridX()) / seqCellW();
       const int c = static_cast<int>(std::floor(rel));
-      return rel < 0.0 || c >= seqCols() ? -1 : c;
+      if (rel < 0.0 || c >= seqCols())
+         return -1;
+      const int step = seqStepOfCol(c);
+      return step >= kMaxSteps ? -1 : step;
    }
 
-   void seqEdit(int col, const Step &step) {
-      if (col < 0 || col >= seqCols())
+   void seqEdit(int step, const Step &value) {
+      if (step < 0 || step >= kMaxSteps)
          return;
-      mSpec.pattern->seqSetStep(editPattern(), col, step);
+      mSpec.pattern->seqSetStep(editPattern(), step, value);
       mDirty = true;
    }
 
@@ -2164,9 +2537,15 @@ private:
       return bankGridY() + bankRows() * kBankCellH + kBankRowGap + row * (kBankCtlH + 4.0);
    }
 
-   // COPY and PASTE sit in the bank's title row, beside the word PATTERNS.
-   // There is no room under the chain controls -- the pane's height is fixed by
-   // the step grid beside it and the eight rows already reach the bottom of it.
+   // DEL, COPY and PASTE sit in the bank's title row, beside the word
+   // PATTERNS. There is no room under the chain controls -- the pane's height
+   // is fixed by the step grid beside it and the eight rows already reach the
+   // bottom of it.
+   Rect bankDeleteRect() const {
+      return hasBank() ? Rect{mBankRect.x + mBankRect.w - kSeqPad - 134.0, mBankRect.y + 4.0,
+                              36.0, 14.0}
+                       : Rect{0, 0, 0, 0};
+   }
    Rect bankCopyRect() const {
       return hasBank() ? Rect{mBankRect.x + mBankRect.w - kSeqPad - 94.0, mBankRect.y + 4.0, 44.0,
                               14.0}
@@ -2190,7 +2569,7 @@ private:
          return;
       const Theme &t = mSpec.theme;
       const int cols = seqCols();
-      const int length = mSpec.pattern->seqLength();
+      const int length = seqLen();
       const int head = mSpec.pattern->seqPlayhead();
       const int pat = editPattern();
       mLastPlayhead = head;
@@ -2201,6 +2580,9 @@ private:
       // a pattern nothing is playing, and a cursor running through it would be
       // a lie.
       const bool headHere = live && mLastPlayingPattern == pat;
+      if (headHere)
+         seqFollowPlayhead(head);
+      const int first = seqScroll();
       const double cw = seqCellW();
       const double gx = seqGridX();
 
@@ -2211,8 +2593,14 @@ private:
       cairo_set_line_width(cr, 1.0);
       cairo_stroke(cr);
 
-      char title[32];
-      std::snprintf(title, sizeof(title), "PATTERN %d", pat + 1);
+      char title[96];
+      // Which part of the pattern is on screen, once there is more of it than
+      // fits. A player editing step 97 has to be told it is step 97.
+      if (seqMaxScroll() > 0)
+         std::snprintf(title, sizeof(title), "PATTERN %d  %d-%d/%d", pat + 1, first + 1,
+                       first + cols > length ? length : first + cols, length);
+      else
+         std::snprintf(title, sizeof(title), "PATTERN %d", pat + 1);
       setColor(cr, live ? t.accent : t.textMute);
       drawText(cr, mSeqRect.x + kSeqPad, mSeqRect.y + 15, title, 9.5, true, Align::Left);
       if (!live) {
@@ -2242,22 +2630,24 @@ private:
 
       // The playhead, behind everything, so the column it marks reads as lit
       // rather than as covered over.
-      if (headHere && head >= 0 && head < cols) {
+      if (headHere && head >= first && head < first + cols) {
          setColor(cr, t.accent, 0.13);
-         cairo_rectangle(cr, gx + head * cw, seqOctY() - 2,
-                         cw, mSeqRect.y + mSeqRect.h - kSeqPad - (seqOctY() - 2));
+         cairo_rectangle(cr, gx + (head - first) * cw, seqOctY() - 2, cw,
+                         seqScrollY() - 2.0 - (seqOctY() - 2));
          cairo_fill(cr);
       }
 
       // Step numbers, in fours. A bass line is counted in fours and a grid
       // without the grouping is a wall of identical boxes.
       for (int c = 0; c < cols; ++c) {
-         const bool inPattern = c < length;
-         char num[4];
-         std::snprintf(num, sizeof(num), "%d", c + 1);
-         setColor(cr, inPattern ? ((c % 4) == 0 ? t.textDim : t.textMute) : t.textMute,
+         const int step = first + c;
+         const bool inPattern = step < length;
+         const bool bar = (step % 4) == 0;
+         char num[16];
+         std::snprintf(num, sizeof(num), "%d", step + 1);
+         setColor(cr, inPattern ? (bar ? t.textDim : t.textMute) : t.textMute,
                   inPattern ? 1.0 : 0.4);
-         drawText(cr, gx + (c + 0.5) * cw, mSeqRect.y + kSeqTitleH + 10, num, 8.5, (c % 4) == 0,
+         drawText(cr, gx + (c + 0.5) * cw, mSeqRect.y + kSeqTitleH + 10, num, 8.5, bar,
                   Align::Center);
       }
 
@@ -2266,7 +2656,7 @@ private:
 
       // Bar lines every fourth step, and a dimmer one between.
       for (int c = 0; c <= cols; ++c) {
-         const bool bar = (c % 4) == 0;
+         const bool bar = ((first + c) % 4) == 0;
          setColor(cr, t.panelEdge, bar ? 1.0 : 0.45);
          cairo_set_line_width(cr, 1.0);
          cairo_move_to(cr, gx + c * cw, gridTop);
@@ -2275,10 +2665,10 @@ private:
       }
 
       // Anything past the pattern's length is not played, and says so.
-      if (length < cols) {
+      if (length - first < cols) {
+         const double from = length - first < 0 ? 0.0 : (length - first) * cw;
          setColor(cr, t.bgBottom, 0.55);
-         cairo_rectangle(cr, gx + length * cw, gridTop, (cols - length) * cw,
-                         gridBottom - gridTop);
+         cairo_rectangle(cr, gx + from, gridTop, cols * cw - from, gridBottom - gridTop);
          cairo_fill(cr);
       }
 
@@ -2290,7 +2680,7 @@ private:
       const double boxH = kSeqOctH - 6.0;
       const double boxW = std::min(kSeqOctBoxW, cw - 6.0);
       for (int c = 0; c < cols; ++c) {
-         const Step st = mSpec.pattern->seqStep(pat, c);
+         const Step st = mSpec.pattern->seqStep(pat, first + c);
          const double bx = gx + c * cw + (cw - boxW) * 0.5;
          const double by = seqOctY() + 3.0;
          roundedRect(cr, bx, by, boxW, boxH, 3.0);
@@ -2340,12 +2730,12 @@ private:
          drawText(cr, gx - 6, ry + kSeqRowH - 3.5, kNames[note], 8.0, note == 0, Align::Right);
 
          for (int c = 0; c < cols; ++c) {
-            const Step st = mSpec.pattern->seqStep(pat, c);
+            const Step st = mSpec.pattern->seqStep(pat, first + c);
             if (st.note != note)
                continue;
             // An accented step is drawn bright, because an accent is the one
             // thing you look for when reading somebody's pattern.
-            const double alpha = c < length ? (st.accent ? 1.0 : 0.62) : 0.28;
+            const double alpha = first + c < length ? (st.accent ? 1.0 : 0.62) : 0.28;
             setColor(cr, st.accent ? t.highlight : t.accent, alpha);
             roundedRect(cr, gx + c * cw + 2.0, ry + 1.5, cw - 4.0, kSeqRowH - 3.0, 2.0);
             cairo_fill(cr);
@@ -2359,13 +2749,13 @@ private:
          setColor(cr, t.textMute);
          drawText(cr, gx - 6, ly + kSeqLaneH - 5.0, kLaneNames[lane], 8.0, false, Align::Right);
          for (int c = 0; c < cols; ++c) {
-            const Step st = mSpec.pattern->seqStep(pat, c);
+            const Step st = mSpec.pattern->seqStep(pat, first + c);
             const bool on = st.flag(lane);
             const double bx = gx + c * cw + cw * 0.5 - 5.0;
             const double by = ly + (kSeqLaneH - 10.0) * 0.5;
             roundedRect(cr, bx, by, 10.0, 10.0, 2.0);
             if (on) {
-               setColor(cr, t.accent, c < length ? 0.95 : 0.3);
+               setColor(cr, t.accent, first + c < length ? 0.95 : 0.3);
                cairo_fill(cr);
             } else {
                setColor(cr, t.knobFace);
@@ -2375,6 +2765,19 @@ private:
                cairo_stroke(cr);
             }
          }
+      }
+
+      // ---- the scrollbar, for a pattern longer than the grid draws. Drag the
+      // thumb, or use the wheel anywhere over the grid.
+      if (seqMaxScroll() > 0) {
+         const Rect track = seqScrollTrack();
+         setColor(cr, t.text, 0.08);
+         roundedRect(cr, track.x, track.y, track.w, track.h, 3.0);
+         cairo_fill(cr);
+         const Rect thumb = seqScrollThumb();
+         setColor(cr, t.accent, mSeqScrollDrag || thumb.contains(mMouseX, mMouseY) ? 0.8 : 0.55);
+         roundedRect(cr, thumb.x, thumb.y, thumb.w, thumb.h, 3.0);
+         cairo_fill(cr);
       }
    }
 
@@ -2431,12 +2834,17 @@ private:
          cairo_set_line_width(cr, sel || live ? 1.6 : 1.0);
          cairo_stroke(cr);
 
-         char num[8];
+         char num[16];
          std::snprintf(num, sizeof(num), "%d", i + 1);
          setColor(cr, sel ? t.text : (used ? t.textDim : t.textMute), used || sel ? 1.0 : 0.75);
          drawText(cr, r.x + r.w * 0.5, r.y + r.h - 7.0, num, 8.0, sel, Align::Center);
       }
 
+      // DEL empties the selected slot. It is the same edit CLEAR makes on the
+      // grid, put where the patterns are: emptying one you are not editing is
+      // a thing you do while looking at the bank, and going to the grid to do
+      // it means selecting the pattern first, which loses your place.
+      drawSeqButton(cr, bankDeleteRect(), "DEL", !mSpec.pattern->seqPatternEmpty(selected));
       drawSeqButton(cr, bankCopyRect(), "COPY");
       drawSeqButton(cr, bankPasteRect(), "PASTE", mPatternClipHeld);
 
@@ -2509,6 +2917,16 @@ private:
       mDirty = true;
    }
 
+   // Empties the selected slot, all kMaxSteps of it. Like CLEAR, COPY and
+   // PASTE it is not undoable, which is the deal a hardware sequencer offers
+   // and the reason the copy of it you took is still in the clipboard.
+   void patternDelete() {
+      const int pat = editPattern();
+      for (int c = 0; c < kMaxSteps; ++c)
+         mSpec.pattern->seqSetStep(pat, c, Step());
+      mDirty = true;
+   }
+
    void patternPaste() {
       if (!mPatternClipHeld)
          return;
@@ -2545,9 +2963,15 @@ private:
 
    // The three buttons that change a whole pattern at once. None of them is
    // undoable, which is the same deal a hardware sequencer offers.
+   //
+   // CLEAR empties the whole pattern rather than the part of it on screen. It
+   // used to clear exactly the columns it drew, which was the same thing when
+   // a pattern was sixteen steps and the grid drew sixteen; with a pattern
+   // that scrolls it would leave whatever is off screen behind, and a CLEAR
+   // that does not clear is worse than no button at all.
    void seqClear() {
       const int pat = editPattern();
-      for (int c = 0; c < seqCols(); ++c)
+      for (int c = 0; c < kMaxSteps; ++c)
          mSpec.pattern->seqSetStep(pat, c, Step());
       mDirty = true;
    }
@@ -2574,6 +2998,10 @@ private:
       if (!hasBank() || !mBankRect.contains(x, y))
          return false;
 
+      if (button == kButtonLeft && bankDeleteRect().contains(x, y)) {
+         patternDelete();
+         return true;
+      }
       if (button == kButtonLeft && bankCopyRect().contains(x, y)) {
          patternCopy();
          return true;
@@ -2685,6 +3113,29 @@ private:
       if (!mSeqRect.contains(x, y))
          return false;
 
+      // The wheel scrolls the grid wherever it is over the pane, so a long
+      // pattern is walked through without going to the scrollbar.
+      if (button == kWheelUp || button == kWheelDown) {
+         if (seqMaxScroll() > 0)
+            seqScrollTo(seqScroll() + (button == kWheelUp ? -4 : 4));
+         return true;
+      }
+
+      if (seqMaxScroll() > 0 && y >= seqScrollY() - 2.0 && y < seqScrollY() + kSeqScrollH) {
+         if (button != kButtonLeft)
+            return true;
+         const Rect thumb = seqScrollThumb();
+         if (thumb.contains(x, y)) {
+            mSeqScrollDrag = true;
+            mSeqScrollGrab = x - thumb.x;
+         } else {
+            // A click on the track jumps a screenful, the way a scrollbar
+            // does, rather than teleporting the thumb under the pointer.
+            seqScrollTo(seqScroll() + (x < thumb.x ? -seqCols() : seqCols()));
+         }
+         return true;
+      }
+
       const int col = seqColAt(x);
       if (col < 0)
          return true; // inside the pane but off the grid: swallow it
@@ -2737,6 +3188,18 @@ private:
          return true;
       }
       return true;
+   }
+
+   // The scrollbar thumb, dragged. The grab offset is kept so the thumb does
+   // not jump to centre itself under the pointer on the first pixel of travel.
+   void onSeqScrollMotion(double x) {
+      const Rect track = seqScrollTrack();
+      const Rect thumb = seqScrollThumb();
+      const double travel = track.w - thumb.w;
+      if (travel <= 0.0)
+         return;
+      const double t = (x - mSeqScrollGrab - track.x) / travel;
+      seqScrollTo(static_cast<int>(std::floor(t * seqMaxScroll() + 0.5)));
    }
 
    // Dragging paints, which is the only civilised way to enter sixteen steps.
@@ -2994,6 +3457,57 @@ private:
             return;
          }
          if (be.button == kButtonLeft) {
+            // The import list is on top of everything else in the panel, so it
+            // is asked first and swallows the click either way.
+            if (mImportOpen) {
+               for (int row = 0; row < browserImportCount(); ++row) {
+                  if (!browserImportRect(row).contains(x, y))
+                     continue;
+                  if (row < static_cast<int>(mImportPacks.size())) {
+                     importPack(mImportPacks[static_cast<size_t>(row)]);
+                  } else {
+                     mDelegate.guiKeyboardTaken();
+                     importPack(openFileDialog("Import preset pack", "Preset pack",
+                                               packExtensionFromPath(
+                                                  mDelegate.guiPackPathFor("pack"))));
+                  }
+                  mDirty = true;
+                  return;
+               }
+               mImportOpen = false;
+               mDirty = true;
+               return;
+            }
+
+            if (hasFolders()) {
+               const int folder = browserFolderAt(x, y);
+               if (folder != -2) {
+                  mBrowserFolder = folder;
+                  mBrowserScroll = 0;
+                  mBrowserHover = -1;
+                  mDirty = true;
+                  return;
+               }
+               if (browserFooterRect(0).contains(x, y)) {
+                  exportPack(false);
+                  return;
+               }
+               if (fileDialogAvailable() && browserFooterRect(1).contains(x, y)) {
+                  exportPack(true);
+                  return;
+               }
+               if (browserFooterRect(2).contains(x, y)) {
+                  mImportPacks = mDelegate.guiPresetPacks();
+                  mImportHover = -1;
+                  if (browserImportCount() == 0)
+                     mBrowserStatus = "No packs found, and no file chooser to look with.";
+                  else
+                     mImportOpen = true;
+                  mDirty = true;
+                  return;
+               }
+            }
+
             const int item = browserItemAt(x, y);
             if (item >= 0)
                loadPreset(item);
@@ -3114,6 +3628,7 @@ private:
 
    void onButtonRelease() {
       mSeqDragMode = -1;
+      mSeqScrollDrag = false;
       if (mDrag >= 0) {
          mDelegate.guiEndEdit(static_cast<uint32_t>(mDrag));
          mDrag = -1;
@@ -3134,6 +3649,10 @@ private:
          mMouseY = y;
          if (wasOver || mSeqRect.contains(x, y) || mBankRect.contains(x, y))
             mDirty = true;
+      }
+      if (mSeqScrollDrag) {
+         onSeqScrollMotion(x);
+         return;
       }
       if (mSeqDragMode >= 0) {
          onSeqMotion(x, y);
@@ -3172,8 +3691,21 @@ private:
 
       if (mBrowserOpen) {
          const int item = browserItemAt(x, y);
-         if (item != mBrowserHover) {
+         const int folder = hasFolders() ? browserFolderAt(x, y) : -2;
+         int importRow = -1;
+         if (mImportOpen)
+            for (int row = 0; row < browserImportCount(); ++row)
+               if (browserImportRect(row).contains(x, y))
+                  importRow = row;
+         // The footer buttons highlight under the pointer like the grid's do,
+         // and drawSeqButton reads the pointer position for that.
+         if (item != mBrowserHover || folder != mFolderHover || importRow != mImportHover ||
+             hasFolders()) {
             mBrowserHover = item;
+            mFolderHover = folder;
+            mImportHover = importRow;
+            mMouseX = x;
+            mMouseY = y;
             mDirty = true;
          }
          return;
@@ -3226,15 +3758,26 @@ private:
       }
    }
 
+   // Returns the preset's index in the plugin's list, not its place on the
+   // shelf: everything outside the browser -- loading, the arrows, the name on
+   // the bar -- works in those indices and must not have to know that the
+   // browser is showing a subset.
    int browserItemAt(double x, double y) const {
-      const auto &list = mDelegate.guiPresets();
-      for (size_t i = 0; i < list.size(); ++i) {
-         if (!browserItemVisible(static_cast<int>(i)))
+      const std::vector<int> items = browserItems();
+      for (size_t k = 0; k < items.size(); ++k) {
+         if (!browserItemVisible(static_cast<int>(k)))
             continue;
-         if (browserItemRect(static_cast<int>(i)).contains(x, y))
-            return static_cast<int>(i);
+         if (browserItemRect(static_cast<int>(k)).contains(x, y))
+            return items[k];
       }
       return -1;
+   }
+
+   // The last component of a path, for the import list. std::filesystem is not
+   // included here and this is not worth including it for.
+   static std::string fileNameOf(const std::string &path) {
+      const size_t cut = path.find_last_of("/\\");
+      return cut == std::string::npos ? path : path.substr(cut + 1);
    }
 
    const Rect &cellRectFor(uint32_t id) const {
@@ -3351,6 +3894,11 @@ private:
    static constexpr int kBrowserPad = 14;
    static constexpr int kBrowserRowH = 26;
    static constexpr int kBrowserScrollW = 14;
+   // The shelf column down the left of the browser, and the strip under it
+   // that holds the two pack buttons. Both are zero for a plugin that does not
+   // group its presets, and then the browser is the flat grid it always was.
+   static constexpr double kBrowserFolderW = 190.0;
+   static constexpr double kBrowserFooterH = 34.0;
 
    GuiDelegate &mDelegate;
    // By value, and that matters. A plugin describes itself once, as a constant
@@ -3404,6 +3952,19 @@ private:
    bool mBrowserOpen = false;
    int mBrowserHover = -1;
    int mBrowserScroll = 0; // first visible row
+   // The library's shelves, as the browser lists them, and which one is on
+   // screen: -1 is "All", which is the flat list the browser has always shown.
+   std::vector<std::string> mFolders;
+   int mBrowserFolder = -1;
+   int mFolderHover = -2;
+   // The packs the plugin can see, read when IMPORT is pressed rather than
+   // held, so a pack copied into the folder while the editor is open is found.
+   std::vector<std::string> mImportPacks;
+   bool mImportOpen = false;
+   int mImportHover = -1;
+   // What the last export or import had to say. Cleared when the browser
+   // opens, because a message about a file written ten minutes ago is noise.
+   std::string mBrowserStatus;
    bool mSaveOpen = false;
    int mEntryParam = -1; // knob whose value is being typed, or -1
    std::string mEntryText;
@@ -3436,6 +3997,12 @@ private:
    int mSeqDragMode = -1; // -1 none, 0 pitch, 1 + lane for a flag lane
    int mSeqDragNote = -1;
    bool mSeqPaintValue = false;
+   // Where the grid is scrolled to, in steps, and the thumb drag that moves
+   // it. The window's, not the plugin's: which part of a pattern somebody is
+   // looking at is not worth saving into a project, let alone a preset.
+   int mSeqScroll = 0;
+   bool mSeqScrollDrag = false;
+   double mSeqScrollGrab = 0.0; // pointer offset inside the thumb, in pixels
    int mLastPlayhead = -1;
    int mLastPlayingPattern = -1;
    // A bank control under the pointer. Those three are parameters but they are

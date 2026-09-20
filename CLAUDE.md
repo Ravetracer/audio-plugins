@@ -49,7 +49,7 @@ audio-plugins/
 
 | # | Plugin | Folder | Status | Platforms | Formats | What it is |
 |---|--------|--------|--------|-----------|---------|------------|
-| 1 | **SäureKiste** | `saeure-kiste/` | 0.4.0 | Linux, Windows | CLAP, VST3 | a Roland TB-303 model, from the 1982 service notes, plus Robin Whittle's Devil Fish modification |
+| 1 | **SäureKiste** | `saeure-kiste/` | 0.6.0 | Linux, Windows | CLAP, VST3 | a Roland TB-303 model, from the 1982 service notes, plus Robin Whittle's Devil Fish modification |
 
 Naming follows the plugin, not a pattern: the CMake project, the installed
 artifact and the display name are CamelCase (`SaeureKiste`), the folder is
@@ -75,7 +75,8 @@ shared/
 ├── include/plugincore/
 │   ├── params.h                ParamDesc, ParamKind, FilterKind, conversions
 │   ├── param_macros.h          table-building shorthand (params.cpp only)
-│   ├── preset.h                PresetContext, PresetData, the text format
+│   ├── preset.h                PresetContext, PresetData, the text format,
+│   │                            user folders and the preset pack format
 │   ├── preset_provider.h       PresetProviderSpec, the discovery factory
 │   ├── dsp/{adsr,biquad,bubble,denormals,fastmath,filters,pocket,reverb,rng}.h
 │   └── gui/
@@ -106,7 +107,15 @@ with a scoped `using namespace plugincore;`, so plugin code calls `paramToReal`,
 
 **How the shared code stays plugin-agnostic.** It never hardcodes a name. The
 preset code takes a `PresetContext` (plugin name, file extension, parameter
-table and its size); the discovery provider takes a `PresetProviderSpec`.
+table and its size); the discovery provider takes a `PresetProviderSpec`. The
+preset **pack** format -- a folder of presets as one text file, added in
+SäureKiste 0.5.0 -- is the same: `formatPresetPack`/`parsePresetPack` take a
+context and carry each preset's *text* rather than a re-serialised copy, so a
+preset with lines the shared format knows nothing about survives the round
+trip. `GuiPreset::folder` and the folder and pack calls on `GuiDelegate` all
+default to "this plugin does not do that", so a plugin that keeps a flat preset
+directory gets the browser it always had; the browser UI that uses them is in
+SäureKiste's forked window and has not been ported to the shared one.
 `embed_presets.cmake` requires `NAMESPACE` and `PRESET_EXT` as arguments and
 fails without them, because a default would silently generate the wrong
 namespace and still compile in the plugin it was copied from.

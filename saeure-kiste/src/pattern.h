@@ -1,13 +1,13 @@
 #pragma once
 
-// The sequencer's pattern: sixteen steps of pitch, octave and three flags.
+// The sequencer's pattern: up to 128 steps of pitch, octave and three flags.
 //
-// It is deliberately *not* in the parameter table. Sixteen steps times five
-// fields is eighty values, and a host's parameter list is not the place for
-// them -- nor is automating step 7's slide flag a thing anybody wants. So the
-// pattern travels two ways of its own: packed into the plugin's state blob, and
-// written into the preset file as five readable lines, which the plugin's own
-// preset wrappers add on top of the shared format.
+// It is deliberately *not* in the parameter table. Even sixteen steps times
+// five fields is eighty values, and a host's parameter list is not the place
+// for them -- nor is automating step 7's slide flag a thing anybody wants. So
+// the pattern travels two ways of its own: packed into the plugin's state blob,
+// and written into the preset file as five readable lines, which the plugin's
+// own preset wrappers add on top of the shared format.
 //
 // Each step packs into sixteen bits so the audio thread can read one with a
 // single relaxed atomic load:
@@ -30,7 +30,21 @@
 
 namespace saeurekiste {
 
-constexpr int kMaxSteps = 16;
+// How long a pattern may be. The machine had sixteen steps and a pattern is
+// still sixteen by default -- Steps runs 1 to kMaxSteps and defaults to
+// kDefaultSteps -- but nothing in the sequencer, the storage or the file
+// format cares which of the two numbers it is looking at. A long pattern is a
+// melodic line rather than a bass figure, which is the point of it.
+//
+// 128 is where it stops because that is eight bars of sixteenths, the whole
+// bank at that length is 16 kB of state, and a step narrower than the grid can
+// draw is not an edit anybody can make.
+constexpr int kMaxSteps = 128;
+
+// What a fresh pattern, a fresh instance and the Steps parameter's default
+// are: the machine's own sixteen. Everything that used to say kMaxSteps and
+// meant "the length of a pattern on the hardware" says this instead.
+constexpr int kDefaultSteps = 16;
 
 // How far a step may be moved from the pattern's own octave, either way. The
 // machine had one switch position up and one down; two is a sequencer feature
@@ -73,19 +87,29 @@ struct Step {
 // state blob, the plugin's own store -- walks it in one pass.
 struct PatternData {
    bool present = false;
-   uint16_t steps[kMaxPatterns * kMaxSteps] = {0};
+   uint16_t steps[kMaxPatterns * kMaxSteps] = {0};  // 16 kB, and it travels by
+                                                    // reference everywhere
 
    uint16_t *pattern(int index) { return steps + index * kMaxSteps; }
    const uint16_t *pattern(int index) const { return steps + index * kMaxSteps; }
 };
 
-// Sixteen rests. Not the same as sixteen zero words: a zero unpacks to an
+// kMaxSteps rests. Not the same as that many zero words: a zero unpacks to an
 // octave of -1, which is invisible on a rest but writes a "-" into a preset.
 void clearPattern(uint16_t *steps);
 
 // Whether a pattern has anything in it at all. What the bank grid shades and
 // what decides whether a preset bothers to write the pattern out.
 bool patternEmpty(const uint16_t *steps);
+
+// One past the last step that is not a rest, and 0 for an empty pattern.
+//
+// What a preset writes out. A pattern is always kMaxSteps words in memory, but
+// writing all 128 columns for a sixteen-step line would be unreadable and
+// would change every file in the factory library for no reason -- so the text
+// carries what the pattern actually uses, rounded up to the machine's sixteen,
+// and the reader clears whatever a shorter line does not mention.
+int patternUsedLength(const uint16_t *steps);
 
 // ------------------------------------------------------------------ generator
 //
@@ -96,6 +120,14 @@ struct GenSettings {
    uint32_t seed = 1;
    int scale = 0; // ScaleKind, see params.h
    int root = 0;  // 0 = C
+   // How many steps to fill. Everything past it is cleared, so the pattern
+   // holds nothing the sequencer will not reach.
+   //
+   // The draws are per step and in order, so a longer pattern begins with
+   // exactly the steps a shorter one had: turning Steps up extends the line
+   // rather than replacing it, and the seed still describes the pattern
+   // completely.
+   int length = kDefaultSteps;
    double notes = 0.78;
    double accent = 0.3;
    double slide = 0.2;
@@ -103,7 +135,8 @@ struct GenSettings {
    double vibrato = 0.06;
 };
 
-// Fills `steps` (kMaxSteps of them) from the settings.
+// Fills `steps` (kMaxSteps of them, `settings.length` of them with notes) from
+// the settings.
 //
 // Two properties matter, and the tests check both:
 //
@@ -136,7 +169,8 @@ uint32_t nextGeneratorSeed(uint32_t current, uint32_t salt, uint32_t maxSeed);
 
 // The default pattern a fresh instance starts with. Sixteen steps that show
 // what the instrument does rather than sixteen rests, because an empty
-// sequencer looks broken.
+// sequencer looks broken. The rest of the 128 are rests, so a fresh instance
+// with Steps turned up plays the sixteen and then silence rather than junk.
 void defaultPattern(uint16_t *steps);
 
 // The bank's preset lines, ready to append to the shared format's output.

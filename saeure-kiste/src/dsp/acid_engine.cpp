@@ -232,6 +232,9 @@ float AcidEngine::polyBlep(float t, float dt) {
 
 void AcidEngine::prepare(double sampleRate, uint32_t /*maxBlockFrames*/) {
    mSampleRate = sampleRate > 0.0 ? sampleRate : 48000.0;
+   // The drive stage runs its models at twice this rate and has filters of its
+   // own, so it has to be told the rate before anything is reset.
+   mDriveStage.prepare(mSampleRate);
    reset();
    updateDerived();
 }
@@ -253,6 +256,10 @@ void AcidEngine::reset() {
    mSquareDroop.reset();
    mDcBlock.reset();
    mTone.reset();
+   // The drive stage holds filters and an oversampler, and like every other
+   // state here reset() has to clear them or two renders of the same preset
+   // are not the same render.
+   mDriveStage.reset();
    mLastOut = 0.0f;
    mDcBlock.setCutoff(kDcBlockHz, static_cast<float>(mSampleRate));
    // Seeded here rather than from a clock, so that reset() really does put the
@@ -333,15 +340,11 @@ void AcidEngine::updateDerived() {
    // keeps a render with no Filter FM identical to one from before it existed.
    mFmOctaves = mParams.filterFm * kFilterFmOctaves;
 
-   // 1 to 24 times into the clipper, level-matched so that turning it up
-   // thickens instead of simply getting louder.
-   mDrivePre = 1.0f + mParams.drive * 23.0f;
-   // Level-matched at 0.8, and never above unity: the clipper already bounds
-   // its output to +/-1, and a makeup above 1 would let the stage hand the
-   // master something it cannot hold.
-   mDriveMakeup = 0.8f / softClip(0.8f * mDrivePre);
-   if (mDriveMakeup > 1.0f)
-      mDriveMakeup = 1.0f;
+   // The drive stage. Which model, how hard, where its operating point sits
+   // and how much of it is heard -- all of it, including the gain staging and
+   // the level matching, belongs to the stage itself; see dsp/drive.cpp.
+   mDriveStage.setParams(mParams.distType, mParams.drive, mParams.distBias,
+                         mParams.distMix);
 }
 
 // ------------------------------------------------------------------- notes
@@ -681,7 +684,7 @@ void AcidEngine::process(float *outL, float *outR, uint32_t frames) {
          // ------------------------------------------------------- VCA + out
          float out = y * mVcaEnv;
 
-         out = softClip(out * mDrivePre) * mDriveMakeup;
+         out = mDriveStage.tick(out);
          out = mTone.tick(out);
 
          // The Muffler goes last, after the drive stage, and that is a
@@ -705,7 +708,20 @@ void AcidEngine::process(float *outL, float *outR, uint32_t frames) {
          // Whittle specifies.
          mLastOut = clampv(out, -4.0f, 4.0f);
 
-         out = mDcBlock.tick(out) * mParams.gain;
+         // The last line of defence, and only that: the amplifier, the drive
+         // stage and the Muffler each bound their own output, so at any
+         // setting anybody would use this clamp never touches the signal --
+         // the whole factory library renders bit for bit the same with it as
+         // without it.
+         //
+         // What it is here for is the corner where Filter FM is feeding the
+         // amplifier's output back into the cutoff at maximum with Res Range
+         // past oscillation: that path is a resonant loop, its peak moves
+         // chaotically with any change anywhere, and it had been sitting a
+         // hundredth of a decibel under the plugin's own bound by luck rather
+         // than by construction. A host is entitled to a signal inside
+         // +/-1 and this is what guarantees it.
+         out = clampv(mDcBlock.tick(out) * mParams.gain, -1.0f, 1.0f);
 
          outL[i + s] = out;
          outR[i + s] = out;

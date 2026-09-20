@@ -105,7 +105,7 @@ void defaultPattern(uint16_t *steps) {
       bool accent;
       bool vibrato;
    };
-   static const Seed kSeed[kMaxSteps] = {
+   static const Seed kSeed[kDefaultSteps] = {
       {0, 0, false, true, false},  {0, 0, true, false, false}, {0, 1, false, false, false},
       {-1, 0, false, false, false}, {0, 0, false, false, false}, {10, 0, false, true, false},
       {0, 0, true, false, false},  {3, 0, false, false, false}, {0, 0, false, true, false},
@@ -113,7 +113,8 @@ void defaultPattern(uint16_t *steps) {
       {0, 0, false, false, false}, {7, 0, false, true, false},  {0, 0, true, false, false},
       {-1, 0, false, false, false},
    };
-   for (int i = 0; i < kMaxSteps; ++i) {
+   clearPattern(steps);
+   for (int i = 0; i < kDefaultSteps; ++i) {
       Step s;
       s.note = kSeed[i].note;
       s.octave = kSeed[i].octave;
@@ -138,6 +139,14 @@ bool patternEmpty(const uint16_t *steps) {
    return true;
 }
 
+int patternUsedLength(const uint16_t *steps) {
+   const uint16_t rest = Step().pack();
+   for (int i = kMaxSteps - 1; i >= 0; --i)
+      if (steps[i] != rest && steps[i] != 0)
+         return i + 1;
+   return 0;
+}
+
 void generatePattern(const GenSettings &settings, uint16_t *out) {
 
    const uint32_t seed = settings.seed;
@@ -151,6 +160,10 @@ void generatePattern(const GenSettings &settings, uint16_t *out) {
    int scale[12];
    const int scaleCount = scaleNotes(settings.scale, scale);
 
+   const int length = settings.length < 1 ? 1
+                                          : (settings.length > kMaxSteps ? kMaxSteps
+                                                                         : settings.length);
+
    // Seeded from the seed alone, so the pattern is the number and nothing
    // else. Mixed first because small consecutive seeds must give unrelated
    // patterns -- walking 1, 2, 3 through near-identical lines would make the
@@ -161,7 +174,7 @@ void generatePattern(const GenSettings &settings, uint16_t *out) {
       rng.next();
 
    Step steps[kMaxSteps];
-   for (int i = 0; i < kMaxSteps; ++i) {
+   for (int i = 0; i < length; ++i) {
       // All six draws, every step, unconditionally. See the note above.
       const double rNote = rng.uniformPositive();
       const double rDegree = rng.uniformPositive();
@@ -210,26 +223,32 @@ void generatePattern(const GenSettings &settings, uint16_t *out) {
 
    // A slide into a rest slides into nothing, so it is not a slide. Checked
    // afterwards because it is the only rule that needs a neighbour.
-   for (int i = 0; i < kMaxSteps; ++i) {
-      const int next = (i + 1) % kMaxSteps;
+   for (int i = 0; i < length; ++i) {
+      const int next = (i + 1) % length;
       if (steps[i].slide && steps[next].note < 0)
          steps[i].slide = false;
    }
 
-   for (int i = 0; i < kMaxSteps; ++i)
+   for (int i = 0; i < length; ++i)
       out[i] = steps[i].pack();
 
+   // Everything past the length is a rest, so turning Steps back down and up
+   // again gives the line the seed describes rather than what a longer
+   // generation left lying there.
+   const uint16_t rest = Step().pack();
+   for (int i = length; i < kMaxSteps; ++i)
+      out[i] = rest;
 }
 
 std::string formatPattern(const uint16_t *steps) {
    // Column-aligned so the five lines read as a grid in a text editor, which is
    // the only reason to write a pattern as text rather than as a number.
-   auto row = [](const std::string &key, int which, const uint16_t *pat) {
+   auto row = [](const std::string &key, int which, const uint16_t *pat, int columns) {
       std::string line = key;
       while (line.size() < 13)
          line += ' ';
       line += "=";
-      for (int i = 0; i < kMaxSteps; ++i) {
+      for (int i = 0; i < columns; ++i) {
          const Step s = Step::unpack(pat[i]);
          const char *tok = ".";
          switch (which) {
@@ -280,8 +299,15 @@ std::string formatPattern(const uint16_t *steps) {
          std::snprintf(header, sizeof(header), "# Pattern %d\n", p + 1);
          out += header;
       }
+      // How many columns this pattern is written with: what it uses, never
+      // fewer than the machine's sixteen. A pattern that fits in sixteen is
+      // therefore written exactly as it was before long patterns existed, and
+      // the factory library is byte for byte what it was.
+      int columns = patternUsedLength(pat);
+      if (columns < kDefaultSteps)
+         columns = kDefaultSteps;
       for (int f = 0; f < 5; ++f)
-         out += row(std::string(stem) + kFields[f], kWhich[f], pat);
+         out += row(std::string(stem) + kFields[f], kWhich[f], pat, columns);
    }
    return out;
 }

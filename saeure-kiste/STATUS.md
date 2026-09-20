@@ -1,11 +1,100 @@
 # SäureKiste -- status
 
-Version 0.4.0. Linux and Windows, CLAP and VST3. 51 parameters, 27 presets,
-builds clean, self-test passes with no failures across 151 checks, and
+Version 0.6.0. Linux and Windows, CLAP and VST3. 54 parameters, 27 presets,
+builds clean, self-test passes with no failures across 188 checks, and
 `tools/check-instances.sh` passes with two editors open at once.
 
 Six of seven fixes were confirmed by backing the bug out and watching the suite
 fail; the seventh has no contract to assert. See `TODO.md` §3.
+
+0.6.0 rebuilds the drive stage out of the literature, and it exists because the
+first attempt at it was wrong.
+
+**What was wrong.** 0.5.0 shipped fourteen distortion types and most of them
+were inaudible. Not subtly different -- the same. Three reasons, all of them
+mine: every shape was given the same pre-gain, so they all crossed their knee at
+the same setting and saturated at the same setting, and any clipper driven past
+its knee is the same square wave whatever curve produced it; the level matching
+then divided out the one thing that still differed, which is how much each curve
+compresses; and none of them had any filtering of its own, so every model had an
+identical spectral envelope. The self-test certified all fourteen as working
+because it compared *sample buffers* -- "no two types render the same audio" --
+and two signals can differ in every sample and be indistinguishable.
+
+**What replaced it.** Seven models, each an equation out of a named source, and
+built differently from each other rather than curved differently:
+
+| Type | Source |
+|---|---|
+| Soft Clip | the stage this instrument always had |
+| Overdrive | [DAFX] eq 4.14, after Schetzen |
+| Tube | [DAFX] eq 4.13, after Bendiksen, with M-file 4.4's filters |
+| Valve Stack | [Pirkle] 19.12/19.13: four class-A triodes and a tone stack |
+| Fuzz | [DAFX] eq 4.15 with [Pirkle]'s FEXP1 asymmetry |
+| Rectifier | [DAFX] 4.3.3: an octave up, not an edge |
+| Crush | [Pirkle] eq 19.1 |
+
+[DAFX] is Zoelzer (ed.), *DAFX: Digital Audio Effects*, 2nd edition, chapter 4.
+[Pirkle] is *Designing Audio Effect Plugins in C++*, 2nd edition, chapter 19.
+Neither book is in this repository and neither may be: they are copyrighted.
+`Documents/` is gitignored for the same reason `!dev/` is.
+
+Each model has its own gain staging, over the range its own source gives its own
+parameter, so they do not all saturate together. Each runs at **twice the sample
+rate**, which both books require of a nonlinearity and the first version did not
+do at all. They are matched to each other in **loudness**, measured on a real
+line rather than on a sine, so a comparison between two of them is a comparison
+of character. And a new **Bias** control moves each model's operating point from
+the one its source specifies, which is where even harmonics come from.
+
+**And the test measures sound now.** Each model's Drive is searched for the
+setting that gives it 25 % THD, and the harmonic distributions are compared
+there -- at matched distortion, because any two clippers meet at the top of the
+knob. The closest pair in the set measures 0.17 apart on that scale, and the
+thing separating them is that one of them stops distorting as a note decays.
+Nine checks cover the models; `demos/distortion/` holds an A/B set.
+
+Soft Clip is the default and its code path is untouched, so **every factory
+preset renders bit for bit what it did in 0.4.0**, checked at 44.1 and 48 kHz.
+
+0.5.0 is three features and a button.
+
+**Patterns are up to 128 steps long.** Steps ran 1 to 16, which is the machine;
+it now runs 1 to 128, which is eight bars of sixteenths and long enough to hold
+a melody rather than a riff. The generator fills exactly the length that is set
+and its draws are per step and in order, so turning Steps up extends the line
+the seed already described instead of replacing it. The grid draws sixteen
+columns for a pattern of sixteen or fewer -- so a sixteen-step line looks
+exactly as it did -- and thirty-two for anything longer, scrolling to the rest
+with the wheel, a bar under the grid, or the playhead while it runs. The state
+blob went to version 2 with it: a version 1 blob carries sixteen words per
+pattern, is read as the first sixteen steps of a 128-step pattern, and a
+project saved by 0.4.0 opens with its bank intact. Six checks cover the
+generator, the preset text, the migration and the sequencer actually playing
+past step sixteen.
+
+**The drive stage has fourteen shapes.** It was one soft clipper; it is now
+Soft Clip, Overdrive, Tube, Tape, Transistor, Germanium, Diode, Crunch,
+Distortion, Metal, Fold, Thick, Crush and Destroy, with a Dist Mix control to
+set how much of the result is heard against the clean signal. None of them is a
+model of a particular circuit -- there is no schematic for any of this -- and
+none is taken from another product: each is the shape its name has meant in
+audio for decades, written from the mathematics. Soft Clip is the default and
+its code path is untouched, so **every factory preset renders bit for bit what
+it did before**, checked at 44.1 and 48 kHz. Level matching is measured per
+shape rather than assumed, because the wavefolder's peak is in the middle of
+its range rather than at the end of it.
+
+**The preset library has folders and packs.** The browser groups the library by
+folder -- Factory Presets, then your own, then Unfiled -- and a folder is made
+by saving as "Folder/Name". A whole folder writes out as one preset pack, a
+text file in the same format with a separator line between the presets, and
+reads back in as a new folder without overwriting anything. Packs go to and
+come from `<config>/SaeureKiste/packs` by default, or anywhere the desktop's
+file chooser can reach.
+
+And **DEL** in the pattern bank empties the selected slot, which previously
+meant selecting the pattern and using CLEAR on the grid.
 
 0.4.0 makes **GEN** generate. It regenerated from the seed that was already
 set, so pressing it twice gave the same sixteen steps twice -- a button that did

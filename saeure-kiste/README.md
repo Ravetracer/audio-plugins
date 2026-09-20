@@ -10,8 +10,8 @@ trick Roland's own documentation calls a gimmick, the accent circuit and its
 ever played one clean.
 
 It plays two ways. From the **host**, where velocity above a threshold makes an
-accent and overlapping notes make a slide; or from its **own sixteen-step
-sequencer**, locked to the host's transport, with a piano-roll grid, a bank of
+accent and overlapping notes make a slide; or from its **own sequencer**, locked
+to the host's transport, 1 to 128 steps long, with a piano-roll grid, a bank of
 sixty-four patterns and a seeded pattern generator. Either way a slid note does
 not retrigger the envelope, exactly as a slid step on the machine does not,
 because the gate never goes low.
@@ -90,9 +90,52 @@ says so in its own tooltip.
 | **Accent At** | -- | Which velocities count as an accent. On the machine this was one bit per step. |
 | **Sweep Time** | -- | The accent's own time constant. 68 ms is the circuit's; this exposes it. |
 | **Slide Time** | -- | Fixed on the machine; a control here because the notes now come from a piano roll. |
-| **Drive** | -- | A soft clipper after the filter. Not in the schematic. |
+| **Drive** | -- | How hard the signal is pushed into the stage after the filter. Not in the schematic. |
 | **Tone** | -- | A lowpass after the drive. Not in the schematic. |
+| **Type** | -- | Which model that stage is: seven of them, each an equation out of the literature. See below. |
+| **Bias** | -- | Where the model sits on its own curve. The centre is the operating point its source gives it. |
+| **Dist Mix** | -- | How much of the driven signal is heard against the clean one. At zero the stage is bypassed. |
 | **Volume** | VR8 | Stops at unity, because the output stage does. |
+
+### The drive stage's seven models
+
+Everything in front of this stage is fixed by the service notes. There is no
+schematic for the stage itself, so it is built the other way round -- from the
+literature. Every model is an equation out of a named source, and the source is
+in the code beside it:
+
+| Type | Source | What it is |
+|---|---|---|
+| **Soft Clip** | -- | The stage this plugin has always had: a rational tanh, and the default. |
+| **Overdrive** | Zölzer, *DAFX* 2/e, eq 4.14 (Schetzen) | Linear below a third of full scale, compressing to two thirds, flat above. It stops distorting as a note decays, which none of the others do. |
+| **Tube** | Zölzer, *DAFX* 2/e, eq 4.13 (Bendiksen) | Asymmetric around a work point: roughly linear one way, hard-limited the other. Almost all of its harmonics are even. Carries the M-file's own highpass and lowpass. |
+| **Valve Stack** | Pirkle, *Designing Audio Effect Plugins in C++* 2/e, 19.12/19.13 | Four class-A triode stages in series, each with a DC blocker and a cathode-bypass shelf, and the book's tone stack between the third and the fourth. The one model with a frequency response of its own. |
+| **Fuzz** | *DAFX* eq 4.15 + Pirkle's FEXP1 | Exponential from the first volt, no linear region, asymmetric by default -- which is how both books describe a Fuzz Face. |
+| **Rectifier** | *DAFX* 4.3.3 | Folds the negative half onto the positive one and doubles the fundamental: an octave over the note rather than an edge on it. |
+| **Crush** | Pirkle, eq 19.1 | The quantiser, twelve bits down to three. |
+
+Both books insist that a nonlinearity needs oversampling, so every model runs at
+twice the sample rate. Soft Clip is the exception, deliberately: it predates all
+of this and renders what it always did.
+
+The models are matched to each other in **loudness**, measured on a real line
+rather than on a sine, so switching between them compares character and not
+level. Soft Clip is the loud one and always was -- its gain reaches 24 at the
+top of the knob.
+
+**Why seven and not fourteen.** There were fourteen, and they all sounded the
+same: any two memoryless clippers driven hard enough become the same square
+wave, level matching removes what is left, and none of them had filtering of its
+own. What tells these seven apart is that they are built differently. The
+self-test measures it now instead of assuming it -- each model's drive is
+searched for the setting that gives 25 % THD and their harmonic distributions
+are compared there, so two models that measure the same at the same distortion
+fail the build.
+
+**Soft Clip is the default**, so every preset written before the models existed
+sounds exactly as it did. That is checked rather than asserted: the whole
+factory library renders byte for byte what it rendered before, at 44.1 and
+48 kHz.
 
 ### The mods
 
@@ -127,7 +170,8 @@ notes are placed to the sample rather than to the block. A held MIDI note
 **transposes** the pattern instead of sounding, which is what the machine's own
 keyboard did; C2 plays it as written.
 
-The grid below the panels is sixteen steps across:
+The grid below the panels is sixteen steps across -- or thirty-two, at half the
+cell width, for a pattern longer than sixteen, with the rest scrolled to:
 
 - a **piano roll**, twelve semitones, C at the bottom. Click to place a note,
   click it again to clear it, drag to paint. An accented step is drawn bright.
@@ -139,10 +183,18 @@ The grid below the panels is sixteen steps across:
 - **CLEAR**, two **shift** buttons that walk the pattern sideways under the bar,
   the **seed** with its - and + buttons, **GEN**, and **MIDI**, which drags the
   pattern into the host.
+- a **scrollbar** under the lanes, for a pattern longer than the grid draws. The
+  wheel works anywhere over the grid, and while the sequencer runs the grid
+  follows the playing step.
 
-`Rate`, `Steps`, `Gate` and `Swing` are on the SEQUENCER panel. Steps takes 1 to
-16, as the machine did, and the interesting part of that range is the bit that
-is not 16.
+`Rate`, `Steps`, `Gate` and `Swing` are on the SEQUENCER panel. **Steps takes 1
+to 128.** Below sixteen is the machine's own trick -- fifteen steps against a
+four-four bar walks the pattern around the beat -- and above it the sequencer
+stops being a figure that repeats every bar: 64 steps is four bars of
+sixteenths, 128 is eight, which is long enough to hold a melody. The generator
+fills exactly the length that is set, and because its draws are per step and in
+order, turning Steps up *extends* the line the seed already described instead of
+replacing it.
 
 ### The pattern bank
 
@@ -153,7 +205,9 @@ through the bank.
 
 **COPY** and **PASTE** in the bank's title row turn a pattern into a variation of
 another one: copy, click an empty slot, paste, change the two steps you meant to
-change.
+change. **DEL**, beside them, empties the selected slot -- the same edit CLEAR
+makes on the grid, put where the patterns are. None of the three is undoable,
+which is the deal a hardware sequencer offers.
 
 Under the bank are the two controls that say what happens when a pattern has
 played through:
@@ -275,6 +329,20 @@ Twenty-seven factory presets. `Factory Reset` is the machine's own middle
 position and `Dry Reference` has every added stage switched off, for A/B'ing
 against the real thing.
 
+### Folders and packs
+
+The preset browser groups the library by folder: *Factory Presets* first, then
+whatever you have made, then *Unfiled*. A folder is made by saving as
+`Folder/Name` -- there is no second dialog, and a folder cannot be made empty.
+
+A **preset pack** is a whole folder as one file, `<name>.saeurekistepack`, which
+is the preset format again with a separator line between the presets, so it can
+be read and edited by hand like everything else here. **EXPORT** writes the
+selected folder to `<config>/SaeureKiste/packs`, **EXPORT AS...** puts it
+wherever the desktop's file chooser can reach, and **IMPORT...** lists the packs
+it can see plus *Other file...* for one from anywhere else. An import never
+overwrites: the pack becomes a new folder named after itself.
+
 There are two ways back to the start, and the difference between them is the
 sequencer. **Factory Reset** puts every parameter back to the value the table
 gives it and leaves whatever you had written in the pattern bank alone.
@@ -382,10 +450,17 @@ mkdir -p CLAP && git -C CLAP clone https://github.com/free-audio/clap.git
 cd saeure-kiste && ./install.sh
 ```
 
-`shared/` is never modified from this side. A change there has to be verified
-against every plugin in the suite, and this one does not get a vote -- which is
-also why the window here is a *fork* of the shared one rather than a change to
-it. See `TODO.md`.
+The window here is a *fork* of the shared one rather than a change to it: a step
+grid is not expressible as panels of knobs, and a change to the shared window is
+a change every plugin inherits. See `TODO.md`.
+
+`shared/` itself is touched only for things that are plugin-agnostic by
+construction. 0.5.0 added two: the preset **pack** format, which takes a
+`PresetContext` like the rest of the preset code and knows nothing about this
+plugin, and a `folder` field on the browser's preset entries with the folder and
+pack calls on the delegate, all of which default to "this plugin does not do
+that" -- so a plugin that keeps a flat preset directory gets the browser it
+always had.
 
 ## Status
 

@@ -63,6 +63,7 @@ const char *dlerrorCompat() { return "see GetLastError()"; }
 #   define RD_DLERROR() dlerror()
 #endif
 
+#include "dsp/drive.h"
 #include "params.h"
 #include <sstream>
 
@@ -501,6 +502,10 @@ clap_event_note_t makeNote(uint16_t type, uint32_t time, int16_t key, double vel
    ev.velocity = velocity;
    return ev;
 }
+
+// mingw does not define M_PI without _USE_MATH_DEFINES, and one constant is
+// cheaper than a define that has to come before every <cmath>.
+constexpr double kPi = 3.14159265358979323846;
 
 struct RenderResult {
    std::vector<float> interleaved;
@@ -2826,6 +2831,7 @@ int runSelfTest(const clap_plugin_entry_t *entry, double sampleRate) {
          plugin->reset(plugin);
          const RenderResult loud = renderPlugin(plugin, sampleRate, 512, 0.6, 0.6, 60, 1.0);
          gParamOverrides.clear();
+
          check(!loud.sawNonFinite, "every parameter at maximum, played over MIDI: stays finite");
          check(loud.peak <= 1.001f, "every parameter at maximum, played over MIDI: stays bounded");
          check(loud.peak > 0.0005f, "every parameter at maximum, played over MIDI: makes sound");
@@ -3219,6 +3225,641 @@ int runSelfTest(const clap_plugin_entry_t *entry, double sampleRate) {
          setEnvVar("XDG_CONFIG_HOME", nullptr);
          setEnvVar("APPDATA", nullptr);
       }
+   }
+
+   // --- long patterns.
+   //
+   // Steps reaches 128 as of 0.5.0. Three things had to move with it and each
+   // one is checked here rather than assumed: the generator, the preset text
+   // and the state blob's bank.
+   {
+      using namespace saeurekiste;
+
+      GenSettings g;
+      g.length = 64;
+      uint16_t longPat[kMaxSteps];
+      generatePattern(g, longPat);
+      const uint16_t rest = Step().pack();
+      bool tailClear = true;
+      for (int i = 64; i < kMaxSteps; ++i)
+         if (longPat[i] != rest)
+            tailClear = false;
+      check(tailClear, "the generator leaves nothing past the pattern's length");
+      int filled = 0;
+      for (int i = 16; i < 64; ++i)
+         if (Step::unpack(longPat[i]).note >= 0)
+            ++filled;
+      check(filled > 16, "a sixty-four step generation fills the steps past the first sixteen");
+
+      // Turning Steps up extends the line rather than replacing it: the draws
+      // are per step and in order, so the first sixteen are the sixteen a
+      // shorter generation from the same seed gave.
+      GenSettings shortSettings = g;
+      shortSettings.length = 16;
+      uint16_t shortPat[kMaxSteps];
+      generatePattern(shortSettings, shortPat);
+      check(std::memcmp(shortPat, longPat, 16 * sizeof(uint16_t)) == 0,
+            "a longer generation starts with exactly the steps the shorter one had");
+
+      // The preset text carries what the pattern uses and no more, so a
+      // sixteen-step line is still written in sixteen columns -- which is what
+      // keeps every preset in the factory library byte for byte what it was.
+      auto columnsOf = [](const std::string &text, const char *key) {
+         std::istringstream in(text);
+         std::string line;
+         while (std::getline(in, line)) {
+            if (line.compare(0, std::strlen(key), key) != 0)
+               continue;
+            const size_t eq = line.find('=');
+            if (eq == std::string::npos)
+               return 0;
+            int n = 0;
+            std::istringstream fields(line.substr(eq + 1));
+            std::string token;
+            while (fields >> token)
+               ++n;
+            return n;
+         }
+         return -1;
+      };
+
+      PatternData shortData;
+      std::memcpy(shortData.pattern(0), shortPat, sizeof(shortPat));
+      for (int p = 1; p < kMaxPatterns; ++p)
+         clearPattern(shortData.pattern(p));
+      check(columnsOf(formatPattern(shortData.steps), "seq_pitch") == 16,
+            "a sixteen-step pattern is still written in sixteen columns");
+
+      PatternData longData;
+      std::memcpy(longData.pattern(0), longPat, sizeof(longPat));
+      for (int p = 1; p < kMaxPatterns; ++p)
+         clearPattern(longData.pattern(p));
+      const std::string longText = formatPattern(longData.steps);
+      check(columnsOf(longText, "seq_pitch") == patternUsedLength(longPat),
+            "a long pattern is written in as many columns as it uses");
+
+      // And it reads back as the same steps.
+      PatternData readBack;
+      {
+         std::istringstream in(longText);
+         std::string line;
+         while (std::getline(in, line)) {
+            const size_t eq = line.find('=');
+            if (eq == std::string::npos)
+               continue;
+            std::string key = line.substr(0, eq);
+            std::string value = line.substr(eq + 1);
+            while (!key.empty() && key.back() == ' ')
+               key.pop_back();
+            while (!value.empty() && value.front() == ' ')
+               value.erase(value.begin());
+            parsePatternLine(key, value, readBack);
+         }
+      }
+      check(readBack.present &&
+               std::memcmp(readBack.pattern(0), longPat, sizeof(longPat)) == 0,
+            "a long pattern survives the preset text");
+   }
+
+   // --- the sequencer plays past step sixteen.
+   //
+   // The pattern below is sixteen rests followed by sixteen notes, so at Steps
+   // 16 it is silence and at Steps 32 it is a bar of notes. Nothing else in
+   // the suite would notice a sequencer that still stopped at sixteen.
+   if (state) {
+      using namespace saeurekiste;
+      const std::string dir =
+         (std::filesystem::temp_directory_path() /
+          ("saeurekiste-long-" + std::to_string(
+#if defined(_WIN32)
+              static_cast<unsigned long>(GetCurrentProcessId())
+#else
+              static_cast<unsigned long>(getpid())
+#endif
+              ))).string();
+      std::error_code ec;
+      std::filesystem::create_directories(dir, ec);
+      const std::string path = dir + "/long." + std::string(kPresetExtension);
+
+      std::string text = "# preset\nformat = 1\nname = Long\n";
+      text += "mode = Sequencer\nseq_rate = 1/16\nseq_steps = 32\ncutoff = 1200\n";
+      auto row = [](const char *key, const char *early, const char *late) {
+         std::string l = key;
+         while (l.size() < 13)
+            l += ' ';
+         l += "=";
+         for (int i = 0; i < 32; ++i) {
+            l += " ";
+            l += i < 16 ? early : late;
+         }
+         return l + "\n";
+      };
+      text += row("seq_pitch", ".", "C") + row("seq_octave", ".", ".") +
+              row("seq_slide", ".", ".") + row("seq_accent", ".", "x") +
+              row("seq_vibrato", ".", ".");
+      std::string werr;
+      const bool wrote = writePresetFile(path, text, werr);
+      check(wrote, "the long test preset writes");
+
+      const auto *pl = static_cast<const clap_plugin_preset_load_t *>(
+         plugin->get_extension(plugin, CLAP_EXT_PRESET_LOAD));
+      if (wrote && pl) {
+         check(pl->from_location(plugin, CLAP_PRESET_DISCOVERY_LOCATION_FILE, path.c_str(), ""),
+               "a thirty-two step preset loads");
+         plugin->reset(plugin);
+         const RenderResult full =
+            renderSequence(plugin, sampleRate, 512, 4.0, 0.5, {}, true, 130.0);
+         gParamOverrides.clear();
+         gParamOverrides.emplace_back(kParamSeqSteps, 16.0);
+         plugin->reset(plugin);
+         const RenderResult half =
+            renderSequence(plugin, sampleRate, 512, 4.0, 0.5, {}, true, 130.0);
+         gParamOverrides.clear();
+         check(full.peak > 0.01f, "the steps past sixteen are played");
+         check(half.peak < 0.0005f,
+               "and only the steps the length reaches: at Steps 16 the same pattern is silent");
+      }
+      std::error_code rmec;
+      std::filesystem::remove_all(dir, rmec);
+   }
+
+   // --- a project saved before patterns grew still opens.
+   //
+   // A version 1 blob carries sixteen words per pattern where this build
+   // writes 128. The version is what says which, so the migration is built by
+   // hand here from a blob this build wrote: nothing else can produce one.
+   if (state) {
+      using namespace saeurekiste;
+      std::string current;
+      clap_ostream_t os{};
+      os.ctx = &current;
+      os.write = [](const clap_ostream_t *s, const void *buf, uint64_t size) -> int64_t {
+         static_cast<std::string *>(s->ctx)->append(static_cast<const char *>(buf), size);
+         return static_cast<int64_t>(size);
+      };
+      plugin->reset(plugin);
+      state->save(plugin, &os);
+
+      const size_t headerSize = sizeof(uint32_t) * 3;
+      const size_t paramsSize = static_cast<size_t>(kNumParams) * 12;
+      const size_t bankAt = headerSize + paramsSize;
+      const size_t patternWords = static_cast<size_t>(kMaxSteps) * sizeof(uint16_t);
+      bool sane = current.size() >= bankAt + kMaxPatterns * patternWords;
+      check(sane, "the blob this build writes is the shape the migration test assumes");
+
+      if (sane) {
+         // The same blob with sixteen words per pattern and version 1 on it.
+         std::string old = current.substr(0, headerSize + paramsSize);
+         const uint32_t one = 1;
+         std::memcpy(&old[sizeof(uint32_t)], &one, sizeof(one));
+         std::vector<uint16_t> wanted(kMaxPatterns * 16, 0);
+         for (int p = 0; p < kMaxPatterns; ++p) {
+            const size_t from = bankAt + static_cast<size_t>(p) * patternWords;
+            old.append(current, from, 16 * sizeof(uint16_t));
+            std::memcpy(&wanted[static_cast<size_t>(p) * 16], current.data() + from,
+                        16 * sizeof(uint16_t));
+         }
+         old.push_back('\0'); // the collapsible section's byte
+
+         struct ReadCtx {
+            const std::string *data;
+            size_t pos;
+         } rc{&old, 0};
+         clap_istream_t is{};
+         is.ctx = &rc;
+         is.read = [](const clap_istream_t *s, void *buf, uint64_t size) -> int64_t {
+            auto *c = static_cast<ReadCtx *>(s->ctx);
+            const size_t n = std::min<size_t>(size, c->data->size() - c->pos);
+            std::memcpy(buf, c->data->data() + c->pos, n);
+            c->pos += n;
+            return static_cast<int64_t>(n);
+         };
+         check(state->load(plugin, &is), "a version 1 state blob still loads");
+
+         std::string after;
+         clap_ostream_t os2{};
+         os2.ctx = &after;
+         os2.write = [](const clap_ostream_t *s, const void *buf, uint64_t size) -> int64_t {
+            static_cast<std::string *>(s->ctx)->append(static_cast<const char *>(buf), size);
+            return static_cast<int64_t>(size);
+         };
+         state->save(plugin, &os2);
+
+         bool carried = after.size() >= bankAt + kMaxPatterns * patternWords;
+         const uint16_t rest = saeurekiste::Step().pack();
+         for (int p = 0; carried && p < kMaxPatterns; ++p) {
+            const size_t at = bankAt + static_cast<size_t>(p) * patternWords;
+            for (int i = 0; i < kMaxSteps; ++i) {
+               uint16_t got = 0;
+               std::memcpy(&got, after.data() + at + i * sizeof(uint16_t), sizeof(got));
+               const uint16_t want = i < 16 ? wanted[static_cast<size_t>(p) * 16 + i] : rest;
+               if (got != want)
+                  carried = false;
+            }
+         }
+         check(carried,
+               "an old blob's sixteen steps land in the first sixteen, and the rest are rests");
+      }
+   }
+
+   // --- the drive stage's models.
+   //
+   // What is asserted here is *harmonic structure*, not samples. The first
+   // version of this stage was fourteen shapes that all sounded the same, and
+   // the test that was supposed to notice compared sample buffers -- "no two
+   // types render the same audio" -- which two indistinguishable signals pass
+   // with ease. A distortion is told apart by what it does to the spectrum, so
+   // that is what is measured: how much of the output is harmonics at all, and
+   // how much of that is even rather than odd.
+   {
+      using namespace saeurekiste;
+
+      // One 1 kHz sine through the stage, then a Goertzel at each harmonic.
+      // The first quarter of the run is thrown away so the models with
+      // filters in them have settled.
+      struct Spectrum {
+         double fundamental = 0.0;
+         double even = 0.0;   // harmonics 2, 4, 6, 8, 10
+         double odd = 0.0;    // harmonics 3, 5, 7, 9
+         double thd = 0.0;    // sqrt(sum of harmonics^2) / fundamental
+         double evenRatio = 0.0;
+         double highRatio = 0.0; // harmonics 6..10 as a share of all of them
+         // Harmonics two to ten, scaled to unit length: the *distribution* of
+         // what the model adds, with both the level and the amount of
+         // distortion taken out of it. Two models that produce this same
+         // vector at the same THD are producing the same sound, whatever
+         // their sample buffers look like.
+         double shape[9] = {0.0};
+         float peak = 0.0f;
+         bool finite = true;
+      };
+
+      auto measure = [](int model, double drive, double bias, double amplitude) {
+         const double rate = 48000.0;
+         const double freq = 1000.0;
+         const int total = 24000;
+         const int skip = total / 4;
+         DriveStage stage;
+         stage.prepare(rate);
+         stage.setParams(model, static_cast<float>(drive), static_cast<float>(bias), 1.0f);
+
+         std::vector<float> out;
+         out.reserve(total - skip);
+         Spectrum s;
+         for (int n = 0; n < total; ++n) {
+            const float x =
+               static_cast<float>(amplitude * std::sin(2.0 * kPi * freq * n / rate));
+            const float y = stage.tick(x);
+            if (!std::isfinite(y))
+               s.finite = false;
+            if (n >= skip) {
+               out.push_back(y);
+               s.peak = std::max(s.peak, std::fabs(y));
+            }
+         }
+
+         auto magnitudeAt = [&](double hz) {
+            const double w = 2.0 * kPi * hz / rate;
+            const double coeff = 2.0 * std::cos(w);
+            double s1 = 0.0, s2 = 0.0;
+            for (const float v : out) {
+               const double s0 = v + coeff * s1 - s2;
+               s2 = s1;
+               s1 = s0;
+            }
+            const double real = s1 - s2 * std::cos(w);
+            const double imag = s2 * std::sin(w);
+            return std::sqrt(real * real + imag * imag) / (0.5 * out.size());
+         };
+
+         s.fundamental = magnitudeAt(freq);
+         double harmonics = 0.0;
+         double high = 0.0;
+         for (int k = 2; k <= 10; ++k) {
+            const double m = magnitudeAt(freq * k);
+            s.shape[k - 2] = m;
+            harmonics += m * m;
+            if (k % 2 == 0)
+               s.even += m * m;
+            else
+               s.odd += m * m;
+            if (k >= 6)
+               high += m * m;
+         }
+         double norm = 0.0;
+         for (const double m : s.shape)
+            norm += m * m;
+         norm = std::sqrt(norm);
+         if (norm > 1e-12)
+            for (double &m : s.shape)
+               m /= norm;
+         s.thd = s.fundamental > 1e-9 ? std::sqrt(harmonics) / s.fundamental : 0.0;
+         const double all = s.even + s.odd;
+         s.evenRatio = all > 1e-18 ? s.even / all : 0.0;
+         // How far up the series the model reaches, which is what tells a soft
+         // clipper from a hard one at the same total distortion.
+         s.highRatio = harmonics > 1e-18 ? high / harmonics : 0.0;
+         return s;
+      };
+
+      // 1. every model distorts, stays finite and stays bounded.
+      std::vector<Spectrum> loud;
+      bool finite = true, bounded = true, distorts = true;
+      for (int model = 0; model < kNumDriveModels; ++model) {
+         const Spectrum s = measure(model, 0.7, 0.0, 0.8);
+
+         loud.push_back(s);
+         if (!s.finite)
+            finite = false;
+         // The stage on its own is allowed past unity: what it hands over goes
+         // through the Muffler, the DC blocker and the master, and the models
+         // are matched to each other on *loudness* rather than on peak, which
+         // is what a comparison between two distortions needs. The bound that
+         // matters is the plugin's, and that one is checked below at 1.001.
+         if (s.peak > 1.5f) {
+            bounded = false;
+            std::printf("  [dbg] model %d peak %.3f\n", model, s.peak);
+         }
+         if (s.thd < 0.05)
+            distorts = false;
+      }
+      check(finite, "every drive model stays finite");
+      check(bounded, "every drive model stays bounded");
+      check(distorts, "every drive model actually distorts at 70 % drive");
+
+      // 2. no two models sound the same, asked properly.
+      //
+      //    Comparing them at the same *knob position* is not the question a
+      //    player asks: any two clippers turned up far enough are the same
+      //    square wave, and the first version of this stage was fourteen
+      //    shapes that met exactly there. The question is whether two models
+      //    differ when they are doing the same *amount* of distortion -- so
+      //    each one's drive is searched for the setting that gives it 25 %
+      //    THD, and the spectra are compared there. Two models with the same
+      //    spectrum at the same THD are one model with two names.
+      auto driveForThd = [&](int model, double target) {
+         double lo = 0.0, hi = 1.0;
+         for (int i = 0; i < 18; ++i) {
+            const double mid = 0.5 * (lo + hi);
+            if (measure(model, mid, 0.0, 0.8).thd < target)
+               lo = mid;
+            else
+               hi = mid;
+         }
+         return 0.5 * (lo + hi);
+      };
+
+      // How much of the distortion survives when the signal is quiet, which is
+      // the dimension a steady sine cannot see and the one that separates a
+      // model with a linear region from a model without one. It is also the
+      // difference a player hears first, because every note on this instrument
+      // decays through it.
+      std::vector<Spectrum> matched;
+      std::vector<double> dynamics;
+      for (int model = 0; model < kNumDriveModels; ++model) {
+         const double d = driveForThd(model, 0.25);
+         const Spectrum s = measure(model, d, 0.0, 0.8);
+         const Spectrum quiet = measure(model, d, 0.0, 0.2);
+         const double ratio = s.thd > 1e-9 ? quiet.thd / s.thd : 0.0;
+         matched.push_back(s);
+         dynamics.push_back(ratio);
+      }
+
+      double closest = 1e9;
+      int likeA = -1, likeB = -1;
+      for (size_t a = 0; a < matched.size(); ++a)
+         for (size_t b = a + 1; b < matched.size(); ++b) {
+            double d = 0.0;
+            for (int k = 0; k < 9; ++k) {
+               const double diff = matched[a].shape[k] - matched[b].shape[k];
+               d += diff * diff;
+            }
+            const double dynamic = dynamics[a] - dynamics[b];
+            d = std::sqrt(d + dynamic * dynamic);
+            if (d < closest) {
+               closest = d;
+               likeA = static_cast<int>(a);
+               likeB = static_cast<int>(b);
+            }
+         }
+      std::printf("       closest pair at matched distortion: models %d and %d, distance %.3f\n",
+                  likeA, likeB, closest);
+
+      // Zero would be two models that add exactly the same harmonics in the
+      // same proportions and behave the same way as the signal decays -- one
+      // model with two names, which is what this stage was rebuilt to get rid
+      // of.
+      //
+      // The closest pair in the set as it stands is Soft Clip against
+      // Overdrive, at 0.17, and it is worth knowing why: their harmonic
+      // distributions really are close -- a rational tanh and Schetzen's
+      // piecewise curve are both smooth symmetric soft clippers -- and what
+      // separates them is the dynamic term. [DAFX] eq 4.14 is exactly linear
+      // below a third of full scale, so it stops distorting as a note decays
+      // and the tanh does not. That is audible on an instrument whose every
+      // note decays, and it is the whole reason both are in the set.
+      check(closest > 0.15, "no two drive models produce the same spectrum at the same THD");
+
+      // 3. the documented character of each one, which is the thing a player
+      //    is being promised.
+      //
+      //    Overdrive keeps a linear region: [DAFX] eq 4.14 is exactly 2x below
+      //    a third of full scale, so a quiet signal comes through clean and a
+      //    loud one does not. No other model here does that.
+      const Spectrum odQuiet = measure(kDriveOverdrive, 0.0, 0.0, 0.2);
+      const Spectrum odLoud = measure(kDriveOverdrive, 0.9, 0.0, 0.8);
+      check(odQuiet.thd < 0.01 && odLoud.thd > 0.2,
+            "Overdrive is clean below its knee and distorted above it");
+
+      //    Tube, Fuzz and Rectifier are asymmetric and put even harmonics in;
+      //    Soft Clip and Hard Clip are odd-symmetric and do not.
+      const double evenTube = loud[kDriveTube].evenRatio;
+      const double evenRect = loud[kDriveRectifier].evenRatio;
+      const double evenSoft = loud[kDriveSoftClip].evenRatio;
+      const double evenOver = loud[kDriveOverdrive].evenRatio;
+      check(evenSoft < 0.15 && evenOver < 0.15,
+            "the symmetric models generate almost no even harmonics");
+      check(evenTube > 0.35, "the tube model generates even harmonics");
+      check(evenRect > 0.5, "the rectifier is mostly even harmonics");
+
+      //    And the rectifier really does double the fundamental: full-wave
+      //    rectification moves the energy to twice the input frequency
+      //    ([DAFX] 4.3.3, figure 4.36).
+      const Spectrum rect = measure(kDriveRectifier, 1.0, 1.0, 0.8);
+      check(rect.even > rect.fundamental * rect.fundamental,
+            "the rectifier at full drive puts more energy an octave up than at the note");
+
+      //    Valve Stack has a tone stack in it -- [Pirkle] 19.13 puts a low
+      //    shelf and a high shelf between the third stage and the fourth -- so
+      //    it is the one model whose *frequency* response differs from the
+      //    others. Measured where it shows: a 100 Hz note against a 1 kHz one.
+      {
+         const Spectrum valveLow = measure(kDriveValveStack, 0.5, 0.0, 0.8);
+         const Spectrum softLow = measure(kDriveSoftClip, 0.5, 0.0, 0.8);
+         auto lowVsMid = [&](int model) {
+            const double rate = 48000.0;
+            DriveStage stage;
+            stage.prepare(rate);
+            stage.setParams(model, 0.5f, 0.0f, 1.0f);
+            double low = 0.0, mid = 0.0;
+            for (int n = 0; n < 8000; ++n) {
+               const float x = static_cast<float>(0.5 * std::sin(2.0 * kPi * 100.0 * n / rate));
+               const float y = stage.tick(x);
+               if (n >= 2000)
+                  low += static_cast<double>(y) * y;
+            }
+            stage.reset();
+            for (int n = 0; n < 8000; ++n) {
+               const float x = static_cast<float>(0.5 * std::sin(2.0 * kPi * 1000.0 * n / rate));
+               const float y = stage.tick(x);
+               if (n >= 2000)
+                  mid += static_cast<double>(y) * y;
+            }
+            return low / (mid > 1e-12 ? mid : 1e-12);
+         };
+         const double valveTilt = lowVsMid(kDriveValveStack);
+         const double softTilt = lowVsMid(kDriveSoftClip);
+         (void)valveLow;
+         (void)softLow;
+         check(valveTilt < softTilt * 0.8,
+               "the valve stack's tone stack thins the bottom, which no other model does");
+      }
+
+      //    Crush quantises, so its output takes a small number of distinct
+      //    values -- which no analogue model here does.
+      {
+         DriveStage stage;
+         stage.prepare(48000.0);
+         stage.setParams(kDriveCrush, 1.0f, 0.0f, 1.0f);
+         std::vector<float> seen;
+         for (int n = 0; n < 2000; ++n) {
+            const float y = stage.shapeOnly(static_cast<float>(-1.0 + 2.0 * n / 1999.0));
+            if (std::find_if(seen.begin(), seen.end(), [&](float v) {
+                   return std::fabs(v - y) < 1e-6f;
+                }) == seen.end())
+               seen.push_back(y);
+         }
+         check(seen.size() > 2 && seen.size() < 40,
+               "Crush quantises its input to a handful of levels");
+      }
+
+      // 4. Bias moves the operating point, which is what puts even harmonics
+      //    into a model that is symmetric at the centre.
+      const Spectrum centred = measure(kDriveOverdrive, 0.7, 0.0, 0.8);
+      const Spectrum biased = measure(kDriveOverdrive, 0.7, 0.9, 0.8);
+      check(biased.evenRatio > centred.evenRatio + 0.2,
+            "Bias turns a symmetric model into an asymmetric one");
+
+      // 5. Soft Clip is the model this instrument always had, and Bias does
+      //    not touch it -- which is what keeps every preset written before the
+      //    models existed sounding exactly as it did.
+      {
+         DriveStage a, b;
+         a.prepare(48000.0);
+         b.prepare(48000.0);
+         a.setParams(kDriveSoftClip, 0.2f, 0.0f, 1.0f);
+         b.setParams(kDriveSoftClip, 0.2f, 1.0f, 1.0f);
+         bool same = true;
+         for (int n = 0; n < 512; ++n) {
+            const float x = static_cast<float>(std::sin(n * 0.07));
+            if (a.tick(x) != b.tick(x))
+               same = false;
+         }
+         check(same, "Bias leaves Soft Clip exactly as it was");
+      }
+
+      // 6. the mix control really is a bypass at zero, whatever model is set.
+      {
+         DriveStage a, b;
+         a.prepare(48000.0);
+         b.prepare(48000.0);
+         a.setParams(kDriveFuzz, 1.0f, 0.5f, 0.0f);
+         b.setParams(kDriveRectifier, 1.0f, -0.5f, 0.0f);
+         bool bypassed = true;
+         for (int n = 0; n < 512; ++n) {
+            const float x = static_cast<float>(std::sin(n * 0.07));
+            if (a.tick(x) != x || b.tick(x) != x)
+               bypassed = false;
+         }
+         check(bypassed, "Dist Mix at zero bypasses the stage whatever model is set");
+      }
+   }
+
+   // --- the whole plugin with each drive model in it: finite, bounded, and
+   // still an instrument.
+   {
+      using namespace saeurekiste;
+      bool finite = true, bounded = true, audible = true;
+      for (int model = 0; model < kNumDriveModels; ++model) {
+         gParamOverrides.clear();
+         gParamOverrides.emplace_back(kParamMode, static_cast<double>(kModeMidi));
+         gParamOverrides.emplace_back(kParamDistType, static_cast<double>(model));
+         gParamOverrides.emplace_back(kParamDrive, 1.0);
+         gParamOverrides.emplace_back(kParamDistMix, 1.0);
+         gParamOverrides.emplace_back(kParamVolume, 0.0);
+         plugin->reset(plugin);
+         const RenderResult r = renderPlugin(plugin, sampleRate, 512, 0.6, 0.6, 45, 1.0);
+         if (r.sawNonFinite)
+            finite = false;
+         if (r.peak > 1.001f)
+            bounded = false;
+         if (r.peak < 0.01f)
+            audible = false;
+      }
+      gParamOverrides.clear();
+      check(finite, "the plugin stays finite with every drive model");
+      check(bounded, "the plugin stays bounded with every drive model");
+      check(audible, "the plugin makes sound with every drive model");
+   }
+
+   // --- preset packs. A folder of presets as one file, and back again.
+   {
+      using namespace saeurekiste;
+      std::vector<plugincore::PresetPackEntry> entries;
+      plugincore::PresetPackEntry one;
+      one.name = "First";
+      one.text = "# preset\nformat = 1\nname = First\ncutoff = 700\n"
+                 "seq_pitch     = C   .   G   .\n";
+      plugincore::PresetPackEntry two;
+      two.name = "Second";
+      two.text = "# preset\nformat = 1\nname = Second\ncutoff = 900\n";
+      entries.push_back(one);
+      entries.push_back(two);
+
+      const std::string packText =
+         plugincore::formatPresetPack(presetContext(), "Live Set", entries);
+      std::string packName;
+      std::vector<plugincore::PresetPackEntry> back;
+      std::string packErr;
+      check(plugincore::parsePresetPack(presetContext(), packText, packName, back, packErr),
+            "a pack parses back in");
+      check(packName == "Live Set", "a pack keeps its name");
+      check(back.size() == entries.size(), "a pack keeps every preset");
+      bool sameText = back.size() == entries.size();
+      for (size_t i = 0; sameText && i < back.size(); ++i)
+         if (back[i].name != entries[i].name || back[i].text != entries[i].text)
+            sameText = false;
+      // Byte for byte, because a pack carries each preset's text rather than a
+      // re-serialised copy -- which is what keeps this plugin's pattern lines,
+      // which the shared format knows nothing about, intact across the trip.
+      check(sameText, "a pack keeps each preset's text exactly, pattern lines and all");
+
+      std::string ignored;
+      std::vector<plugincore::PresetPackEntry> nothing;
+      std::string rejectErr;
+      check(!plugincore::parsePresetPack(presetContext(),
+                                         "# preset\nformat = 1\nname = Not A Pack\n", ignored,
+                                         nothing, rejectErr),
+            "a preset is not mistaken for a pack");
+
+      // A folder is one level under the user preset directory, and its name is
+      // sanitised the same way a preset's is.
+      const std::string inFolder = plugincore::userPresetPathIn(presetContext(), "Live Set!",
+                                                                "My Line");
+      check(inFolder.empty() || inFolder.find("Live_Set") != std::string::npos,
+            "a folder name reaches the path, sanitised");
+      check(inFolder.empty() || inFolder.find("My_Line") != std::string::npos,
+            "and the preset's name is still in it");
    }
 
    plugin->deactivate(plugin);

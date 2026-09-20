@@ -130,6 +130,16 @@ enum ParamId : uint32_t {
    kParamSweepSpeed,
    kParamAccentHold,
 
+   // The drive stage's character and how much of it is heard.
+   //
+   // Drive already said how hard the stage is pushed; these two say what it is
+   // being pushed into and how much of the result is mixed back with the
+   // clean signal. Appended here rather than beside Drive because a parameter
+   // id is persisted in presets and state and may never move.
+   kParamDistType,
+   kParamDistMix,
+   kParamDistBias,
+
    kNumParams
 };
 
@@ -143,6 +153,10 @@ enum PlayMode { kModeMidi = 0, kModeSequencer, kNumPlayModes };
 // The muted clipper on the VCA output. Two kinds of clipping rather than one,
 // because the modification offers two.
 enum MufflerKind { kMufflerOff = 0, kMufflerSoft, kMufflerHard, kNumMufflerKinds };
+
+// The drive stage's models live in dsp/drive.h, as DriveModel, because each of
+// them is an equation out of a named source rather than a name on a switch.
+// The parameter table's enum is that list.
 
 // How the accent sweep responds to accents in quick succession. Normal is the
 // machine: charge left over from one accent makes the next one bigger. See

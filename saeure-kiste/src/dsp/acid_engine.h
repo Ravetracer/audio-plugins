@@ -30,6 +30,8 @@
 #include "plugincore/dsp/filters.h"
 #include "plugincore/dsp/rng.h"
 
+#include "dsp/drive.h"
+
 namespace saeurekiste {
 
 // clampv, decayCoef, onePoleCoef and the one-pole filters are the suite's.
@@ -49,6 +51,9 @@ struct EngineParams {
    float slideSec = 0.06f;
    float drive = 0.2f;          // not on the machine
    float toneHz = 8000.0f;      // not on the machine
+   int distType = 0;            // DriveModel: 0 is the soft clipper it had
+   float distBias = 0.0f;       // -1..+1, the model's operating point
+   float distMix = 1.0f;        // 0 bypasses the stage, 1 is all of it
    float gain = 0.5f;           // VR8, linear
 
    // Mods. Every one of these was a constant in acid_engine.cpp, and every one
@@ -203,8 +208,12 @@ private:
 
    // Post
    OnePoleLp mTone;
-   float mDrivePre = 1.0f;
-   float mDriveMakeup = 1.0f;
+   // The drive stage: eight models out of the literature, in dsp/drive.h.
+   // Everything about it -- the shapes, their gain staging, their filters and
+   // the oversampling around them -- lives there rather than here, because
+   // none of it comes from the service notes the rest of this file is built
+   // from.
+   DriveStage mDriveStage;
 
    // The Muffler's knee -- the level above which it starts to bite, 0 when it is
    // off -- and the gain that puts back what the compression took, so the

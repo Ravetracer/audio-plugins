@@ -12,11 +12,23 @@ of truth for what works and what does not.
 
 ## What it is, in one paragraph
 
-Linux and Windows, CLAP and VST3, 51 parameters, 27 presets. VCO → four-stage transistor
+Linux and Windows, CLAP and VST3, 54 parameters, 27 presets. VCO → four-stage transistor
 ladder → VCA, with the decay envelope, the accent circuit and the slide lag
-around it, and an overdrive stage after all of it. It plays either from the host
-over MIDI or from its own sixteen-step sequencer locked to the host transport,
-which draws on a bank of sixty-four patterns.
+around it, and a drive stage of seven models after all of it. It plays either
+from the host over MIDI or from its own sequencer locked to the host transport,
+which runs 1 to 128 steps and draws on a bank of sixty-four patterns.
+
+## The third source
+
+Everything in front of the drive stage comes from the service notes. The stage
+itself has no schematic, so it comes from the literature instead: `dsp/drive.h`
+and `dsp/drive.cpp` implement equations from Zölzer's *DAFX* chapter 4 and
+Pirkle's *Designing Audio Effect Plugins in C++* chapter 19, with the citation
+written beside every one of them.
+
+**The books live in `Documents/` and are gitignored**, exactly like the service
+notes in `!dev/`: they are copyrighted and are not ours to redistribute. The
+equations, implemented and attributed, are ours to ship; the PDFs are not.
 
 ## The second machine it models
 
@@ -154,6 +166,47 @@ tool names and an environment variable from the folder name, and
   That is what both platforms offer -- `DoDragDrop` is modal, and the X11 source
   has to answer the target while the button is down -- and it is what every
   other application does.
+- **The parameter table is indexed by id, so a new row goes at the *end* of it.**
+  `paramTable()[kParamRandSeed]` and `mSpec.params[id]` are both positional
+  lookups: the table's order has to match the `ParamId` enum exactly. A new
+  parameter is appended to the enum, because ids are persisted in presets and
+  state -- so its row goes at the bottom of the table too, whatever module it
+  belongs to. Putting the two drive-stage rows next to Drive, where they read
+  better, made every parameter past them resolve to the wrong entry and
+  segfaulted the self-test on the first run. The `mod` field is what groups a
+  parameter in the preset file and the manual; the position in the table is
+  not.
+- **A set of waveshapers is not a set of distortions.** 0.5.0 shipped fourteen
+  and most of them were inaudible, for three reasons worth remembering: they
+  shared one pre-gain mapping, so they all saturated at the same knob position
+  and any saturated clipper is the same square wave; the level matching divided
+  out how much each curve compressed, which is the difference; and none of them
+  had filtering of its own. What separates the seven models in `dsp/drive.h` is
+  *structure* -- a linear region that survives, an operating point off centre,
+  four stages in series with a tone stack between them, a rectifier, a
+  quantiser -- and each one's own gain staging over the range its own source
+  gives it.
+- **And the test for it has to measure sound, not samples.** The check that let
+  the fourteen through was "no two types render the same audio", comparing
+  sample buffers: two signals can differ in every sample and be
+  indistinguishable. `render --selftest` now searches each model's Drive for the
+  setting that gives 25 % THD and compares harmonic distributions *there*,
+  because any two clippers meet at the top of the knob. A new model that
+  duplicates an existing one fails the build.
+- **The drive stage's level matching measures the shape, so anything applied
+  inside the shape is measured away.** `setParams()` walks each shape from
+  silence up to 0.8 and divides by what it finds. A per-model trim put inside
+  the shape is therefore measured and scaled straight back out -- the first
+  attempt at giving Metal headroom did not move the output by a single sample.
+  The trims are applied in `DriveStage::process()`, after the matching, for
+  exactly that reason, and the Valve Stack's goes *inside* its own output stage
+  on purpose so that stage can bound it.
+- **Loudness and peak are different jobs.** Matching peaks keeps the plugin in
+  bounds; it does not make two models the same loudness, because a model that
+  squashes one half of the wave or thins the bottom of it has the same peak and
+  much less signal under it. Measured on a bass line the models sat 14 dB apart
+  that way. They are matched on RMS now, with the peak as a ceiling, plus one
+  measured trim each -- see the note in `drive.cpp`.
 - **Widening a logarithmic parameter's range breaks every saved project unless
   it is migrated.** A state blob stores the *raw* value, which for a Log
   parameter is a position on its own curve -- so changing dispMin/dispMax

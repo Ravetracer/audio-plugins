@@ -27,7 +27,10 @@ namespace {
 // generator. The height is set twice, because the window has two of them: the
 // ten mods and the three panels that go with them live in a section that opens
 // and closes, and a closed window is the page anybody actually plays from.
-constexpr int kContentW = 1180;
+// Two cells wider than it was, which is what the drive stage needed: Type,
+// Bias and Dist Mix on a row that was exactly full at 1180. Every other row is
+// narrower than the window, so the extra columns cost nothing anywhere else.
+constexpr int kContentW = 1348;
 
 // -------------------------------------------------------------------- panels
 //
@@ -43,7 +46,12 @@ constexpr uint32_t kVcfParams[] = {kParamCutoff,  kParamResonance, kParamEnvMod,
 constexpr uint32_t kAccentParams[] = {kParamAccent, kParamAccentThreshold, kParamAccentDecay,
                                       kParamSweepSpeed | kStacked, kParamAccentHold | kStacked};
 constexpr uint32_t kSlideParams[] = {kParamSlideTime};
-constexpr uint32_t kDriveParams[] = {kParamDrive, kParamTone, kParamMuffler};
+// Type and Muffler are both chips and share a column, which is what keeps the
+// panel to five: the model of the drive stage above the clipper that follows
+// it. Drive and Bias sit together because they are the two controls that
+// decide what the model does; Dist Mix is how much of it is heard.
+constexpr uint32_t kDriveParams[] = {kParamDrive, kParamDistBias, kParamTone, kParamDistMix,
+                                     kParamDistType | kStacked, kParamMuffler | kStacked};
 constexpr uint32_t kOutParams[] = {kParamVolume};
 // The volume envelope. Nothing on the machine reaches it at all -- its decay is
 // fixed by R123 and C42 -- so the whole panel is the Devil Fish's.
@@ -74,7 +82,7 @@ constexpr uint32_t kModParams[] = {
 // four are the section behind the ADVANCED button.
 constexpr PanelSpec kPanelSpecs[] = {
    PANEL("VCO", 2, 1, kVcoParams),        PANEL("VCF", 7, 1, kVcfParams),
-   PANEL("DRIVE", 3, 1, kDriveParams),    PANEL("OUTPUT", 1, 1, kOutParams),
+   PANEL("DRIVE", 5, 1, kDriveParams),    PANEL("OUTPUT", 1, 1, kOutParams),
    PANEL("SEQUENCER", 5, 1, kSeqParams),  PANEL("GENERATOR", 7, 1, kRandParams),
    PANEL("MODS", 10, 1, kModParams),      PANEL("SLIDE", 1, 1, kSlideParams),
    PANEL("ACCENT", 4, 1, kAccentParams),  PANEL("VIBRATO", 3, 1, kVibParams),

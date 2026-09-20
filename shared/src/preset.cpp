@@ -8,6 +8,8 @@
 #include <strings.h>
 
 #include <filesystem>
+#include <fstream>
+#include <sstream>
 
 #if defined(_WIN32)
 #   include <windows.h>
@@ -321,11 +323,8 @@ std::string formatPreset(const PresetContext &ctx, const PresetData &preset) {
    return out;
 }
 
-std::string userPresetPath(const PresetContext &ctx, const std::string &name) {
-   const std::string dir = userPresetDir(ctx);
-   if (dir.empty())
-      return {};
-   // A display name is not a filename: keep it recognisable, keep it safe.
+// A display name is not a filename: keep it recognisable, keep it safe.
+std::string presetFileStem(const std::string &name) {
    std::string file;
    bool lastWasDash = false;
    for (const char c : name) {
@@ -341,9 +340,165 @@ std::string userPresetPath(const PresetContext &ctx, const std::string &name) {
    }
    while (!file.empty() && file.back() == '_')
       file.pop_back();
+   return file;
+}
+
+std::string userPresetPath(const PresetContext &ctx, const std::string &name) {
+   return userPresetPathIn(ctx, std::string(), name);
+}
+
+std::string userPresetPathIn(const PresetContext &ctx, const std::string &folder,
+                             const std::string &name) {
+   const std::string dir = userPresetDir(ctx);
+   if (dir.empty())
+      return {};
+   std::string file = presetFileStem(name);
    if (file.empty())
       file = "preset";
-   return dir + "/" + file + "." + ctx.presetExtension;
+   const std::string sub = presetFileStem(folder);
+   // A folder that sanitises away to nothing is no folder at all rather than a
+   // directory called "_": a save into a folder somebody typed as "///" lands
+   // in the library's root, which is where they can find it again.
+   return sub.empty() ? dir + "/" + file + "." + ctx.presetExtension
+                      : dir + "/" + sub + "/" + file + "." + ctx.presetExtension;
+}
+
+// ------------------------------------------------------------------- packs
+
+namespace {
+
+// The line between two presets inside a pack. Long enough that nothing in a
+// preset file can be mistaken for it, and readable enough to be edited by hand.
+const char *const kPackSeparator = "--- preset: ";
+const char *const kPackSeparatorEnd = " ---";
+
+} // namespace
+
+std::string presetPackExtension(const PresetContext &ctx) {
+   return std::string(ctx.presetExtension) + "pack";
+}
+
+std::string presetPackDir(const PresetContext &ctx) {
+   const std::string presets = userPresetDir(ctx);
+   if (presets.empty())
+      return {};
+   const std::filesystem::path parent = std::filesystem::path(presets).parent_path();
+   if (parent.empty())
+      return {};
+   return (parent / "packs").string();
+}
+
+std::string formatPresetPack(const PresetContext &ctx, const std::string &packName,
+                             const std::vector<PresetPackEntry> &entries) {
+   std::string out = "# ";
+   out += ctx.pluginName;
+   out += " preset pack\n";
+   out += "pack_format = 1\n";
+   out += "pack_name = " + packName + "\n";
+   for (const auto &e : entries) {
+      out += "\n";
+      out += kPackSeparator;
+      out += e.name;
+      out += kPackSeparatorEnd;
+      out += "\n";
+      out += e.text;
+      if (!e.text.empty() && e.text.back() != '\n')
+         out += "\n";
+   }
+   return out;
+}
+
+bool parsePresetPack(const PresetContext &ctx, const std::string &text, std::string &packName,
+                     std::vector<PresetPackEntry> &out, std::string &error) {
+   (void)ctx;
+   packName.clear();
+   out.clear();
+
+   std::istringstream in(text);
+   std::string line;
+   bool sawFormat = false;
+   PresetPackEntry current;
+   bool inPreset = false;
+   const size_t sepLen = std::strlen(kPackSeparator);
+   const size_t endLen = std::strlen(kPackSeparatorEnd);
+
+   auto flush = [&]() {
+      if (inPreset) {
+         // The blank line the writer puts between two presets belongs to
+         // neither of them, so it comes off again here: a preset's text has to
+         // come back exactly as it went in or a pack is not a way of moving
+         // presets, only of copying most of them.
+         while (current.text.size() >= 2 &&
+                current.text.compare(current.text.size() - 2, 2, "\n\n") == 0)
+            current.text.pop_back();
+         out.push_back(current);
+      }
+      current = PresetPackEntry();
+      inPreset = false;
+   };
+
+   while (std::getline(in, line)) {
+      if (!line.empty() && line.back() == '\r')
+         line.pop_back();
+      const bool separator = line.compare(0, sepLen, kPackSeparator) == 0 &&
+                             line.size() >= sepLen + endLen &&
+                             line.compare(line.size() - endLen, endLen, kPackSeparatorEnd) == 0;
+      if (separator) {
+         flush();
+         inPreset = true;
+         current.name = line.substr(sepLen, line.size() - sepLen - endLen);
+         continue;
+      }
+      if (!inPreset) {
+         // The header, which is only two keys and a comment line.
+         const size_t eq = line.find('=');
+         if (eq == std::string::npos)
+            continue;
+         std::string key = line.substr(0, eq);
+         std::string value = line.substr(eq + 1);
+         while (!key.empty() && key.back() == ' ')
+            key.pop_back();
+         while (!value.empty() && value.front() == ' ')
+            value.erase(value.begin());
+         while (!value.empty() && value.back() == ' ')
+            value.pop_back();
+         if (key == "pack_format")
+            sawFormat = true;
+         else if (key == "pack_name")
+            packName = value;
+         continue;
+      }
+      current.text += line;
+      current.text += "\n";
+   }
+   flush();
+
+   if (!sawFormat) {
+      error = "not a preset pack: no pack_format line";
+      return false;
+   }
+   if (out.empty()) {
+      error = "the pack holds no presets";
+      return false;
+   }
+   return true;
+}
+
+bool parsePresetPackFile(const PresetContext &ctx, const std::string &path,
+                         std::string &packName, std::vector<PresetPackEntry> &out,
+                         std::string &error) {
+   std::ifstream file(path, std::ios::binary);
+   if (!file) {
+      error = "cannot open '" + path + "'";
+      return false;
+   }
+   std::ostringstream buf;
+   buf << file.rdbuf();
+   if (!parsePresetPack(ctx, buf.str(), packName, out, error)) {
+      error = path + ": " + error;
+      return false;
+   }
+   return true;
 }
 
 bool writePresetFile(const std::string &path, const std::string &text, std::string &error) {

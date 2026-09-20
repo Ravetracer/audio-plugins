@@ -53,9 +53,14 @@ W1="$(win 1)"; W2="$(win 2)"
 
 origin() { eval "$(xdotool getwindowgeometry --shell "$1" | grep -E '^X=|^Y=')"; echo "$X $Y"; }
 shot()   { import -window "$1" "$work/$2.png"; }
-# The step grid and the pattern bank, as they sit in the window.
-grid()   { convert "$work/$1.png" -crop 950x280+10+345 "$work/$1-grid.png"; }
-bank()   { convert "$work/$1.png" -crop 240x40+960+365 "$work/$1-bank.png"; }
+# The step grid and the pattern bank, as they sit in the window. These are the
+# window's own design pixels: it opens at scale 1, and the numbers move when
+# the layout does -- the whole set below has been shifted 84 px right twice, once when
+# the drive panel grew a column in 0.5.0 and again when it grew another in
+# 0.6.0, so if this check suddenly reports that
+# nothing registers, compare the crops against a screenshot before believing it.
+grid()   { convert "$work/$1.png" -crop 1114x300+10+345 "$work/$1-grid.png"; }
+bank()   { convert "$work/$1.png" -crop 240x40+1132+365 "$work/$1-bank.png"; }
 differs() { compare -metric AE "$work/$1.png" "$work/$2.png" null: 2>&1 || true; }
 
 fails=0
@@ -71,7 +76,7 @@ echo "       two presets, grids differ by $n pixels"
 
 # --- 2. a pattern slot clicked in instance 2 must not move instance 1.
 read -r X2 Y2 <<<"$(origin "$W2")"
-xdotool mousemove $((X2 + 1092)) $((Y2 + 380)); sleep 0.3; xdotool click 1; sleep 1
+xdotool mousemove $((X2 + 1264)) $((Y2 + 380)); sleep 0.3; xdotool click 1; sleep 1
 shot "$W1" b1; shot "$W2" b2; bank a1; bank a2; bank b1; bank b2
 moved="$(differs a2-bank b2-bank)"; stayed="$(differs a1-bank b1-bank)"
 echo "       pattern clicked in #2: #2 moved by $moved px, #1 by $stayed px"
@@ -82,7 +87,7 @@ echo "       pattern clicked in #2: #2 moved by $moved px, #1 by $stayed px"
 
 # --- 3. and a step edited in one must not appear in the other. Instance 2 is
 # on top, so it is the one that can be clicked without restacking.
-xdotool mousemove $((X2 + 207)) $((Y2 + 453)); sleep 0.3; xdotool click 1; sleep 1
+xdotool mousemove $((X2 + 235)) $((Y2 + 453)); sleep 0.3; xdotool click 1; sleep 1
 shot "$W1" c1; shot "$W2" c2; grid b2; grid c2; grid b1; grid c1
 moved="$(differs b2-grid c2-grid)"; stayed="$(differs b1-grid c1-grid)"
 echo "       step edited in #2: #2 changed by $moved px, #1 by $stayed px"

@@ -1,5 +1,9 @@
 #include <algorithm>
 #include <atomic>
+// <chrono> is used by the pattern generator's salt, which is compiled whether
+// or not this build has a window; on Linux it arrives transitively and on
+// mingw it does not.
+#include <chrono>
 #include <cmath>
 #include <cstdio>
 #include <cstring>
@@ -19,10 +23,11 @@
 #include "saeurekiste.h"
 
 #ifdef SAEUREKISTE_WITH_GUI
-#include <chrono>
 #include <thread>
 
 #include <filesystem>
+#include <fstream>
+#include <sstream>
 
 #include "gui/gui.h"
 #endif
@@ -47,6 +52,11 @@ const clap_plugin_descriptor_t kDescriptor = {
 
 // State chunk header. Values are stored per parameter id so that adding
 // parameters later cannot break older saved state.
+// What the browser calls the presets that are compiled into the binary. They
+// are not files and have no directory, so the name is the plugin's to choose;
+// everything else on the shelf is named after the folder it was found in.
+constexpr const char *kFactoryFolder = "Factory Presets";
+
 constexpr uint32_t kStateMagic = 0x54534B53u; // 'SKST' little-endian
 // Version 1, and the first version under this name.
 //
@@ -67,7 +77,17 @@ constexpr uint32_t kStateMagic = 0x54534B53u; // 'SKST' little-endian
 // The layout is: header, then one (id, value) pair per parameter, then the
 // sixty-four patterns of the bank, then one byte for whether the collapsible
 // panel section is open.
-constexpr uint32_t kStateVersion = 1;
+//
+// Version 2 is where a pattern stopped being sixteen steps and became up to
+// kMaxSteps of them. Only the bank's size changed, and the version is what
+// says which size a blob has: a version 1 blob carries sixteen words per
+// pattern and is read as the first sixteen steps of a 128-step pattern, the
+// rest rests, which is exactly the line it described. Nothing else about the
+// format moved, so a project saved by 0.4.0 opens with its bank intact.
+constexpr uint32_t kStateVersion = 2;
+
+// How many steps per pattern a blob of a given version carries.
+constexpr int kStateStepsInVersion1 = 16;
 
 } // namespace
 
@@ -185,6 +205,9 @@ private:
       // Drive, and the master
       p.drive = static_cast<float>(realValue(kParamDrive));
       p.toneHz = static_cast<float>(realValue(kParamTone));
+      p.distType = static_cast<int>(realValue(kParamDistType));
+      p.distMix = static_cast<float>(realValue(kParamDistMix));
+      p.distBias = static_cast<float>(realValue(kParamDistBias));
       p.gain = dbToGain(static_cast<float>(realValue(kParamVolume)));
 
       // Mods: the constants that used to be hard-coded.
@@ -360,8 +383,8 @@ private:
          blob.append(reinterpret_cast<const char *>(&v), sizeof(v));
       }
       // The bank, which is not in the parameter table: sixty-four patterns of
-      // sixteen packed words after the parameters. See pattern.h for why it is
-      // not.
+      // kMaxSteps packed words after the parameters. See pattern.h for why it
+      // is not, and the version note above for what changed at version 2.
       for (int pat = 0; pat < kMaxPatterns; ++pat) {
          for (int i = 0; i < kMaxSteps; ++i) {
             const uint16_t packed = plug->mPattern[pat][i].load(std::memory_order_relaxed);
@@ -421,10 +444,16 @@ private:
       // The bank, then the window state. A truncated read leaves everything
       // after it alone rather than failing the load: a project that opens with
       // the wrong panel collapsed is better than one that does not open.
+      const int stored = header[1] < 2 ? kStateStepsInVersion1 : kMaxSteps;
+      const uint16_t rest = Step().pack();
       for (int pat = 0; pat < kMaxPatterns; ++pat) {
          uint16_t packed[kMaxSteps];
-         if (!readExactly(stream, packed, sizeof(packed)))
+         if (!readExactly(stream, packed, sizeof(uint16_t) * static_cast<size_t>(stored)))
             break;
+         // A short pattern from an older blob leaves the steps past it as
+         // rests rather than as whatever the pattern before it had there.
+         for (int i = stored; i < kMaxSteps; ++i)
+            packed[i] = rest;
          for (int i = 0; i < kMaxSteps; ++i)
             plug->mPattern[pat][i].store(packed[i], std::memory_order_relaxed);
       }
@@ -1104,6 +1133,10 @@ private:
       g.slide = realValue(kParamRandSlide);
       g.octave = realValue(kParamRandOctave);
       g.vibrato = realValue(kParamRandVibrato);
+      // The generator fills exactly the steps the sequencer will play. Its
+      // draws are per step and in order, so turning Steps up extends the line
+      // the same seed already described instead of replacing it.
+      g.length = seqLength();
 
       uint16_t steps[kMaxSteps];
       generatePattern(g, steps);
@@ -1372,6 +1405,7 @@ private:
          entry.name = data.name.empty() ? kBuiltinPresets[i].loadKey : data.name;
          entry.description = data.description;
          entry.loadKey = kBuiltinPresets[i].loadKey;
+         entry.folder = kFactoryFolder;
          mPresets.push_back(entry);
       }
 
@@ -1381,25 +1415,46 @@ private:
          return;
       std::vector<GuiPreset> user;
       const std::string suffix = std::string(".") + kPresetExtension;
-      for (const auto &entry : std::filesystem::directory_iterator(dir, ec)) {
-         const std::string name = entry.path().filename().string();
-         if (name.size() <= suffix.size() ||
-             name.compare(name.size() - suffix.size(), suffix.size(), suffix) != 0)
-            continue;
-         const std::string path = entry.path().string();
-         PresetData data;
-         std::string error;
-         if (!parsePresetFile(path, data, error))
-            continue;
-         GuiPreset item;
-         item.name = data.name.empty() ? name.substr(0, name.size() - suffix.size()) : data.name;
-         item.description = data.description;
-         item.path = path;
-         item.userContent = true;
-         user.push_back(item);
-      }
-      std::sort(user.begin(), user.end(),
-                [](const GuiPreset &a, const GuiPreset &b) { return a.name < b.name; });
+      // The library's root and one level of folders under it. One level,
+      // because a preset library is a shelf rather than a filesystem and a
+      // tree deep enough to get lost in is one somebody will get lost in.
+      auto scan = [&](const std::filesystem::path &from, const std::string &folder) {
+         std::error_code dirEc;
+         for (const auto &entry : std::filesystem::directory_iterator(from, dirEc)) {
+            if (!entry.is_regular_file())
+               continue;
+            const std::string name = entry.path().filename().string();
+            if (name.size() <= suffix.size() ||
+                name.compare(name.size() - suffix.size(), suffix.size(), suffix) != 0)
+               continue;
+            const std::string path = entry.path().string();
+            PresetData data;
+            std::string error;
+            if (!parsePresetFile(path, data, error))
+               continue;
+            GuiPreset item;
+            item.name = data.name.empty() ? name.substr(0, name.size() - suffix.size()) : data.name;
+            item.description = data.description;
+            item.path = path;
+            item.userContent = true;
+            item.folder = folder;
+            user.push_back(item);
+         }
+      };
+      scan(dir, std::string());
+      std::vector<std::string> folders;
+      for (const auto &entry : std::filesystem::directory_iterator(dir, ec))
+         if (entry.is_directory())
+            folders.push_back(entry.path().filename().string());
+      std::sort(folders.begin(), folders.end());
+      for (const auto &folder : folders)
+         scan(std::filesystem::path(dir) / folder, folder);
+
+      // Sorted by folder first so the browser's own grouping and the order the
+      // arrow buttons walk in are the same order.
+      std::sort(user.begin(), user.end(), [](const GuiPreset &a, const GuiPreset &b) {
+         return a.folder == b.folder ? a.name < b.name : a.folder < b.folder;
+      });
       mPresets.insert(mPresets.end(), user.begin(), user.end());
 #endif
    }
@@ -1529,8 +1584,43 @@ private:
       return "My Line";
    }
 
-   bool guiSavePreset(const std::string &name, std::string &error) override {
-      const std::string path = userPresetPath(name);
+   // "Folder/Name" saves into a folder, creating it if it is not there; a name
+   // with no slash in it saves into the library's root, which is what every
+   // save did before folders existed. Typing the folder is the whole of the
+   // "make a new folder" gesture -- there is no second dialog, and a folder
+   // with nothing in it cannot be made, which is the right answer for
+   // something whose only purpose is to hold presets.
+   static void splitFolder(const std::string &input, std::string &folder, std::string &leaf) {
+      const size_t cut = input.find_last_of("/\\");
+      if (cut == std::string::npos) {
+         folder.clear();
+         leaf = input;
+         return;
+      }
+      folder = input.substr(0, cut);
+      leaf = input.substr(cut + 1);
+      // Only one level: "a/b/c" is folder "a_b", preset "c".
+      for (char &c : folder)
+         if (c == '/' || c == '\\')
+            c = '_';
+      auto trim = [](std::string &s) {
+         while (!s.empty() && s.front() == ' ')
+            s.erase(s.begin());
+         while (!s.empty() && s.back() == ' ')
+            s.pop_back();
+      };
+      trim(folder);
+      trim(leaf);
+   }
+
+   bool guiSavePreset(const std::string &input, std::string &error) override {
+      std::string folder, name;
+      splitFolder(input, folder, name);
+      if (name.empty()) {
+         error = "Give the preset a name after the folder.";
+         return false;
+      }
+      const std::string path = plugincore::userPresetPathIn(presetContext(), folder, name);
       if (path.empty()) {
          error = "No user preset directory: neither XDG_CONFIG_HOME nor HOME is set.";
          return false;
@@ -1565,6 +1655,131 @@ private:
          }
       }
       mPresetEdited = false;
+      return true;
+   }
+
+   // --------------------------------------------------- folders and packs
+   //
+   // The browser groups the library by folder and can write a whole folder out
+   // as one file, or read one back in. The format is the shared one -- see
+   // plugincore::formatPresetPack -- and it carries each preset's *text*
+   // rather than a re-serialised copy, which is what keeps this plugin's
+   // pattern lines intact across a round trip through a format that knows
+   // nothing about them.
+
+   bool guiPresetFoldersSupported() const override { return true; }
+
+   std::string guiPackPathFor(const std::string &folder) const override {
+      const std::string dir = plugincore::presetPackDir(presetContext());
+      if (dir.empty())
+         return {};
+      std::string stem = plugincore::presetFileStem(folder.empty() ? std::string("presets")
+                                                                   : folder);
+      if (stem.empty())
+         stem = "presets";
+      return dir + "/" + stem + "." + plugincore::presetPackExtension(presetContext());
+   }
+
+   std::vector<std::string> guiPresetPacks() const override {
+      std::vector<std::string> out;
+      const std::string dir = plugincore::presetPackDir(presetContext());
+      std::error_code ec;
+      if (dir.empty() || !std::filesystem::is_directory(dir, ec))
+         return out;
+      const std::string suffix = "." + plugincore::presetPackExtension(presetContext());
+      for (const auto &entry : std::filesystem::directory_iterator(dir, ec)) {
+         if (!entry.is_regular_file())
+            continue;
+         const std::string name = entry.path().filename().string();
+         if (name.size() > suffix.size() &&
+             name.compare(name.size() - suffix.size(), suffix.size(), suffix) == 0)
+            out.push_back(entry.path().string());
+      }
+      std::sort(out.begin(), out.end());
+      return out;
+   }
+
+   bool guiExportPack(const std::string &folder, const std::string &path,
+                      std::string &error) override {
+      ensurePresetList();
+      std::vector<plugincore::PresetPackEntry> entries;
+      for (const auto &preset : mPresets) {
+         if (preset.folder != folder)
+            continue;
+         plugincore::PresetPackEntry e;
+         e.name = preset.name;
+         if (!preset.loadKey.empty()) {
+            // A factory preset lives in the binary rather than on disk.
+            for (unsigned i = 0; i < kNumBuiltinPresets; ++i)
+               if (preset.loadKey == kBuiltinPresets[i].loadKey)
+                  e.text = kBuiltinPresets[i].text;
+         } else {
+            std::ifstream file(preset.path, std::ios::binary);
+            if (!file)
+               continue;
+            std::ostringstream buf;
+            buf << file.rdbuf();
+            e.text = buf.str();
+         }
+         if (!e.text.empty())
+            entries.push_back(e);
+      }
+      if (entries.empty()) {
+         error = "That folder has no presets in it.";
+         return false;
+      }
+      const std::string text = plugincore::formatPresetPack(
+         presetContext(), folder.empty() ? std::string("Presets") : folder, entries);
+      return writePresetFile(path, text, error);
+   }
+
+   bool guiImportPack(const std::string &path, std::string &folder, std::string &error) override {
+      std::string packName;
+      std::vector<plugincore::PresetPackEntry> entries;
+      if (!plugincore::parsePresetPackFile(presetContext(), path, packName, entries, error))
+         return false;
+      if (packName.empty())
+         packName = std::filesystem::path(path).stem().string();
+
+      // The pack's own name is the folder, with a number after it when that
+      // folder already exists -- importing the same pack twice gives two
+      // folders rather than a mixture of both versions in one.
+      const std::string dir = userPresetDir();
+      if (dir.empty()) {
+         error = "No user preset directory: neither XDG_CONFIG_HOME nor HOME is set.";
+         return false;
+      }
+      std::string stem = plugincore::presetFileStem(packName);
+      if (stem.empty())
+         stem = "pack";
+      std::string unique = stem;
+      std::error_code ec;
+      for (int n = 2; n < 100 && std::filesystem::exists(std::filesystem::path(dir) / unique, ec);
+           ++n)
+         unique = stem + "_" + std::to_string(n);
+
+      int written = 0;
+      for (const auto &entry : entries) {
+         const std::string file =
+            plugincore::userPresetPathIn(presetContext(), unique, entry.name);
+         if (file.empty())
+            continue;
+         std::string werr;
+         if (writePresetFile(file, entry.text, werr))
+            ++written;
+         else
+            error = werr;
+      }
+      if (written == 0) {
+         if (error.empty())
+            error = "Nothing in the pack could be written.";
+         return false;
+      }
+
+      folder = unique;
+      mPresets.clear();
+      mPresetsScanned = false;
+      ensurePresetList();
       return true;
    }
 

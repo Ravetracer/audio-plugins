@@ -2,7 +2,7 @@
 
 *A monophonic acid bass synthesiser for Linux. CLAP.*
 
-Version 0.4.0
+Version 0.6.0
 
 ---
 
@@ -122,8 +122,54 @@ Eight are the machine's front panel. Six are not, and are marked **(added)**.
 
 | Control | Range | Default | |
 |---|---|---|---|
-| **Drive** | 0 – 100 % | 20 % | A soft clipper after the filter, level-matched so that turning it up thickens rather than simply getting louder. At zero the signal path is the machine's. |
+| **Drive** | 0 – 100 % | 20 % | How hard the model is worked. What it actually moves depends on the model: Schetzen's thresholds, Bendiksen's `dist`, a triode's saturation, a bit depth. |
+| **Bias** | −100 – +100 % | 0 % | Where the model sits on its own curve. At the centre each one is at the operating point its source specifies; away from it the two halves of the wave are treated differently, which is what puts even harmonics into a sound that otherwise has only odd ones. |
 | **Tone** | 800 Hz – 18 kHz | 8 kHz | A lowpass after the drive. At the top of its range it does nothing. |
+| **Type** | 7 models | Soft Clip | Which model the stage is. See below. |
+| **Dist Mix** | 0 – 100 % | 100 % | How much of the driven signal is heard against the clean one. At zero the stage is bypassed however Drive and Type are set. |
+
+#### The seven models
+
+Everything in front of this stage is fixed by the service notes. There is no
+schematic for the stage itself, so it is built the other way round — from the
+literature. Every model is an equation out of a named source:
+
+- **[DAFX]** U. Zölzer (ed.), *DAFX: Digital Audio Effects*, 2nd edition, Wiley
+  2011, chapter 4, *Nonlinear processing* (Dutilleux, Dempwolf, Holters,
+  Zölzer).
+- **[Pirkle]** W. Pirkle, *Designing Audio Effect Plugins in C++*, 2nd edition,
+  Routledge 2019, chapter 19, *Nonlinear Processing: Distortion, Tube
+  Simulation, and HF Exciters*.
+
+| Type | Source | What it is |
+|---|---|---|
+| **Soft Clip** | — | The stage this instrument has always had: a rational tanh. The default, so a preset written before the models existed sounds exactly as it did — and the loudest of them at any given Drive, because its gain reaches 24 and it is compressing hard by the middle of the knob. |
+| **Overdrive** | [DAFX] eq 4.14 (Schetzen) | Symmetrical soft clipping in three zones: **linear** below a third of full scale, compressing to two thirds, flat above. The linear zone is the point of it — a note stops being distorted as it decays, so the stage follows the playing instead of flattening everything equally. |
+| **Tube** | [DAFX] eq 4.13 (Bendiksen) + M-file 4.4 | Asymmetric soft clipping around a work point: roughly linear for positive values and hard-limited for negative ones. At the book's own Q = −0.2 the positive half reaches 0.95 and the negative is held at 0.25, and almost all of its harmonics are even. The M-file's highpass and lowpass are in the path too. |
+| **Valve Stack** | [Pirkle] 19.12, 19.13 | Four class-A triode stages in series, each with the DC-removing highpass and the cathode-bypass shelf the book gives them, and the two-band tone stack it puts between the third stage and the fourth. The one model with a frequency response of its own: thinner at the bottom, brighter at the top. A power stage after the cascade keeps it inside its bounds, which is what a real one has too. |
+| **Fuzz** | [DAFX] eq 4.15 + [Pirkle] FEXP1, eq 19.2 | Exponential from the first volt — no linear region at all, which is what "fuzz" means. Asymmetric by default, because both sources describe it that way: the Fuzz Face clips its negative half lower than its positive one. |
+| **Rectifier** | [DAFX] 4.3.3, [Pirkle] table 19.2 | Folds the negative half of the wave onto the positive one, which doubles the number of zero crossings and therefore the fundamental. An octave *over* the note rather than an edge on it, and the only model here that changes the pitch of what it is given. Bias runs it from half-wave to full-wave. |
+| **Crush** | [Pirkle] eq 19.1 | Quantised to fewer bits, twelve down to three. Digital rather than a circuit, and unmistakable. |
+
+A hard model is made usable with **Dist Mix**: Fuzz or Rectifier at 25 % adds
+something to a line that is otherwise still the machine.
+
+**Both sources say the same thing about aliasing** — a nonlinearity needs
+oversampling ([DAFX] 4.1.1 and figure 4.5, [Pirkle] 19.1) — so every model here
+runs at twice the sample rate with an interpolating filter on the way in and a
+band-limiting one on the way out. Soft Clip is the exception, and deliberately:
+it is the stage that predates all of this and it renders what it always did.
+
+**Why seven and not fourteen.** There were fourteen, once, and they all sounded
+the same. Any two memoryless clippers driven hard enough become the same square
+wave; matching their levels removes what little is left; and none of them had
+any filtering of its own. What tells these apart is that they are built
+differently — a linear region that survives, an operating point off centre,
+four stages in series with a tone stack between them, a rectifier, a quantiser —
+and the self-test now measures that rather than taking it on trust: each model's
+Drive is searched for the setting that gives it 25 % THD, and their harmonic
+distributions are compared there. Two models that measure the same at the same
+distortion are one model with two names.
 
 ### Output
 
@@ -229,9 +275,33 @@ machine's own keyboard did. With the host playing, a key only transposes: the
 position belongs to the song, and a pattern that jumped back to step one in the
 middle of a bar would be out of step with everything else in the project.
 
+### How long a pattern is
+
+**Steps** runs from 1 to 128, and the two ends of that are two different
+instruments.
+
+Below sixteen is the machine's own trick: fifteen steps against a four-four bar
+walks the pattern around the beat, and the pattern never lands in the same place
+twice until it has been round fifteen times. Sixteen is the machine.
+
+Above sixteen the sequencer stops being a bass figure that repeats every bar.
+Sixty-four steps is four bars of sixteenths, 128 is eight, which is long enough
+to put a melody in rather than a riff. The pattern generator fills exactly as
+many steps as Steps says, and its draws are per step and in order — so turning
+Steps up **extends** the line the seed already described rather than replacing
+it.
+
+The grid draws sixteen columns for a pattern of sixteen or fewer and thirty-two
+for anything longer, at half the cell width. Whatever does not fit is scrolled
+to: roll the wheel anywhere over the grid, drag the bar under it, or click the
+track either side of the bar to move a screenful. While the sequencer is
+running the grid follows the playing step onto its own screen. The title says
+which part of the pattern is on show — *PATTERN 1 33-64/128*.
+
 ### The grid
 
-Sixteen steps across, below the panels.
+Sixteen steps across, below the panels — or thirty-two of a longer pattern, as
+above.
 
 - The **piano roll** is twelve semitones with C at the bottom and the black keys
   on darker lanes. Click a cell to put a note there, click it again (or
@@ -249,9 +319,10 @@ Sixteen steps across, below the panels.
 - **SLIDE**, **ACCENT** and **VIB** below. Click or drag.
 - Steps past the pattern's length are greyed; the playing step is lit.
 
-**CLEAR** empties it. The two **arrow** buttons walk the whole pattern one step
-sideways under the bar, which is the quickest way to find out that a line you
-liked was starting in the wrong place. **MIDI** drags the pattern out of the
+**CLEAR** empties it, all 128 steps of it and not only the part on screen. The
+two **arrow** buttons walk the whole pattern one step sideways under the bar,
+which is the quickest way to find out that a line you liked was starting in the
+wrong place. **MIDI** drags the pattern out of the
 plugin — see *Taking the pattern with you* below. The rest is the generator.
 
 All of it applies to whichever pattern the bank has selected — which is not
@@ -267,11 +338,18 @@ sounding is ringed, and the ones the chain will reach are lit.
 
 The machine had sixty-four too, and a mode switch to reach them.
 
-**COPY** and **PASTE**, in the bank's own title row, are how a pattern becomes a
-variation of another one: copy it, click an empty slot, paste, and change the
-two steps you wanted to change. PASTE stays greyed until something has been
-copied. The clipboard is the editor's — it lasts as long as the window is open,
-and it is not in the preset, the state or the parameter list.
+**DEL**, **COPY** and **PASTE**, in the bank's own title row, are how the bank
+is kept. COPY and PASTE make a pattern a variation of another one: copy it,
+click an empty slot, paste, and change the two steps you wanted to change.
+PASTE stays greyed until something has been copied, and DEL until there is
+something to delete. The clipboard is the editor's — it lasts as long as the
+window is open, and it is not in the preset, the state or the parameter list.
+
+**DEL empties the selected pattern**, which is the same edit CLEAR makes on the
+grid, put where the patterns are: emptying a slot you are not editing is
+something you do while looking at the bank. Like everything else here it is not
+undoable, which is the deal a hardware sequencer offers — and the reason to
+COPY first if there is any doubt.
 
 **CHAIN** is what happens when a pattern has played through.
 
@@ -400,7 +478,42 @@ Measured over 400 seeds: the root is **44 %** of all generated notes, rests are
 | **Octaves** | 22 % | Mostly up; one jump in three is down. |
 | **Vibrato** | 6 % | Nothing on the machine does this, so the default is sparing. |
 
-## 8. Preset library
+## 8. Presets, folders and packs
+
+Presets are text files in your own preset directory
+(`$XDG_CONFIG_HOME/SaeureKiste/presets`, or `%APPDATA%\SaeureKiste\presets` on
+Windows), and the twenty-seven factory presets are compiled into the plugin.
+The browser opens by clicking the preset name on the bar.
+
+**The library has folders.** Down the left of the browser is a column of them:
+*All*, then *Factory Presets*, then whatever you have made, then *Unfiled* for
+presets saved without a folder. Click one to see what is on it; the count
+beside each is how many presets it holds. A folder is one directory under your
+preset directory — one level deep, because a preset library is a shelf rather
+than a filesystem.
+
+**A folder is made by saving into it.** In the save field, type `Folder/Name`
+instead of a name: the folder is created if it is not there and the preset lands
+in it. There is no second dialog and no way to make an empty folder, which is
+the right answer for something whose only job is to hold presets.
+
+**A preset pack is a whole folder as one file** — `<name>.saeurekistepack`,
+which is the preset format again with a separator line between the presets, so
+it can be read and edited by hand like everything else here. The footer of the
+browser has three buttons:
+
+| Button | |
+|---|---|
+| **EXPORT** | Writes the selected folder to `…/SaeureKiste/packs/<folder>.saeurekistepack` and says where it went. |
+| **EXPORT AS…** | The same, through the desktop's own file chooser, for handing the pack to somebody else. Only shown when there is a chooser to open — zenity or kdialog on Linux, the system one on Windows. |
+| **IMPORT…** | Lists the packs in the packs folder, plus *Other file…* for one from anywhere else. |
+
+An import never overwrites anything: the pack becomes a new folder named after
+itself, and importing the same pack twice gives two folders rather than a
+mixture of both versions in one. A pack carries each preset's text exactly as it
+was written, so the patterns inside a preset travel with it.
+
+### The factory library
 
 | Preset | |
 |---|---|
