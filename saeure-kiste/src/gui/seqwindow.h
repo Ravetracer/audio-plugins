@@ -256,6 +256,15 @@ struct WindowSpec {
    const char *advancedLabel;
    int windowExpandedH;
 
+   // What RESET leaves alone. Everything else goes back to its default, which
+   // for this plugin is the stock machine: the Devil Fish additions and the
+   // mods all default to "not modified". Listed the other way round -- what to
+   // keep rather than what to reset -- because a parameter added later is far
+   // more likely to be something a reset should cover than something it should
+   // skip, and forgetting to add it to a keep list is the safer mistake.
+   const uint32_t *resetKeep;
+   int resetKeepCount;
+
    // How the window asks the host to resize it, and where the open/closed
    // state is kept. Null means the section cannot be opened at all.
    WindowHost *host;

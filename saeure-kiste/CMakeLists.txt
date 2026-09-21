@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.16)
-project(SaeureKiste VERSION 0.11.0 LANGUAGES CXX)
+project(SaeureKiste VERSION 0.12.0 LANGUAGES CXX)
 
 # SaeureKiste builds as a CLAP and as a VST3, for Linux and for Windows.
 #

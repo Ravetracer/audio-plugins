@@ -52,12 +52,14 @@ export XDG_CONFIG_HOME="$clean_config"
 #
 # From gui.cpp: kMargin 16, kGap 8, kCellW 84, kPanelPad 8, kPanelTitleH 24,
 # kCellH 96, kHeaderH 66, kBarH 32, kSeqPaneHeight 291, kContentW 1408. A
-# panel is cols*84 + 16 wide, except the last on a row, which is stretched to
-# the right margin.
+# panel is cols*84 + 16 wide -- every one of them, including the last on a
+# row: the window stopped stretching that one out to the right margin in
+# 0.12.0, so a row that does not fill the width ends in background.
 WIN_W=1440; WIN_H=715; WIN_H_OPEN=987
 ROW0_Y=74; ROW1_Y=210; PANEL_H=128
 SEQ_Y=346; SEQ_H=291; BANK_X=1192; BANK_W=232; SEQ_W=1168
 BAR_Y=645; ADV_ROW2_Y=685; ADV_ROW3_Y=821
+RESET_X=661; RESET_Y=663             # the RESET button, right of ADVANCED
 
 # Where the things this script clicks are, so a coordinate appears once.
 MODE_CHIP_X=98; MODE_CHIP_Y=261      # the SEQUENCER panel's Mode chip, right arrow
@@ -142,9 +144,9 @@ start_host "$WIN_H"
 
 grab window            0        0        $WIN_W $WIN_H
 grab panel-vco         16       $ROW0_Y  184    $PANEL_H
-grab panel-vcf         208      $ROW0_Y  604    $PANEL_H
-grab panel-drive       820      $ROW0_Y  436    $PANEL_H
-grab panel-output      1264     $ROW0_Y  160    $PANEL_H
+grab panel-vcf         208      $ROW0_Y  436    $PANEL_H
+grab panel-drive       652      $ROW0_Y  436    $PANEL_H
+grab panel-output      1096     $ROW0_Y  100    $PANEL_H
 grab panel-sequencer   16       $ROW1_Y  352    $PANEL_H
 grab panel-generator   376      $ROW1_Y  520    $PANEL_H
 grab panel-delay       904      $ROW1_Y  520    $PANEL_H
@@ -246,11 +248,11 @@ done
 [ -n "$window" ] || { echo "the editor did not grow when ADVANCED was pressed" >&2; exit 1; }
 
 grab window-advanced   0        0        $WIN_W $WIN_H_OPEN
-grab panel-mods        16       $ADV_ROW2_Y 856 $PANEL_H
-grab panel-slide       880      $ADV_ROW2_Y 544 $PANEL_H
-grab panel-accent      16       $ADV_ROW3_Y 352 $PANEL_H
-grab panel-vibrato     376      $ADV_ROW3_Y 268 $PANEL_H
-grab panel-amp         652      $ADV_ROW3_Y 772 $PANEL_H
+grab panel-vcfmod      16       $ADV_ROW2_Y 268 $PANEL_H
+grab panel-slide       292      $ADV_ROW2_Y 100 $PANEL_H
+grab panel-vibrato     400      $ADV_ROW2_Y 268 $PANEL_H
+grab panel-amp         676      $ADV_ROW2_Y 268 $PANEL_H
+grab panel-mods        16       $ADV_ROW3_Y 1108 $PANEL_H
 stop_host
 
 rm -f "${out}/.full.png"

@@ -431,8 +431,13 @@ private:
    }
 
    // Lays one row of panels out at `y` and returns where the next row starts.
-   // The last panel of a row takes up whatever padding is left over, which
-   // keeps every row flush with the right-hand edge instead of ending raggedly.
+   //
+   // A panel is exactly as wide as the cells it holds. The shared window
+   // stretches the last panel of a row out to the right-hand edge so the rows
+   // end flush; this one does not, because the collapsible section's rows are
+   // nowhere near full and a panel stretched over a few hundred pixels of
+   // nothing reads as a panel with a control missing from it. What is left
+   // over stays background.
    int layoutRow(int row, int y) {
       int x = kMargin;
       int rowH = 0;
@@ -444,8 +449,6 @@ private:
          p.rect.y = y;
          p.rect.w = spec.cols * kCellW + 2 * kPanelPad;
          p.rect.h = kPanelTitleH + spec.rows * kCellH + kPanelPad;
-         if (i == mSpec.rowLength[row] - 1)
-            p.rect.w = kMargin + mSpec.contentW - p.rect.x;
          rowH = std::max(rowH, static_cast<int>(p.rect.h));
 
          for (const Cell &cell : flowCells(spec)) {
@@ -550,7 +553,10 @@ private:
       // Only drawn while one is, and drawn in the accent so it cannot be
       // mistaken for part of the furniture: a forced-down layer that looks
       // like a saved one is the whole trap this chip exists to close.
-      mHoldRect = {mAdvancedRect.x + mAdvancedRect.w + 10, static_cast<double>(barY), 104, kBarH};
+      // Back to the machine it started as. On the bar rather than on a panel
+      // because it is not one module's control -- it undoes all of them.
+      mResetRect = {mAdvancedRect.x + mAdvancedRect.w + 8, static_cast<double>(barY), 62, kBarH};
+      mHoldRect = {mResetRect.x + mResetRect.w + 10, static_cast<double>(barY), 104, kBarH};
       // The version label, right-aligned in the header at baseline 44. The box
       // is a fixed size anchored to the right edge rather than measured from
       // the text, because the layout runs without a cairo context to measure
@@ -1103,6 +1109,24 @@ private:
          cairo_fill(cr);
       }
 
+      // RESET, and the second click that means it. An armed button says SURE?
+      // in the accent: this throws away every knob position in the window and
+      // there is no undo for it inside the plugin.
+      {
+         const bool resetHot = mHoverWidget == Widget::Reset;
+         setColor(cr, mResetArmed ? mSpec.theme.accent : mSpec.theme.panelFill,
+                  mResetArmed ? 0.16 : 1.0);
+         roundedRect(cr, mResetRect.x, mResetRect.y, mResetRect.w, mResetRect.h, 4);
+         cairo_fill_preserve(cr);
+         setColor(cr, (resetHot || mResetArmed) ? mSpec.theme.accent : mSpec.theme.panelEdge,
+                  resetHot ? 0.7 : 1.0);
+         cairo_set_line_width(cr, 1.0);
+         cairo_stroke(cr);
+         setColor(cr, (resetHot || mResetArmed) ? mSpec.theme.accent : mSpec.theme.textDim);
+         drawText(cr, mResetRect.x + mResetRect.w * 0.5, mResetRect.y + 20,
+                  mResetArmed ? "SURE?" : "RESET", 10, true, Align::Center);
+      }
+
       if (!hasMixer())
          return;
 
@@ -1415,6 +1439,11 @@ private:
          msg = mSpec.params[mHover].tip;
       if (!msg && mPaneHover >= 0 && mPaneHover < static_cast<int>(mSpec.paramCount))
          msg = mSpec.params[mPaneHover].tip;
+      if (!msg && mHoverWidget == Widget::Reset)
+         msg = mResetArmed ? "Click again to put every control back to the stock machine. The "
+                             "pattern bank, the play mode and the clock are left alone."
+                           : "RESET: every control back to the stock machine -- no mods, no "
+                             "modifications, no drive and no delay. Click twice.";
       if (!msg) {
          const auto &list = mDelegate.guiPresets();
          const int cur = mDelegate.guiCurrentPreset();
@@ -3530,7 +3559,7 @@ private:
    // ----------------------------------------------------------------- events
 
    // `None` is taken: X11 defines it as a macro.
-   enum class Widget { NoWidget, Prev, Next, Name, Save, Mixer, Hold, Advanced };
+   enum class Widget { NoWidget, Prev, Next, Name, Save, Mixer, Hold, Advanced, Reset };
 
 #if defined(_WIN32)
    void pumpEvents() {
@@ -3713,6 +3742,15 @@ private:
          unsigned long time;
       } be{button, timeMs};
 
+      // An armed RESET survives exactly one click, which has to be the second
+      // one on RESET itself. Anything else at all -- another button, a knob,
+      // the grid, a miss -- puts it back to sleep.
+      const bool wasArmed = mResetArmed;
+      if (mResetArmed) {
+         mResetArmed = false;
+         mDirty = true;
+      }
+
       if (mSaveOpen) {
          if (be.button == kButtonLeft) {
             if (saveOkRect().contains(x, y))
@@ -3881,6 +3919,16 @@ private:
          toggleAdvanced();
          return;
       }
+      if (be.button == kButtonLeft && mResetRect.contains(x, y)) {
+         // Arm on the first click, act on the second. Any other click in the
+         // window disarms it -- see the top of this function.
+         if (wasArmed)
+            resetToDefaults();
+         else
+            mResetArmed = true;
+         mDirty = true;
+         return;
+      }
       if (be.button == kButtonLeft && holdsActive() && mHoldRect.contains(x, y)) {
          clearHolds();
          return;
@@ -3940,6 +3988,33 @@ private:
       mDragStartY = y;
       mDragStartValue = mDelegate.guiParamValue(static_cast<uint32_t>(id));
       mDelegate.guiBeginEdit(static_cast<uint32_t>(id));
+      mDirty = true;
+   }
+
+   // Every parameter back to its default, which for this instrument is the
+   // machine before anybody was inside it: the mods, the Devil Fish additions
+   // and the two stages that are not in the schematic all default to off or to
+   // the stock circuit. What the spec's resetKeep names is left alone, because
+   // it says which pattern is playing rather than what the instrument sounds
+   // like, and losing that to a click on RESET would be losing the arrangement
+   // along with the patch.
+   //
+   // Written through the delegate one parameter at a time, so the host records
+   // it as automation and its own undo sees it.
+   void resetToDefaults() {
+      for (uint32_t i = 0; i < mSpec.paramCount; ++i) {
+         bool keep = false;
+         for (int k = 0; k < mSpec.resetKeepCount; ++k)
+            keep = keep || mSpec.resetKeep[k] == i;
+         if (keep)
+            continue;
+         const double def = mSpec.params[i].def;
+         if (mDelegate.guiParamValue(i) == def)
+            continue;
+         mDelegate.guiBeginEdit(i);
+         mDelegate.guiSetParam(i, def);
+         mDelegate.guiEndEdit(i);
+      }
       mDirty = true;
    }
 
@@ -4052,6 +4127,8 @@ private:
          w = Widget::Mixer;
       else if (hasAdvanced() && mAdvancedRect.contains(x, y))
          w = Widget::Advanced;
+      else if (mResetRect.contains(x, y))
+         w = Widget::Reset;
       else if (holdsActive() && mHoldRect.contains(x, y))
          w = Widget::Hold;
 
@@ -4253,6 +4330,9 @@ private:
    std::vector<Rect> mCellRects;
    Rect mPrevRect, mNameRect, mNextRect, mSaveRect, mVersionRect;
    Rect mMixerRect, mHoldRect, mAdvancedRect;
+   Rect mResetRect;
+   // Whether RESET is waiting for the click that confirms it.
+   bool mResetArmed = false;
    int mBarY = 0, mHelpY = 0;
    bool mAdvancedOpen = false;
 

@@ -347,11 +347,27 @@ played into it again sounds like what it came from.
 
 ### The collapsible half of the window
 
-The ten mods and the ACCENT, SLIDE and VIBRATO panels sit behind the
-**ADVANCED** button on the preset bar. They are the controls for tuning the
+The VCF MOD, SLIDE, VIBRATO and AMP panels, and the mods under them, sit behind
+the **ADVANCED** button on the preset bar. They are the controls for tuning the
 engine rather than for playing it, so the window opens without them and grows
 when you ask for them. The window remembers which way it was left, per instance,
 in the plugin's state.
+
+What is left on the front of the window is the machine's own panel and nothing
+else: Waveform and Tuning, then Cutoff, Resonance, Env Mod, Decay and Accent in
+the order the hardware prints them, then the drive stage and the output.
+
+### RESET
+
+**RESET**, beside ADVANCED, puts every parameter back to its default -- which
+for this plugin is the stock machine, because every mod and every Devil Fish
+control defaults to the unmodified circuit and the two added stages default to
+doing nothing. It asks once: the button reads SURE? and wants a second click.
+
+It leaves the pattern bank alone, along with `Mode`, `Rate` and which pattern
+is selected. Those say what is playing rather than what it sounds like, and a
+click meant to clear the patch should not stop the sequencer in the middle of a
+set. Pattern edits are not parameters and are never touched by it.
 
 ## The Devil Fish controls
 
@@ -368,14 +384,14 @@ these existed.
 
 | Control | Panel | |
 |---|---|---|
-| **Overdrive** | VCF | The oscillator's level into the filter, which is not `Drive` -- this one is in front of the ladder and `Drive` is behind it. 0 dB is the fixed level the machine has. Up from there the ladder's input pair stops being linear and starts switching; the top is Whittle's 66.6 times normal. At the bottom the oscillator is gone altogether, which with `Res Range` past 100 % leaves the filter singing on its own for you to reintroduce the oscillator into. |
-| **Filter FM** | VCF | The amplifier's own output fed back into the filter frequency, at audio rate. Loudest where the signal is loudest, so it bites on accents and wherever Overdrive is up, and it needs resonance to have anything to work with. A little is edge; a lot is what Whittle calls a spluttering chaotic mess. |
+| **Overdrive** | VCF MOD | The oscillator's level into the filter, which is not `Drive` -- this one is in front of the ladder and `Drive` is behind it. 0 dB is the fixed level the machine has. Up from there the ladder's input pair stops being linear and starts switching; the top is Whittle's 66.6 times normal. At the bottom the oscillator is gone altogether, which with `Res Range` past 100 % leaves the filter singing on its own for you to reintroduce the oscillator into. |
+| **Filter FM** | VCF MOD | The amplifier's own output fed back into the filter frequency, at audio rate. Loudest where the signal is loudest, so it bites on accents and wherever Overdrive is up, and it needs resonance to have anything to work with. A little is edge; a lot is what Whittle calls a spluttering chaotic mess. |
 | **Muffler** | DRIVE | A clipper on the output, Off / Soft / Hard. It only touches what is already loud and it leaves the bottom of the spectrum alone, so it takes the top off the peaks and adds a buzz rather than making the note smaller. |
 | **Soft Attack** | AMP | How fast the amplifier opens on an unaccented note, 0.3 to 30 ms. The machine's is fixed by C41 and R134 at 2.2 ms, which is the default; an accented note always uses it. Turned up, the note swells instead of starting. |
 | **Amp Decay** | AMP | How long the amplifier takes to fall away under a held note. Not a control on the machine at all: R123 and C42 fix it at 1.5 s, which reaches a tenth in about 3.45 s. |
 | **Amp Sustain** | AMP | Where Amp Decay falls to instead of silence, so a held note can run indefinitely. |
-| **Sweep Speed** | ACCENT | How the accent circuit answers accents in quick succession. **Normal** is the machine -- charge left in C62 makes the next accent bigger, which is the machine getting worked up. **Fast** is the opposite: the first accent is the strongest. **Slow** rises further and takes longer to cool. |
-| **Accent Hold** | ACCENT | Accents every note whatever its step or velocity says. Whittle's front panel has a pushbutton for it. |
+| **Sweep Speed** | MODS | How the accent circuit answers accents in quick succession. **Normal** is the machine -- charge left in C62 makes the next accent bigger, which is the machine getting worked up. **Fast** is the opposite: the first accent is the strongest. **Slow** rises further and takes longer to cool. |
+| **Accent Hold** | MODS | Accents every note whatever its step or velocity says. Whittle's front panel has a pushbutton for it. |
 
 Four ranges were widened to his as well, and none of them moved its default:
 `Cutoff` now runs 30 Hz to 5 kHz, `Decay` 30 ms to 3 s, `Slide Time` up to

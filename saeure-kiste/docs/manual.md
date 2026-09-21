@@ -8,7 +8,7 @@ subtitle: CLAP and VST3 instrument for Linux and Windows
 
 *A monophonic acid bass synthesiser. Linux and Windows, CLAP and VST3.*
 
-Version 0.11.0
+Version 0.12.0
 
 ---
 
@@ -92,10 +92,12 @@ same reason.
 ## 3. The controls
 
 Eight are the machine's front panel: Waveform, Tuning, Cutoff, Resonance, Env
-Mod, Decay, Accent and Volume. Everything else is an addition. Four of them sit
-on those same panels and are marked **(added)**; the Drive, Delay and Mods
-panels are additions entire and say so in their headings; and the controls of
-the modification are gathered in §10.
+Mod, Decay, Accent and Volume. Those eight are the window the plugin opens
+with, laid out in the order the machine prints them, and nothing else is on it
+that the machine does not have. Everything else is an addition: one of them is
+marked **(added)** where it sits beside originals, the VCF Mod, Drive, Delay,
+Vibrato and Mods panels are additions entire and say so in their headings, and
+the controls of the modification are gathered in §10.
 
 ### VCO
 
@@ -108,7 +110,7 @@ the modification are gathered in §10.
 
 ### VCF
 
-![The VCF panel. Overdrive and Filter FM are the two added controls.](images/panel-vcf.png)
+![The VCF panel. Tuning, Cutoff, Resonance, Env Mod, Decay, Accent: the front-panel row, in the order it is printed on the lid.](images/panel-vcf.png)
 
 | Control | Range | Default | |
 |---|---|---|---|
@@ -116,18 +118,20 @@ the modification are gathered in §10.
 | **Resonance** | 0 – 100 % | 35 % | VR4. It stops just short of oscillation, because the machine does — the ringing waveform printed for that alignment check dies away. A silverbox that sustains a tone is a modified one. |
 | **Env Mod** | 0 – 100 % | 50 % | VR5, and the one control that does two things at once. See §4. |
 | **Decay** | 30 ms – 3 s | 600 ms | VR6. The envelope has no attack worth the name and no sustain at all — it is triggered and it falls. An accented note ignores this knob. The schematic's own range is 200 ms – 2.5 s; the wider one is the modification's — see §10. |
-| **Tracking** *(added)* | 0 – 200 % | 0 % | Filter key follow. The machine has **none**: its pitch CV reaches the oscillator and stops, so a note two octaves up meets the same filter as the root. 0 % is the machine, 100 % is one-for-one, and past that the filter climbs faster than the note. |
+| **Accent** | 0 – 100 % | 60 % | VR7, and the sixth knob on the machine's own panel. How much louder, brighter and shorter an accented note is. What an accent *is* — which velocities count as one, how long it lingers, how a run of them stacks up — is on the MODS panel behind ADVANCED. |
 
-### Accent
+### VCF Mod *(the whole panel is added)*
 
+![The VCF MOD panel, in the half behind ADVANCED.](images/panel-vcfmod.png)
 
-![The ACCENT panel, in the half behind ADVANCED.](images/panel-accent.png)
+Three controls that reach the filter and that the machine does not have. The
+last two are the hardware modification's and are described in §10.
 
 | Control | Range | Default | |
 |---|---|---|---|
-| **Accent** | 0 – 100 % | 60 % | VR7. How much louder, brighter and shorter an accented note is. |
-| **Accent At** *(added)* | 1 – 127 | 100 | Which velocities count as an accent. |
-| **Sweep Time** *(added)* | 10 – 500 ms | 68 ms | The accent's time constant. 68 ms is the circuit's own: C62 is 1 µF and discharges through R138, 68 k. Shorten it and each accent stands alone; lengthen it and a run of them builds. |
+| **Tracking** | 0 – 200 % | 0 % | Filter key follow. The machine has **none**: its pitch CV reaches the oscillator and stops, so a note two octaves up meets the same filter as the root. 0 % is the machine, 100 % is one-for-one, and past that the filter climbs faster than the note. |
+| **Overdrive** | −60 – +36.5 dB | 0 dB | The oscillator's level into the filter. See §10. |
+| **Filter FM** | 0 – 100 % | 0 % | The amplifier's output back into the filter frequency, at audio rate. See §10. |
 
 ### Slide
 
@@ -317,12 +321,17 @@ does the same thing.
 
 ### Mods *(the whole panel is added)*
 
-![The MODS panel: ten numbers the schematic does not give.](images/panel-mods.png)
+![The MODS panel: the numbers the schematic does not give, and everything that decides what an accent is.](images/panel-mods.png)
 
 Ten numbers that the schematic does not give. They used to be constants in the
 engine, which meant shipping one particular guess; they are controls instead,
 with those guesses as their defaults. Nothing moved — a preset that does not
 mention them sounds exactly as it did.
+
+Four more sit with them, because they are the same kind of thing: **Accent At**,
+**Sweep Time**, **Sweep Speed** and **Accent Hold** say what an accent *is*,
+and nobody re-decides that while playing. The Accent knob on the front panel
+says how much of it to apply, and that is the one that stays in reach.
 
 They are also close to the list of things people soldered into their own
 machines, and there is a reason that list is short and specific: no two of these machines
@@ -337,6 +346,8 @@ yours.
 | **Acc Sweep** | 0 – 6 oct | 3.5 | How far a full accent opens the filter. This is the control that decides whether an accent reads as one at all: an accented note is also running a much shorter envelope, so too little here and the shortening wins and the accent comes out *darker*. It did, at two octaves. |
 | **Acc Build** | 0 – 100 % | 75 % | How much of C62 one accent fills. Below 100 % an accent lands on what the last one left, so a run of them builds. |
 | **Acc Gain** | 0 – 200 % | 90 % | How much louder an accent is. |
+| **Accent At** | 1 – 127 | 100 | Which velocities count as an accent, in MIDI mode. In Sequencer mode it is the step's accent bit and this does nothing. |
+| **Sweep Time** | 10 – 500 ms | 68 ms | The accent's time constant, and the one number in this table the schematic *does* give: C62 is 1 µF and discharges through R138, 68 k. Shorten it and each accent stands alone; lengthen it and a run of them builds. |
 | **Acc Decay** | 20 ms – 2.5 s | 200 ms | The decay an accented note is forced onto by the 4066. **Set it equal to Decay and accents stop being shorter** — the change the hardware modification put a front-panel switch on, and the most-requested one to this circuit there has ever been. |
 | **Droop** | 1 – 400 Hz | 25 Hz | The tilt on the square. Down for a clean square, up to thin it towards a pulse. Does nothing on the sawtooth. |
 | **Ladder** | 0 – 200 % | 100 % | How hard the feedback is driven into its own saturation. Down and the filter is cleaner and rings harder; up and it fights back. |
@@ -717,7 +728,7 @@ Presets are text files in your own preset directory
 Windows), and the twenty-seven factory presets are compiled into the plugin.
 The browser opens by clicking the preset name on the bar.
 
-![The preset bar: the two arrows step through the library, the name opens the browser, SAVE writes a new one, and ADVANCED opens the lower half of the window.](images/preset-bar.png)
+![The preset bar: the two arrows step through the library, the name opens the browser, SAVE writes a new one, ADVANCED opens the lower half of the window, and RESET puts every control back to the stock machine.](images/preset-bar.png)
 
 ![The browser. The folders are down the left; the count beside each is how many presets it holds.](images/preset-browser.png)
 
@@ -857,7 +868,7 @@ to start if you want to hear the plugin play itself:
 
 ## 9. The window
 
-![The window with ADVANCED open: the mods and the three panels that go with them.](images/window-advanced.png)
+![The window with ADVANCED open: the four circuits nobody re-tunes twice in a session, and the mods under them.](images/window-advanced.png)
 
 One row of knobs across a wide, shallow panel, which is the shape of the machine
 it models — and a second row of them behind a button, because ten of the
@@ -869,11 +880,19 @@ controls are for tuning the engine rather than for playing it.
   for its list.
 - The **preset bar** browses the factory library and anything in your own preset
   directory; **SAVE** writes a new one there.
-- **ADVANCED**, beside SAVE, opens the collapsible half of the window: the ten
-  mods, and the ACCENT, SLIDE and VIBRATO panels. The window grows to make room
-  and shrinks again when you close it, and it remembers which way you left it.
-  A host that will not resize a plugin editor on request will leave it clipped;
-  everything in it is reachable from the host's own parameter list either way.
+- **ADVANCED**, beside SAVE, opens the collapsible half of the window: the VCF
+  MOD, SLIDE, VIBRATO and AMP panels, and the mods under them. The window grows
+  to make room and shrinks again when you close it, and it remembers which way
+  you left it. A host that will not resize a plugin editor on request will
+  leave it clipped; everything in it is reachable from the host's own parameter
+  list either way.
+- **RESET**, beside ADVANCED, puts the whole instrument back to the machine it
+  models: every mod, every control of the modification, the drive and the delay
+  back to their defaults, which between them are the stock circuit. It asks
+  once — the button reads SURE? and wants a second click — because there is no
+  undo for it inside the plugin. **The pattern bank is not touched**, and
+  neither are Mode, Rate or which pattern is playing: it is the patch that goes
+  back to nothing, not the arrangement.
 - **Clicking the version label** plays one low accented note, so a preset can be
   auditioned without reaching for a keyboard.
 - The curve across the **header** is the ladder's actual response — the same
@@ -897,7 +916,7 @@ the same samples, not merely a similar sound.
 
 ### The controls
 
-**Overdrive** *(VCF)* is the oscillator's level into the filter. It is not
+**Overdrive** *(VCF MOD)* is the oscillator's level into the filter. It is not
 `Drive` — this one is in front of the ladder and `Drive` is behind it. 0 dB is
 the fixed level the machine has. Above that the ladder's input pair stops being
 linear and starts switching, which is the manual's "the filter operates under
@@ -906,7 +925,7 @@ oscillator is gone altogether, and that setting is only interesting with
 `Res Range` past 100 %: the filter sings on its own and Overdrive reintroduces
 the oscillator by hand.
 
-**Filter FM** *(VCF)* feeds the amplifier's own output back into the filter
+**Filter FM** *(VCF MOD)* feeds the amplifier's own output back into the filter
 frequency, at audio rate. It is loudest where the signal is loudest, so it bites
 hardest on accented notes and wherever Overdrive is up, and it needs resonance
 to have anything to work with. A little is edge. A lot is what that manual calls a
@@ -937,7 +956,7 @@ filter falls. Shorten it and the notes start closing on their own. Amp Sustain
 is where the decay falls to instead of silence, so a held note can run
 indefinitely.
 
-**Sweep Speed** *(ACCENT)* is how the accent circuit answers accents in quick
+**Sweep Speed** *(MODS)* is how the accent circuit answers accents in quick
 succession.
 
 | | |
@@ -951,7 +970,7 @@ is no schematic for the modification — so Normal is the machine and the other
 two are fitted
 to that description. `Sweep Time` and `Acc Build` remain the controls.
 
-**Accent Hold** *(ACCENT)* accents every note whatever its step or velocity says.
+**Accent Hold** *(MODS)* accents every note whatever its step or velocity says.
 The modification's front panel has a pushbutton for it.
 
 ### The widened ranges

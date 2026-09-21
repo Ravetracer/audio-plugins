@@ -1,11 +1,41 @@
 # SäureKiste -- status
 
-Version 0.11.0. Linux and Windows, CLAP and VST3. 63 parameters, 30 presets,
+Version 0.12.0. Linux and Windows, CLAP and VST3. 63 parameters, 30 presets,
 builds clean, self-test passes with no failures across 282 checks, and
 `tools/check-instances.sh` passes with two editors open at once.
 
 Six of seven fixes were confirmed by backing the bug out and watching the suite
 fail; the seventh has no contract to assert. See `TODO.md` §3.
+
+0.12.0 rearranges the window and adds a RESET button to the preset bar.
+
+The front of the window is the machine's own panel and nothing else now: the
+Accent knob is back in the VCF row where the hardware prints it, sixth after
+Tuning, Cutoff, Resonance, Env Mod and Decay, and the three controls that were
+standing in its place -- Tracking, Overdrive and Filter FM -- moved into a
+VCF MOD panel in the collapsible half. What shapes an accent rather than
+applying it (Accent At, Sweep Time, Sweep Speed, Accent Hold) joined the mods,
+which is where the four accent numbers already were, and the ACCENT panel is
+gone.
+
+A row no longer stretches its last panel out to the right margin. That is a
+change to the forked window (`layoutRow` in `src/gui/seqwindow.cpp`) and not to
+the shared one: the collapsible rows are nowhere near full, and a SLIDE panel
+544 pixels wide around one knob read as a panel with something missing from it.
+Rows now end in background.
+
+**RESET** puts every parameter back to its default, which for this instrument
+is the machine before anybody was inside it -- no mods, no modification, no
+drive and no delay. It arms on the first click (the button reads SURE?) and
+acts on the second, because there is no undo for it inside the plugin. The
+pattern bank, Mode, Rate and the selected pattern are left alone; they say what
+is playing rather than what it sounds like. The keep list is
+`kResetKeep` in `src/gui/gui.cpp` and the window takes it from the spec, so a
+parameter added later is reset unless it is named -- the safer default of the
+two.
+
+The manual's screenshots were regenerated for all of it, and
+`tools/make-screenshots.sh` carries the new crop coordinates.
 
 0.11.0 gives the three pedal-derived drive models presets of their own, which
 the library did not have: every one of the twenty-seven was written before they

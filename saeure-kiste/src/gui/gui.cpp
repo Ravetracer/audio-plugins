@@ -25,8 +25,8 @@ namespace {
 //
 // The width is set by the widest row, which is the sequencer beside the
 // generator. The height is set twice, because the window has two of them: the
-// ten mods and the three panels that go with them live in a section that opens
-// and closes, and a closed window is the page anybody actually plays from.
+// mods and the four panels that go with them live in a section that opens and
+// closes, and a closed window is the page anybody actually plays from.
 // Two cells wider than it was, which is what the drive stage needed: Type,
 // Bias and Dist Mix on a row that was exactly full at 1180.
 //
@@ -44,11 +44,18 @@ constexpr int kContentW = 1408;
 // three circuits nobody re-tunes twice in a session -- is in the collapsible
 // half below the preset bar.
 constexpr uint32_t kVcoParams[] = {kParamWaveform, kParamTuning};
-constexpr uint32_t kVcfParams[] = {kParamCutoff,  kParamResonance, kParamEnvMod,  kParamDecay,
-                                   kParamTracking, kParamOverdrive, kParamFilterFM};
-// Sweep Speed and Accent Hold are both chips, so they share a column.
-constexpr uint32_t kAccentParams[] = {kParamAccent, kParamAccentThreshold, kParamAccentDecay,
-                                      kParamSweepSpeed | kStacked, kParamAccentHold | kStacked};
+// The front panel of the machine, in the order it is printed on the lid:
+// Tuning, Cutoff, Resonance, Env Mod, Decay, Accent. Tuning stays on the VCO
+// panel because that is the circuit VR2 is in, and the row still reads in that
+// order left to right, which is the part anybody who has played one knows by
+// hand. Accent is the sixth knob and belongs here, not in a panel of its own:
+// everything that *shapes* the accent is a modification and is in MODS.
+constexpr uint32_t kVcfParams[] = {kParamCutoff, kParamResonance, kParamEnvMod, kParamDecay,
+                                   kParamAccent};
+// What reaches the filter and is not on the machine. Tracking has no circuit
+// at all behind it and the other two are the Devil Fish's, so none of the
+// three may sit in the front-panel row.
+constexpr uint32_t kVcfModParams[] = {kParamTracking, kParamOverdrive, kParamFilterFM};
 constexpr uint32_t kSlideParams[] = {kParamSlideTime};
 // Type and Muffler are both chips and share a column, which is what keeps the
 // panel to five: the model of the drive stage above the clipper that follows
@@ -60,8 +67,6 @@ constexpr uint32_t kOutParams[] = {kParamVolume};
 // The volume envelope. Nothing on the machine reaches it at all -- its decay is
 // fixed by R123 and C42 -- so the whole panel is the Devil Fish's.
 constexpr uint32_t kAmpParams[] = {kParamSoftAttack, kParamAmpDecay, kParamAmpSustain};
-// Mode and Rate are both chips and share a column, which is what makes room on
-// this row for the delay beside the generator.
 constexpr uint32_t kSeqParams[] = {kParamMode | kStacked, kParamSeqRate | kStacked,
                                    kParamSeqSteps, kParamGate, kParamSwing};
 constexpr uint32_t kVibParams[] = {kParamVibDepth, kParamVibRate, kParamVibDelay};
@@ -81,34 +86,45 @@ constexpr uint32_t kDelayParams[] = {
    kParamDelayTime,            kParamDelayFeedback,
    kParamDelayMix,             kParamDelayWidth,
 };
-// The mods. Ten numbers the schematic does not give, in the order they act:
-// the filter's envelope first, then the accent, then the two shapes and the
-// two limits, then the machine's own unsteadiness.
+// The mods. The numbers the schematic does not give, in the order they act:
+// the filter's envelope first, then everything the accent does, then the two
+// shapes and the two limits, then the machine's own unsteadiness.
+//
+// Accent At, Sweep Time, Sweep Speed and Accent Hold are here rather than
+// beside the Accent knob because they are the same kind of thing as Acc Sweep
+// and Acc Build: they say what an accent *is*, and nobody re-decides that
+// while playing. The knob on the front panel says how much of it to apply.
 constexpr uint32_t kModParams[] = {
-   kParamEnvBias,  kParamEnvDepth, kParamAccSweep, kParamAccBuild, kParamAccGain,
-   kParamAccDecay, kParamDroop,    kParamLadder,   kParamResRange, kParamDrift,
+   kParamEnvBias,          kParamEnvDepth,    kParamAccSweep,
+   kParamAccBuild,         kParamAccGain,     kParamAccDecay,
+   kParamAccentThreshold,  kParamAccentDecay, kParamSweepSpeed | kStacked,
+   kParamAccentHold | kStacked, kParamDroop,  kParamLadder,
+   kParamResRange,         kParamDrift,
 };
 
 #define PANEL(title, cols, rows, arr)                                                              \
    { title, cols, rows, arr, static_cast<int>(sizeof(arr) / sizeof(arr[0])) }
 
-// The first four panels are the window that opens with the plugin; the last
-// four are the section behind the ADVANCED button.
+// The first four panels are the window that opens with the plugin; the rest
+// are the section behind the ADVANCED button.
 constexpr PanelSpec kPanelSpecs[] = {
-   PANEL("VCO", 2, 1, kVcoParams),        PANEL("VCF", 7, 1, kVcfParams),
+   PANEL("VCO", 2, 1, kVcoParams),        PANEL("VCF", 5, 1, kVcfParams),
    PANEL("DRIVE", 5, 1, kDriveParams),    PANEL("OUTPUT", 1, 1, kOutParams),
    PANEL("SEQUENCER", 4, 1, kSeqParams),  PANEL("GENERATOR", 6, 1, kRandParams),
-   PANEL("DELAY", 6, 1, kDelayParams),    PANEL("MODS", 10, 1, kModParams),
-   PANEL("SLIDE", 1, 1, kSlideParams),    PANEL("ACCENT", 4, 1, kAccentParams),
-   PANEL("VIBRATO", 3, 1, kVibParams),    PANEL("AMP", 3, 1, kAmpParams),
+   PANEL("DELAY", 6, 1, kDelayParams),    PANEL("VCF MOD", 3, 1, kVcfModParams),
+   PANEL("SLIDE", 1, 1, kSlideParams),    PANEL("VIBRATO", 3, 1, kVibParams),
+   PANEL("AMP", 3, 1, kAmpParams),        PANEL("MODS", 13, 1, kModParams),
 };
 #undef PANEL
 
 constexpr int kNumPanels = static_cast<int>(sizeof(kPanelSpecs) / sizeof(kPanelSpecs[0]));
 
-// Which panels share a row, in order.
-constexpr int kRowStart[] = {0, 4, 7, 9};
-constexpr int kRowCount[] = {4, 3, 2, 3};
+// Which panels share a row, in order. A row is not padded out to the window's
+// width: a panel is as wide as its cells and what is left over stays dark,
+// because a panel stretched over empty space reads as a panel with something
+// missing from it.
+constexpr int kRowStart[] = {0, 4, 7, 11};
+constexpr int kRowCount[] = {4, 3, 4, 1};
 constexpr int kNumRows = 4;
 // Rows from here on are the collapsible section, drawn below the preset bar.
 constexpr int kAdvancedRow = 2;
@@ -121,6 +137,22 @@ constexpr int kAdvancedRow = 2;
 constexpr uint32_t kPaneParams[] = {kParamPattern, kParamChainMode, kParamChainLength,
                                     kParamRandSeed, kParamPatternOctave};
 constexpr int kNumPaneParams = static_cast<int>(sizeof(kPaneParams) / sizeof(kPaneParams[0]));
+
+// What RESET does not touch. Everything else goes back to the default in
+// params.cpp, and every one of those defaults is the stock machine -- the mods
+// hold the values the engine shipped with, every Devil Fish control is at
+// Whittle's own "limit it to TB-303 sounds" setting, and the drive and the
+// delay are the two stages the machine does not have at all.
+//
+// These five are the exception because none of them is part of the sound: they
+// say which of the sixty-four patterns is playing, where the notes come from
+// and how fast the clock runs. A player who reaches for RESET wants the patch
+// back to nothing, not the sequencer stopped and the bank back at pattern one
+// in the middle of a set. The pattern's own notes are not parameters and are
+// never touched by this.
+constexpr uint32_t kResetKeep[] = {kParamPattern, kParamChainMode, kParamChainLength,
+                                   kParamMode,    kParamSeqRate};
+constexpr int kNumResetKeep = static_cast<int>(sizeof(kResetKeep) / sizeof(kResetKeep[0]));
 
 // The layout is a table, and a table is easy to break by adding a parameter to
 // a panel that has no room for it, or by forgetting to put it on a panel at
@@ -429,6 +461,8 @@ const WindowSpec kSpec = {
    /* advancedRow    */ kAdvancedRow,
    /* advancedLabel  */ "ADVANCED",
    /* windowExpandedH*/ kWindowExpandedH,
+   /* resetKeep      */ kResetKeep,
+   /* resetKeepCount */ kNumResetKeep,
    /* host           */ nullptr, // filled in by createGui: it is the plugin too
 };
 
