@@ -30,6 +30,23 @@ stages after it have no schematic, so they come from the literature instead:
   musicdsp.org entry 256 for the mid/side width matrix, which its author placed
   in the public domain.
 
+And as of 0.9.0 there is a fourth kind of source, for one model only. The
+**Germanium** drive model is the MXR Distortion+, and it comes from a
+*schematic* — which puts it back on the same footing as the rest of the
+instrument. Two documents:
+
+- `!dev/distortion/mxr_distortion_plus.gif`, the original drawing, and
+  `!dev/distortion/MXRDistPlus_LM741_Schematic.png`, somebody's redraw with a
+  500 k pot and silicon diodes. The original is the one modelled: 1 M pot,
+  germanium 1N270.
+- ElectroSmash's component-level analysis at
+  `https://electrosmash.mas-effects.com/mxr-distortion-plus-analysis.html`,
+  which gives the corner frequencies and agrees with the drawing everywhere
+  the two overlap. It is cited as `[ESmash]` in `dsp/drive.h`.
+
+**The schematics in `!dev/distortion/` are not ours to redistribute**, the same
+rule as the service notes beside them. Gitignored; never commit them.
+
 The citation is written beside every equation.
 
 **The reference material lives in `../Documents/` at the repository root and is
@@ -364,6 +381,26 @@ tool names and an environment variable from the folder name, and
   is also what ABL2 spells `c-3`. That coincidence is what makes the two forms
   comparable at all; it is written down in `kAblBaseKey` and should stay tied
   to the `36 +` in `seqFire()`.
+- **Germanium is the only drive model with a frequency-dependent gain, and the
+  distinctness test could not see it.** The test compares harmonic
+  distributions from a 1 kHz sine at matched THD, and at one frequency a diode
+  shunt clipper measures as a soft clipper -- Germanium came in at 0.127
+  against Soft Clip, under the 0.15 bar, on its first run. The fix was to give
+  the distance another axis (THD at 80 Hz against THD at 1 kHz), not to move
+  the bar. If a future model is built around filtering rather than around a
+  curve, expect the same and extend the measurement rather than the threshold.
+- **The 1.5 kHz hump is the check on that model, and it is not a component.**
+  It is the 47 nF shelf climbing from 720 Hz meeting the 741 running out of
+  gain at 4.7 kHz, and `[ESmash]` measured it on the real pedal. That makes it
+  the one number on that page that is evidence rather than input, which is why
+  the self-test sweeps for it. Remove the bandwidth limit and the top-end check
+  fails; remove the shelf and three checks fail.
+- **The shunt clipper is solved, not shaped.** R5 into two diodes and the
+  output pot has no threshold to clamp against -- the diodes are a conductance,
+  and how far the node moves is whatever balances the currents. Three Newton
+  steps per sample at 2x. Do not "simplify" it into a transfer curve with a
+  knee: the series resistance is exactly what makes it soft, and a curve throws
+  that away.
 - **The version lives in two places** — `project(... VERSION)` in
   `CMakeLists.txt` and `kPluginVersion` in `src/saeurekiste.h`. A
   `static_assert` fails the build when they disagree. Bump both.

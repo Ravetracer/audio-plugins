@@ -4165,9 +4165,9 @@ int runSelfTest(const clap_plugin_entry_t *entry, double sampleRate) {
          bool finite = true;
       };
 
-      auto measure = [](int model, double drive, double bias, double amplitude) {
+      auto measure = [](int model, double drive, double bias, double amplitude,
+                        double freq = 1000.0) {
          const double rate = 48000.0;
-         const double freq = 1000.0;
          const int total = 24000;
          const int skip = total / 4;
          DriveStage stage;
@@ -4285,15 +4285,30 @@ int runSelfTest(const clap_plugin_entry_t *entry, double sampleRate) {
       // model with a linear region from a model without one. It is also the
       // difference a player hears first, because every note on this instrument
       // decays through it.
+      // And how much of it survives when the signal is *low*, which is the
+      // other dimension one sine at one frequency cannot see. A model whose
+      // gain is the same at every frequency distorts a bass note exactly as
+      // hard as a mid one; a model built around a frequency-dependent gain
+      // stage does not, and on this instrument -- where the fundamental is
+      // down at 40 to 200 Hz and the harmonics are not -- that is the
+      // difference a player hears before any other. 80 Hz against the 1 kHz
+      // everything else here is measured at.
       std::vector<Spectrum> matched;
       std::vector<double> dynamics;
+      std::vector<double> tilts;
       for (int model = 0; model < kNumDriveModels; ++model) {
          const double d = driveForThd(model, 0.25);
          const Spectrum s = measure(model, d, 0.0, 0.8);
          const Spectrum quiet = measure(model, d, 0.0, 0.2);
+         const Spectrum low = measure(model, d, 0.0, 0.8, 80.0);
          const double ratio = s.thd > 1e-9 ? quiet.thd / s.thd : 0.0;
+         const double tilt = s.thd > 1e-9 ? low.thd / s.thd : 0.0;
          matched.push_back(s);
          dynamics.push_back(ratio);
+         tilts.push_back(tilt);
+         std::printf("       model %d: drive %.3f, THD at 1 kHz %.3f, at 80 Hz %.3f "
+                     "(tilt %.2f), quiet %.2f\n",
+                     model, d, s.thd, low.thd, tilt, ratio);
       }
 
       double closest = 1e9;
@@ -4306,7 +4321,8 @@ int runSelfTest(const clap_plugin_entry_t *entry, double sampleRate) {
                d += diff * diff;
             }
             const double dynamic = dynamics[a] - dynamics[b];
-            d = std::sqrt(d + dynamic * dynamic);
+            const double tilt = tilts[a] - tilts[b];
+            d = std::sqrt(d + dynamic * dynamic + tilt * tilt);
             if (d < closest) {
                closest = d;
                likeA = static_cast<int>(a);
@@ -4330,6 +4346,52 @@ int runSelfTest(const clap_plugin_entry_t *entry, double sampleRate) {
       // and the tanh does not. That is audible on an instrument whose every
       // note decays, and it is the whole reason both are in the set.
       check(closest > 0.15, "no two drive models produce the same spectrum at the same THD");
+
+      // 2b. Germanium against the analysis it was built from.
+      //
+      // [ESmash] measures the pedal's response and reports a mid hump around
+      // 1.5 kHz. Nothing in the model is a 1.5 kHz anything: the hump is what
+      // the 47 n shelf climbing from 720 Hz and the 741 running out of gain at
+      // 4.7 kHz produce between them. So it is the one claim on that page that
+      // is a *check* rather than an input, and it is worth spending a test on
+      // -- take either filter out and it goes away.
+      //
+      // Measured small-signal, at an amplitude far below where the diodes do
+      // anything, so this is the stage's frequency response and not its
+      // distortion.
+      {
+         const double freqs[] = {60.0, 120.0, 250.0, 500.0, 1000.0, 1500.0,
+                                 2000.0, 3000.0, 5000.0, 9000.0};
+         const int count = static_cast<int>(sizeof(freqs) / sizeof(freqs[0]));
+         double mag[10] = {0.0};
+         double peak = 0.0;
+         int peakAt = -1;
+         for (int i = 0; i < count; ++i) {
+            const Spectrum sp = measure(kDriveGermanium, 1.0, 0.0, 0.004, freqs[i]);
+            mag[i] = sp.fundamental;
+            if (sp.fundamental > peak) {
+               peak = sp.fundamental;
+               peakAt = i;
+            }
+         }
+         std::printf("       Germanium small-signal response, 60 Hz to 9 kHz:");
+         for (int i = 0; i < count; ++i)
+            std::printf(" %.0f", peak > 0.0 ? 20.0 * std::log10(mag[i] / peak) : 0.0);
+         std::printf(" dB (peak at %.0f Hz)\n", peakAt >= 0 ? freqs[peakAt] : 0.0);
+
+         check(peakAt >= 0 && freqs[peakAt] >= 1000.0 && freqs[peakAt] <= 2500.0,
+               "Germanium peaks in the mid, where the published analysis measures a hump");
+         // The two sides of it, which is what makes it a hump rather than a
+         // shelf: the bass is well down, and so is the top.
+         check(peak > 0.0 && mag[0] < peak * 0.5,
+               "and its bass is at least 6 dB below that peak -- the 47 nF leg");
+         // 6 dB rather than 3: without the gain-dependent bandwidth limit the
+         // model still rolls off at 9 kHz -- C5 and the oversampler's own
+         // filter see to about 4 dB of it -- so a 3 dB bar passes a model with
+         // the 741 taken out of it. 6 dB does not. Confirmed by removing it.
+         check(peak > 0.0 && mag[count - 1] < peak * 0.5,
+               "and its top end is 6 dB down -- the 741 running out of gain");
+      }
 
       // 3. the documented character of each one, which is the thing a player
       //    is being promised.

@@ -25,8 +25,8 @@ const char *const kSweepSpeedNames[] = {"Normal", "Fast", "Slow"};
 // The drive stage's models, in the same order as DriveModel in dsp/drive.h.
 // A preset stores the *name*, so reordering this table would silently change
 // what an old preset loads as.
-const char *const kDistNames[] = {"Soft Clip", "Overdrive", "Tube",  "Valve Stack",
-                                  "Fuzz",      "Rectifier", "Crush"};
+const char *const kDistNames[] = {"Soft Clip", "Overdrive", "Tube",      "Valve Stack",
+                                  "Fuzz",      "Rectifier", "Crush",     "Germanium"};
 const char *const kOnOffNames[] = {"Off", "On"};
 const char *const kDelaySyncNames[] = {"Free", "Synced"};
 // A preset stores the *name*, so this list may not be reordered.
@@ -411,7 +411,13 @@ const ParamDesc kParams[kNumParams] = {
         "no linear region at all. Hard Clip is a flat top. Rectifier folds the "
         "negative half onto the positive one, which doubles the fundamental -- an "
         "octave up over the note rather than an edge on it. Crush quantises to fewer "
-        "bits. See the manual for which source each one comes from."),
+        "bits. Germanium is the odd one out and the only one taken from a circuit "
+        "rather than from a book: the 1970s stompbox whose gain stage lifts the "
+        "harmonics forty-odd decibels and leaves the fundamental alone, into a pair of "
+        "germanium diodes wired across the path. It is the one model here that "
+        "distorts part of the spectrum and not the rest, which is why it stays tight "
+        "on a bass line where the others thicken. See the manual for which source each "
+        "one comes from."),
    PCT(kParamDistMix, "dist_mix", "Dist Mix", "Drive", 1.0,
        "How much of the driven signal is heard against the clean one. At 100 % the "
        "stage is in the path, which is where it has always been and what every preset "

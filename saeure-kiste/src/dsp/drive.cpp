@@ -54,6 +54,39 @@ constexpr float kValveEqHighGain = 2.818f; // 10^(+9/20)
 // amplifier's DC blocker at the end of the chain.
 constexpr float kRectHpHz = 30.0f;
 
+// ------------------------------------------------- the MXR Distortion+
+//
+// Every one of these is a value printed on the pedal's schematic, in the units
+// the schematic prints them in. Nothing here is fitted.
+constexpr float kMxrRf = 1.0e6f;     // R4, the feedback resistor
+constexpr float kMxrRg = 4.7e3f;     // R3, in series with the DISTORTION pot
+constexpr float kMxrPot = 1.0e6f;    // RV1, the DISTORTION pot
+constexpr float kMxrC3 = 47.0e-9f;   // C3, what makes the gain frequency-dependent
+constexpr float kMxrR5 = 10.0e3f;    // R5, in series before the diodes
+constexpr float kMxrRload = 10.0e3f; // RV2, the OUTPUT pot, wide open
+constexpr float kMxrC5 = 1.0e-9f;    // C5, across the clipper node
+constexpr float kMxrGbw = 1.0e6f;   // the 741's gain-bandwidth product
+// How far a 741 swings on a 9 V supply. The one number neither the schematic
+// nor [ESmash] gives: the datasheet's output swing stops 1.5 V short of each
+// rail, and half of 9 V is 4.5, so the output gives up at about 3 V either way.
+constexpr float kMxrRail = 3.0f;
+constexpr float kMxrInHpHz = 23.5f;     // C2 into the input network, [ESmash]
+constexpr float kMxrOutLpHz = 15900.0f; // R5 with C5, [ESmash]
+
+// The 1N270. Germanium: a saturation current six orders of magnitude above a
+// silicon part's and an ideality near 2, which together put the forward drop
+// at about 0.3 V and give it the soft knee the pedal is liked for.
+constexpr float kMxrIs = 2.0e-6f;
+constexpr float kMxrNVt = 0.0491f; // n * Vt at room temperature, n = 1.9
+
+// What one unit of this instrument's signal is, in volts at the pedal's input,
+// and what the clipped node is divided by on the way back. The first is a hot
+// guitar pickup, which is what the circuit was drawn around; the second is
+// roughly where the diodes hold the node, so the model hands back something
+// near unity before the level matching gets to it.
+constexpr float kMxrInputVolts = 0.25f;
+constexpr float kMxrOutputVolts = 0.30f;
+
 inline float sgn(float x) { return x < 0.0f ? -1.0f : 1.0f; }
 
 } // namespace
@@ -182,6 +215,50 @@ float DriveStage::valveStage(float x, float bias) const {
    return atanShaper(x + kValveGridBias + bias, mValveSat);
 }
 
+// The Distortion+'s clipper, solved rather than shaped.
+//
+// R5 drives a node that has the two diodes and the OUTPUT pot on it. There is
+// no threshold to clamp against here: the diodes are a conductance that rises
+// with voltage, and how far the node moves is whatever balances the three
+// currents. So the node voltage v is the root of
+//
+//   (v - vin)/R5 + v/Rload + Is*(exp(v/Vp) - exp(-v/Vn)) = 0
+//
+// which is Kirchhoff at that node with the Shockley equation for each diode --
+// Vp and Vn being n*Vt for the two directions, doubled on one side when Bias
+// puts a second diode in series there.
+//
+// Newton, from the divider the node would sit at with the diodes removed and
+// clamped to where they hold it. Three steps: the function is smooth and
+// monotone and the first guess is close, and a fourth never moved the result
+// by anything that survived the conversion to float.
+float DriveStage::mxrClipper(float vin) const {
+   const float g = 1.0f / kMxrR5 + 1.0f / kMxrRload; // the linear conductance
+   const float src = vin / kMxrR5;                   // the current R5 pushes in
+
+   float v = src / g;
+   v = clampv(v, -0.6f, 0.6f);
+   for (int i = 0; i < 3; ++i) {
+      // The exponents are bounded because v is: at 0.8 V and the widest Vp
+      // this reaches about 8, so nothing here overflows.
+      const float ep = std::exp(clampv(v / mMxrVp, -14.0f, 14.0f));
+      const float en = std::exp(clampv(-v / mMxrVn, -14.0f, 14.0f));
+      const float f = v * g + kMxrIs * (ep - en) - src;
+      const float df = g + kMxrIs * (ep / mMxrVp + en / mMxrVn);
+      v = clampv(v - f / df, -0.8f, 0.8f);
+   }
+   return v;
+}
+
+// The memoryless half of the circuit: the stage's own gain above its corner,
+// the rails it runs into, and the clipper. The filters that go with it are in
+// process(), because they have state and this is what the level matching
+// measures a curve with.
+float DriveStage::germaniumShape(float x) const {
+   const float volts = x * kMxrInputVolts * (1.0f + mMxrShelfGain);
+   return mxrClipper(clampv(volts, -kMxrRail, kMxrRail)) / kMxrOutputVolts;
+}
+
 // --------------------------------------------------------------- the stage
 
 void DriveStage::prepare(double sampleRate) {
@@ -200,6 +277,16 @@ void DriveStage::prepare(double sampleRate) {
    }
    mValveEqLow.setCutoff(kValveEqLowHz, twice);
    mValveEqHigh.setCutoff(kValveEqHighHz, twice);
+
+   // C5 across the clipper node, at [ESmash]'s figure of 15.9 kHz, which is R5
+   // with C5. Strictly the capacitor sees R5 in parallel with the output pot
+   // and the corner is an octave above that; the published number is the one
+   // taken, both because it is the one a reader can check and because it is
+   // the darker of the two, which is the safer way to be wrong about the top
+   // of a distortion. The other two Germanium filters move with the
+   // DISTORTION pot and are set in setParams().
+   mMxrInHp.setCutoff(kMxrInHpHz, twice);
+   mMxrOutLp.setCutoff(kMxrOutLpHz, twice);
    reset();
 }
 
@@ -214,6 +301,10 @@ void DriveStage::reset() {
    }
    mValveEqLow.reset();
    mValveEqHigh.reset();
+   mMxrInHp.reset();
+   mMxrShelfHp.reset();
+   mMxrOpAmpLp.reset();
+   mMxrOutLp.reset();
 }
 
 float DriveStage::shapeOnly(float x) const {
@@ -237,6 +328,8 @@ float DriveStage::shapeOnly(float x) const {
       return rectifier(x * mPre) * mMakeup;
    case kDriveCrush:
       return crush(x) * mMakeup;
+   case kDriveGermanium:
+      return germaniumShape(x) * mMakeup;
    }
 }
 
@@ -304,6 +397,25 @@ float DriveStage::process(float x) {
 
    case kDriveCrush:
       return mOversampler.tick(x, [this](float s) { return crush(s) * mMakeup; }) * mTrim;
+
+   case kDriveGermanium:
+      // The circuit in order: the input DC block, the frequency-dependent gain
+      // stage, what the 741 can actually follow at that gain, the rails, the
+      // shunt clipper and C5 across it.
+      //
+      // The shelf is the whole trick and is one line: a highpass whose corner
+      // the pot moves, added back to the signal. Below the corner the stage
+      // has unity gain and the bass goes through untouched; above it the
+      // harmonics are lifted by up to 46 dB and clipped. Nothing else in this
+      // list distorts one part of the spectrum and not another.
+      return mOversampler.tick(x, [this](float sample) {
+                const float in = mMxrInHp.tick(sample);
+                const float lifted = in + mMxrShelfGain * mMxrShelfHp.tick(in);
+                const float slewed = mMxrOpAmpLp.tick(lifted);
+                const float railed =
+                   clampv(slewed * kMxrInputVolts, -kMxrRail, kMxrRail);
+                return mMxrOutLp.tick(mxrClipper(railed)) / kMxrOutputVolts * mMakeup;
+             }) * mTrim;
 
    default:
       return softClipLegacy(x * mPre) * mMakeup * mTrim;
@@ -391,6 +503,41 @@ void DriveStage::setParams(int model, float drive, float bias, float mix) {
       const float bits = 9.0f - mDrive * 7.0f;
       mCrushStep = 2.0f / (std::exp2(bits) - 1.0f);
       mCrushOffset = mBias * mCrushStep * 0.5f;
+      mPre = 1.0f;
+      break;
+   }
+
+   case kDriveGermanium: {
+      // The DISTORTION pot, and the taper is the schematic's own: it is a
+      // reverse-log part, which on a non-inverting stage is what makes the
+      // gain move evenly across the sweep instead of doing everything in the
+      // last tenth of the travel. So the *gain* is stepped exponentially and
+      // the resistance is worked back out of it, rather than the other way
+      // round.
+      const float gMin = 1.0f + kMxrRf / (kMxrRg + kMxrPot); // pot wide open
+      const float gMax = 1.0f + kMxrRf / kMxrRg;             // pot at zero
+      const float gain = gMin * std::pow(gMax / gMin, mDrive);
+      mMxrShelfGain = gain - 1.0f; // Rf/Rg, the height of the shelf
+      const float rg = kMxrRf / mMxrShelfGain;
+
+      const float twice = static_cast<float>(mSampleRate * 2.0);
+      // The corner climbs with the gain, because one pot sets both: 3.4 Hz and
+      // 6 dB at the bottom of the travel, 720 Hz and 46 dB at the top. The
+      // pedal gets thinner as it gets dirtier and this is the line that does
+      // it.
+      mMxrShelfHp.setCutoff(
+         static_cast<float>(1.0 / (6.283185307 * static_cast<double>(rg) * kMxrC3)), twice);
+      // What a 741 can follow at that gain. Held below Nyquist at the
+      // oversampled rate, which only ever bites at the quiet end of the pot
+      // where the limit is half a megahertz and means nothing anyway.
+      const float bw = kMxrGbw / gain;
+      mMxrOpAmpLp.setCutoff(bw > twice * 0.45f ? twice * 0.45f : bw, twice);
+
+      // Bias is the diode-swap the schematic suggests beside D1 and D2: a
+      // second diode in series on one side, which doubles that side's forward
+      // drop. Centred is the matched germanium pair the pedal shipped with.
+      mMxrVp = kMxrNVt * (1.0f + (mBias > 0.0f ? mBias : 0.0f));
+      mMxrVn = kMxrNVt * (1.0f + (mBias < 0.0f ? -mBias : 0.0f));
       mPre = 1.0f;
       break;
    }
@@ -491,6 +638,14 @@ void DriveStage::setParams(int model, float drive, float bias, float mix) {
       break;
    case kDriveCrush:
       mTrim = 1.56f;
+      break;
+   case kDriveGermanium:
+      // The quietest of them before matching, and for a reason that is the
+      // model rather than an oversight: the shelf leaves the fundamental at
+      // unity and a 303 line is mostly fundamental, so the RMS matching above
+      // -- which measures a curve, not a filter -- cannot see what the 47 nF
+      // leg takes out. Measured 3.7 dB under the rest of the set.
+      mTrim = 1.52f;
       break;
    default:
       mTrim = 1.0f;

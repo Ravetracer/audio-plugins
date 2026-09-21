@@ -97,12 +97,12 @@ says so in its own tooltip.
 | **Dist Mix** | -- | How much of the driven signal is heard against the clean one. At zero the stage is bypassed. |
 | **Volume** | VR8 | Stops at unity, because the output stage does. |
 
-### The drive stage's seven models
+### The drive stage's eight models
 
 Everything in front of this stage is fixed by the service notes. There is no
-schematic for the stage itself, so it is built the other way round -- from the
-literature. Every model is an equation out of a named source, and the source is
-in the code beside it:
+schematic for the stage itself, so seven of the eight are built the other way
+round -- from the literature, every one an equation out of a named source, with
+the source in the code beside it. The eighth has a schematic of its own:
 
 | Type | Source | What it is |
 |---|---|---|
@@ -113,6 +113,7 @@ in the code beside it:
 | **Fuzz** | *DAFX* eq 4.15 + Pirkle's FEXP1 | Exponential from the first volt, no linear region, asymmetric by default -- which is how both books describe a Fuzz Face. |
 | **Rectifier** | *DAFX* 4.3.3 | Folds the negative half onto the positive one and doubles the fundamental: an octave over the note rather than an edge on it. |
 | **Crush** | Pirkle, eq 19.1 | The quantiser, twelve bits down to three. |
+| **Germanium** | the MXR Distortion+'s schematic, plus [ElectroSmash's analysis](https://electrosmash.mas-effects.com/mxr-distortion-plus-analysis.html) | The pedal, component by component: a non-inverting 741 whose 47 nF leg gives it unity gain at DC and up to 46 dB above a corner the Drive knob moves from 3 Hz to 720 Hz, the 741's own 4.7 kHz bandwidth at full gain, and a shunt pair of germanium 1N270s behind a 10 k resistor. The only model whose gain depends on frequency, which is why it stays tight on a bass line where the rest thicken. |
 
 Both books insist that a nonlinearity needs oversampling, so every model runs at
 twice the sample rate. Soft Clip is the exception, deliberately: it predates all
@@ -123,10 +124,19 @@ rather than on a sine, so switching between them compares character and not
 level. Soft Clip is the loud one and always was -- its gain reaches 24 at the
 top of the knob.
 
-**Why seven and not fourteen.** There were fourteen, and they all sounded the
+**Germanium is named for what it is, not for whose it is**, the same as every
+other entry in that table -- the trademark is somebody else's and the panel does
+not carry it. The schematic, the analysis and this file name the pedal outright;
+the shipped manual describes it without doing so.
+
+Its Bias control is the diode-array modification the schematic itself suggests
+beside D1 and D2: a second diode in series on one side, doubling that side's
+forward drop. Centred is the matched germanium pair the pedal shipped with.
+
+**Why eight and not fourteen.** There were fourteen, and they all sounded the
 same: any two memoryless clippers driven hard enough become the same square
 wave, level matching removes what is left, and none of them had filtering of its
-own. What tells these seven apart is that they are built differently. The
+own. What tells these eight apart is that they are built differently. The
 self-test measures it now instead of assuming it -- each model's drive is
 searched for the setting that gives 25 % THD and their harmonic distributions
 are compared there, so two models that measure the same at the same distortion

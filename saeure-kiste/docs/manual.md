@@ -8,7 +8,7 @@ subtitle: CLAP and VST3 instrument for Linux and Windows
 
 *A monophonic acid bass synthesiser. Linux and Windows, CLAP and VST3.*
 
-Version 0.8.0
+Version 0.9.0
 
 ---
 
@@ -147,14 +147,15 @@ the modification are gathered in §10.
 | **Drive** | 0 – 100 % | 20 % | How hard the model is worked. What it actually moves depends on the model: Schetzen's thresholds, Bendiksen's `dist`, a triode's saturation, a bit depth. |
 | **Bias** | −100 – +100 % | 0 % | Where the model sits on its own curve. At the centre each one is at the operating point its source specifies; away from it the two halves of the wave are treated differently, which is what puts even harmonics into a sound that otherwise has only odd ones. |
 | **Tone** | 800 Hz – 18 kHz | 8 kHz | A lowpass after the drive. At the top of its range it does nothing. |
-| **Type** | 7 models | Soft Clip | Which model the stage is. See below. |
+| **Type** | 8 models | Soft Clip | Which model the stage is. See below. |
 | **Dist Mix** | 0 – 100 % | 100 % | How much of the driven signal is heard against the clean one. At zero the stage is bypassed however Drive and Type are set. |
 
-#### The seven models
+#### The eight models
 
 Everything in front of this stage is fixed by the service notes. There is no
-schematic for the stage itself, so it is built the other way round — from the
-literature. Every model is an equation out of a named source:
+schematic for the stage itself, so seven of the eight are built the other way
+round — from the literature, every one an equation out of a named source. The
+eighth is built from a circuit, and is described under the table.
 
 - **[DAFX]** U. Zölzer (ed.), *DAFX: Digital Audio Effects*, 2nd edition, Wiley
   2011, chapter 4, *Nonlinear processing* (Dutilleux, Dempwolf, Holters,
@@ -162,6 +163,9 @@ literature. Every model is an equation out of a named source:
 - **[Pirkle]** W. Pirkle, *Designing Audio Effect Plugins in C++*, 2nd edition,
   Routledge 2019, chapter 19, *Nonlinear Processing: Distortion, Tube
   Simulation, and HF Exciters*.
+- **[ESmash]** ElectroSmash, *MXR Distortion+ Analysis* — a
+  component-by-component reading of that pedal, with the corner frequencies
+  worked out.
 
 | Type | Source | What it is |
 |---|---|---|
@@ -172,9 +176,42 @@ literature. Every model is an equation out of a named source:
 | **Fuzz** | [DAFX] eq 4.15 + [Pirkle] FEXP1, eq 19.2 | Exponential from the first volt — no linear region at all, which is what "fuzz" means. Asymmetric by default, because both sources describe it that way: the Fuzz Face clips its negative half lower than its positive one. |
 | **Rectifier** | [DAFX] 4.3.3, [Pirkle] table 19.2 | Folds the negative half of the wave onto the positive one, which doubles the number of zero crossings and therefore the fundamental. An octave *over* the note rather than an edge on it, and the only model here that changes the pitch of what it is given. Bias runs it from half-wave to full-wave. |
 | **Crush** | [Pirkle] eq 19.1 | Quantised to fewer bits, twelve down to three. Digital rather than a circuit, and unmistakable. |
+| **Germanium** | the pedal's schematic + [ESmash] | A 1970s stompbox, modelled component by component. The one model here that distorts part of the spectrum and leaves the rest alone. |
 
 A hard model is made usable with **Dist Mix**: Fuzz or Rectifier at 25 % adds
 something to a line that is otherwise still the machine.
+
+**Germanium is the odd one out**, and deliberately. The other seven are
+equations; this one is a circuit — a distortion pedal from the middle 1970s,
+whose schematic is a published document in the same way the silverbox's own
+service documentation is, and which is modelled the same way: component by
+component, with every value read off the drawing.
+
+What makes it worth having is not that it is a pedal. It is the one model here
+whose gain is **not the same at every frequency**. A 47 nF capacitor in the gain
+stage's lower leg means the circuit has unity gain at the bottom and its full
+gain — up to 46 dB — only above a corner that the Drive knob moves with it. Turn
+Drive up and the corner climbs from 3 Hz to 720 Hz while the gain climbs with
+it, so what gets distorted is the harmonics and what is left alone is the
+fundamental. Every other model in this table distorts a bass note and its
+overtones equally, and on this instrument that is what thickens a line until it
+loses its bottom. This one does not: it stays tight down low and takes its edge
+from the top, which is why it sits differently in a mix from anything else here.
+
+The rest of it is the circuit too. The op-amp is an old, slow one, and at full
+gain it cannot follow above about 4.7 kHz — so the response is a broad hump in
+the middle rather than a shelf, and the published analysis of the pedal measures
+that hump at 1.5 kHz. The clipping is a pair of germanium diodes wired *across*
+the signal path behind a 10 kΩ resistor rather than in a feedback loop: they do
+not clamp the signal so much as load it, which is a much softer thing to do, and
+germanium starts conducting at about a third of the voltage silicon does.
+
+**Bias** does something specific here. The schematic carries a note beside the
+two diodes suggesting an array with two one way and one the other — the
+asymmetric-clipping modification people have been doing to these for decades.
+Centred, Bias is the matched pair the pedal shipped with; either way from centre
+puts a second diode in series on that side, clipping at twice the voltage and
+putting even harmonics in.
 
 **Both sources say the same thing about aliasing** — a nonlinearity needs
 oversampling ([DAFX] 4.1.1 and figure 4.5, [Pirkle] 19.1) — so every model here
@@ -182,13 +219,14 @@ runs at twice the sample rate with an interpolating filter on the way in and a
 band-limiting one on the way out. Soft Clip is the exception, and deliberately:
 it is the stage that predates all of this and it renders what it always did.
 
-**Why seven and not fourteen.** There were fourteen, once, and they all sounded
+**Why eight and not fourteen.** There were fourteen, once, and they all sounded
 the same. Any two memoryless clippers driven hard enough become the same square
 wave; matching their levels removes what little is left; and none of them had
 any filtering of its own. What tells these apart is that they are built
 differently — a linear region that survives, an operating point off centre,
-four stages in series with a tone stack between them, a rectifier, a quantiser —
-and it is measured rather than taken on trust: each model's Drive is set to
+four stages in series with a tone stack between them, a rectifier, a quantiser,
+a gain that depends on frequency — and it is measured rather than taken on
+trust: each model's Drive is set to
 wherever it gives 25 % total harmonic distortion, and the harmonics it makes
 there are compared with the others'. Any two clippers meet at the top of the
 knob, so that is the setting where a difference has to show if it is real.

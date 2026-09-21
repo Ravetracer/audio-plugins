@@ -1,11 +1,69 @@
 # SäureKiste -- status
 
-Version 0.8.0. Linux and Windows, CLAP and VST3. 63 parameters, 27 presets,
-builds clean, self-test passes with no failures across 268 checks, and
+Version 0.9.0. Linux and Windows, CLAP and VST3. 63 parameters, 27 presets,
+builds clean, self-test passes with no failures across 271 checks, and
 `tools/check-instances.sh` passes with two editors open at once.
 
 Six of seven fixes were confirmed by backing the bug out and watching the suite
 fail; the seventh has no contract to assert. See `TODO.md` §3.
+
+0.9.0 adds an eighth drive model, and it is the first one taken from a circuit
+rather than from a book.
+
+**Germanium** is the MXR Distortion+, modelled component by component from its
+schematic and from ElectroSmash's component-level analysis of it. The pedal's
+own name is not on the panel -- see the note at the end of this section.
+
+It earns a place in a set that was deliberately capped at seven because it is
+the only model here **whose gain is not the same at every frequency**, and on a
+bass instrument that is the difference that matters most:
+
+- C3, 47 nF, sits in the non-inverting stage's lower leg, so the stage has
+  unity gain at DC and its full gain only above a corner. The DISTORTION pot
+  sets both at once: 6 dB and 3 Hz at the bottom of the travel, 46 dB and
+  720 Hz at the top. The harmonics get lifted forty-odd decibels and the
+  fundamental does not, which is why the model stays tight down low where every
+  other one in the set thickens.
+- The 741's gain-bandwidth product is 1 MHz, so at full gain the stage cannot
+  follow above 4.7 kHz. That is a datasheet number rather than a taste
+  decision, and it is what turns the shelf into a hump.
+- The clipper is a *shunt*: 10 k in series into two anti-parallel germanium
+  1N270s and the output pot. It cannot be written as a transfer curve with a
+  threshold -- the diodes load the signal rather than clamping it -- so the
+  model solves the node equation with three Newton steps per sample instead.
+- Bias is the diode-array modification the schematic itself suggests beside D1
+  and D2: a second diode in series on one side, doubling that side's forward
+  drop. Centred is the matched pair the pedal shipped with.
+
+**The mid hump is a test, not a setting.** The published analysis measures a
+hump at 1.5 kHz. Nothing in the model is a 1.5 kHz anything -- it is what the
+shelf climbing from 720 Hz and the op-amp giving out at 4.7 kHz make between
+them. The self-test sweeps the model small-signal and requires the peak to land
+between 1 and 2.5 kHz with both sides at least 6 dB down; it measures 1.5 kHz,
+-20 dB at 60 Hz and -10 dB at 9 kHz. Removing the bandwidth limit fails the
+top-end check and removing the shelf fails three checks at once, both confirmed
+by doing it.
+
+**The distinctness test needed a new axis, and that is a finding rather than an
+accommodation.** Germanium first measured 0.127 against Soft Clip, under the
+0.15 bar -- because the test compared harmonic distributions from a single
+1 kHz sine, and at one frequency a diode shunt clipper is just another soft
+clipper. What it could not see is the only thing Germanium is *for*. The
+measurement now also takes each model's THD at 80 Hz against its THD at 1 kHz
+and puts that ratio in the distance. The bar is unchanged at 0.15, the previous
+closest pair moved from 0.17 to 0.17, and Germanium now sits at 0.170.
+
+**Levels.** Measured through the plugin on Machine Running at 55 % drive, as
+every other model's trim was: Germanium came out 3.7 dB under the rest of the
+set, because the RMS matching measures a curve and cannot see what the 47 nF
+leg takes out of a line that is mostly fundamental. Its trim is 1.52 and it now
+lands within 0.2 dB of the others.
+
+**On the name.** The panel says "Germanium", not the pedal's. The existing
+model names describe what a model *is* rather than whose it is, the manual
+describes it without naming it, and the trademark belongs to somebody else --
+but the schematic, the analysis and this file all name it outright, exactly as
+the repository names Roland where the manual does not.
 
 0.8.0 imports patterns written by another instrument.
 

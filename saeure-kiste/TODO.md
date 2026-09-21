@@ -66,6 +66,23 @@ preset, which exists for exactly this.
   seven are different models in a different order, so mapping the number would
   be worse than not mapping it. A named table -- ABL's mode N is this plugin's
   Type X -- would need somebody to sit and listen to both.
+- **Only one pedal is modelled.** Germanium is the MXR Distortion+ and the
+  approach generalises: a schematic, the component values read off it, and the
+  parts that are filters kept as filters. What made it worth doing is that its
+  gain depends on frequency, so it is not another curve. Judge the next
+  candidate the same way -- a pedal whose character is a transfer curve has
+  nothing to add to a set that already has seven of those, and the distinctness
+  test will say so.
+- **Germanium's rail voltage is the one fitted number in it.** 3.0 V, from the
+  741 datasheet's "1.5 V short of each rail" on a 9 V supply. Neither the
+  schematic nor the published analysis gives the supply's behaviour under load,
+  and a real pedal on a dying battery clips lower. It is not a control, which
+  on this plugin's own rule it arguably should be.
+- **The 500 k / silicon variant is not offered.** The second schematic in
+  `!dev/distortion/` is a redraw with a 500 k pot and 1N4148s, and the original
+  drawing suggests three other diode swaps in a note. Bias covers the
+  asymmetric one. The rest would be a second model or a second control, and
+  neither is obviously worth it until somebody wants it.
 - **No clear-all for the bank.** COPY and PASTE landed in 0.3.0 and DEL, which
   empties the selected slot, in 0.5.0; emptying the whole bank in one go still
   means DEL on each pattern, or loading Blank Slate.
