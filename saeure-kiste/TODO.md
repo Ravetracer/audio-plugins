@@ -73,6 +73,18 @@ preset, which exists for exactly this.
   candidate the same way -- a pedal whose character is a transfer curve has
   nothing to add to a set that already has seven of those, and the distinctness
   test will say so.
+- **The SD-2's tone stacks are not modelled.** Both channels have one -- VR2b
+  with C32 and C12 on Crunch, VR2a with C33 on Lead -- and both are left at
+  centre, because this plugin has a Tone control sitting right after the drive
+  stage and two of them fighting is worse than one. The consequence is that the
+  service notes' TONE MIN and TONE MAX waveforms cannot both be reproduced;
+  only the difference between the two *modes* is tested. Exposing the pedal's
+  tone would want a control this panel has no column for.
+- **Lead's third stage input resistance is the least certain value in either
+  model.** R60 47 k is read as the input leg of op-amp 4a, giving a gain of
+  2.13. If that is wrong the gain is wrong with it, though the two clippers
+  either side of it mean the audible consequence is small. Worth checking
+  against a second copy of the drawing if one turns up.
 - **Germanium's rail voltage is the one fitted number in it.** 3.0 V, from the
   741 datasheet's "1.5 V short of each rail" on a 9 V supply. Neither the
   schematic nor the published analysis gives the supply's behaviour under load,

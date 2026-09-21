@@ -1,5 +1,6 @@
 #include "dsp/drive.h"
 
+#include <algorithm>
 #include <cmath>
 
 namespace saeurekiste {
@@ -86,6 +87,67 @@ constexpr float kMxrNVt = 0.0491f; // n * Vt at room temperature, n = 1.9
 // near unity before the level matching gets to it.
 constexpr float kMxrInputVolts = 0.25f;
 constexpr float kMxrOutputVolts = 0.30f;
+
+// ------------------------------------------------------ the BOSS SD-2
+//
+// Values off the service notes' circuit diagram, in the units it prints them
+// in. The reference designators are the schematic's own.
+constexpr float kSd2InHpHz = 62.0f;  // C36/C48 into R51, with the buffer ideal
+constexpr float kSd2Rail = 3.5f;     // M5218AL on 9 V, biased at half of it
+
+// CRUNCH: op-amp 2a, non-inverting.
+constexpr float kSdcRfMin = 10.0e3f;  // R36 alone, GAIN-C at zero
+constexpr float kSdcRfMax = 260.0e3f; // R36 + VR1b wide open
+constexpr float kSdcRg = 680.0f;      // R37
+constexpr float kSdcCg = 4.7e-6f;     // C28, which puts the corner at 50 Hz
+constexpr float kSdcOutLpHz = 7300.0f; // R32 with C24
+
+// LEAD: three stages.
+constexpr float kSdlRfMax = 250.0e3f; // VR1a
+constexpr float kSdlRg = 4.7e3f;      // R28
+constexpr float kSdlCg = 82.0e-9f;    // C10 -- the corner is 413 Hz
+constexpr float kSdlLp1Hz = 9400.0f;  // C19 across VR1a
+constexpr float kSdlHp2Hz = 156.0f;   // C18 into R38
+constexpr float kSdlGain2 = 66.7f;    // R29 / R38
+constexpr float kSdlLp2Hz = 884.0f;   // C20 across R29
+constexpr float kSdlShuntR = 1.0e3f;  // R52, in front of the LEDs
+constexpr float kSdlShuntLoad = 10.0e3f; // R54
+constexpr float kSdlLp3Hz = 7200.0f;  // R53 with C37
+constexpr float kSdlGain3 = 2.13f;    // R59 / R60
+constexpr float kSdlRf3 = 100.0e3f;   // R59, what the feedback diodes sit across
+constexpr float kSdlLp4Hz = 3400.0f;  // C41 across R59
+constexpr float kSdlGain4 = 3.03f;    // R58 / R39
+constexpr float kSdlRgFloor = 50.0f;  // what a pot still has at the end stop
+
+// The diodes, as Shockley pairs. A stack in series has the same saturation
+// current and the sum of the n*Vt, which is why the two-diode entries are the
+// one-diode entry with the voltage doubled.
+constexpr float kSiIs = 2.5e-9f;    // 1SS133
+constexpr float kSiVt = 0.0465f;    // 0.60 V at a milliamp
+constexpr float kSiVt2 = 0.0930f;   // two of them in series
+constexpr float kLedIs = 3.0e-13f;  // LN28RP, red
+constexpr float kLedVt = 0.0750f;   // 1.64 V at a milliamp
+constexpr float kLedSiIs = 9.8e-12f; // an LED and a silicon diode in series,
+constexpr float kLedSiVt = 0.1215f;  // matched to 2.24 V at a milliamp
+
+// What one unit of this instrument's signal is, in volts at the pedal's input.
+// The service notes' own test signal is 20 mV peak to peak, which is a guitar
+// played gently; this is a little hotter than that, because the thing in front
+// of it here is an amplifier rather than a pickup.
+// What one unit of this instrument's signal is, in volts at the pedal's input,
+// and the one fitted number in either channel.
+//
+// It has to be per channel, and that is the circuit rather than a fudge: the
+// pedal carries a separate GAIN pot for each mode -- the pots are dual-gang
+// for exactly that reason -- and the two channels are nothing like each other
+// in gain. CRUNCH's single stage starts at 15.7 and needs a hot input before
+// its 1.6 V clipper does anything at all. LEAD has 430 times through it before
+// its own pot is touched, and at a guitar's level it is already clipping. One
+// Drive knob has to serve both here, so where each channel starts on it is set
+// here instead. The service notes' own test signal is 20 mV peak to peak,
+// which is between the two.
+constexpr float kSdcInputVolts = 0.12f;
+constexpr float kSdlInputVolts = 0.02f;
 
 inline float sgn(float x) { return x < 0.0f ? -1.0f : 1.0f; }
 
@@ -232,22 +294,57 @@ float DriveStage::valveStage(float x, float bias) const {
 // clamped to where they hold it. Three steps: the function is smooth and
 // monotone and the first guess is close, and a fourth never moved the result
 // by anything that survived the conversion to float.
-float DriveStage::mxrClipper(float vin) const {
-   const float g = 1.0f / kMxrR5 + 1.0f / kMxrRload; // the linear conductance
-   const float src = vin / kMxrR5;                   // the current R5 pushes in
-
-   float v = src / g;
-   v = clampv(v, -0.6f, 0.6f);
+float DriveStage::diodeNode(float src, float g, float isP, float vP, float isN, float vN) {
+   // Start from where the node would sit with the diodes removed, clamped to
+   // roughly where they will hold it. Three Newton steps: the function is
+   // smooth and monotone and the first guess is close, and a fourth never
+   // moved the answer by anything that survived the conversion to float.
+   const float ceiling = 12.0f * (vP > vN ? vP : vN);
+   float v = clampv(src / g, -ceiling, ceiling);
    for (int i = 0; i < 3; ++i) {
-      // The exponents are bounded because v is: at 0.8 V and the widest Vp
-      // this reaches about 8, so nothing here overflows.
-      const float ep = std::exp(clampv(v / mMxrVp, -14.0f, 14.0f));
-      const float en = std::exp(clampv(-v / mMxrVn, -14.0f, 14.0f));
-      const float f = v * g + kMxrIs * (ep - en) - src;
-      const float df = g + kMxrIs * (ep / mMxrVp + en / mMxrVn);
-      v = clampv(v - f / df, -0.8f, 0.8f);
+      const float ep = std::exp(clampv(v / vP, -14.0f, 14.0f));
+      const float en = std::exp(clampv(-v / vN, -14.0f, 14.0f));
+      // The -1 of each Shockley term matters here in a way it did not when
+      // both directions were the same diode: without it an asymmetric pair
+      // carries a current at rest and the node sits off zero.
+      const float f = v * g + isP * (ep - 1.0f) - isN * (en - 1.0f) - src;
+      const float df = g + isP * ep / vP + isN * en / vN;
+      v = clampv(v - f / df, -ceiling, ceiling);
    }
    return v;
+}
+
+float DriveStage::mxrClipper(float vin) const {
+   return diodeNode(vin / kMxrR5, 1.0f / kMxrR5 + 1.0f / kMxrRload, kMxrIs, mMxrVp, kMxrIs,
+                    mMxrVn);
+}
+
+// The SD-2's two channels, memoryless: the gains each stage has above its own
+// corner, the rails, and the clippers. The filters that go between them are in
+// process(), because they have state; this is what the level matching measures
+// a curve with.
+float DriveStage::sd2Shape(float x) const {
+   const float in = x * (mModel == kDriveCrunch ? kSdcInputVolts : kSdlInputVolts);
+   if (mModel == kDriveCrunch) {
+      // Non-inverting with the clipper across the feedback resistor: the
+      // op-amp drives whatever current the leg asks for through the diodes and
+      // R in parallel, and the output is the input plus that voltage.
+      const float rf = mSd2ShelfGain * kSdcRg; // the shelf's height, as ohms
+      const float u = diodeNode(in / kSdcRg, 1.0f / rf, mSd2FbIsP, mSd2FbVp, mSd2FbIsN, mSd2FbVn);
+      return clampv(in + u, -kSd2Rail, kSd2Rail) / kSd2Rail;
+   }
+   // Lead. Two gain stages into the shunt LEDs, then the feedback clipper,
+   // then the last stage.
+   const float rf = mSd2ShelfGain * kSdlRg;
+   const float a = clampv(in + diodeNode(in / kSdlRg, 1.0f / rf, kSiIs, 1.0f, kSiIs, 1.0f),
+                          -kSd2Rail, kSd2Rail);
+   const float b = clampv(-a * mSd2Gain2, -kSd2Rail, kSd2Rail);
+   const float c = diodeNode(b / kSdlShuntR, 1.0f / kSdlShuntR + 1.0f / kSdlShuntLoad, kLedIs,
+                             kLedVt, kLedIs, kLedVt);
+   const float d = clampv(-diodeNode(c * mSd2Gain3 / kSdlRf3, 1.0f / kSdlRf3, mSd2FbIsP, mSd2FbVp,
+                                     mSd2FbIsN, mSd2FbVn),
+                          -kSd2Rail, kSd2Rail);
+   return clampv(-d * mSd2Gain4, -kSd2Rail, kSd2Rail) / kSd2Rail;
 }
 
 // The memoryless half of the circuit: the stage's own gain above its corner,
@@ -287,6 +384,13 @@ void DriveStage::prepare(double sampleRate) {
    // DISTORTION pot and are set in setParams().
    mMxrInHp.setCutoff(kMxrInHpHz, twice);
    mMxrOutLp.setCutoff(kMxrOutLpHz, twice);
+
+   // The SD-2's fixed corners. The gain shelf's moves with the pot and is set
+   // in setParams(); everything here is a pair of components.
+   mSd2InHp.setCutoff(kSd2InHpHz, twice);
+   mSd2Hp2.setCutoff(kSdlHp2Hz, twice);
+   mSd2Lp2.setCutoff(kSdlLp2Hz, twice);
+   mSd2Lp3.setCutoff(kSdlLp3Hz, twice);
    reset();
 }
 
@@ -305,6 +409,13 @@ void DriveStage::reset() {
    mMxrShelfHp.reset();
    mMxrOpAmpLp.reset();
    mMxrOutLp.reset();
+   mSd2InHp.reset();
+   mSd2ShelfHp.reset();
+   mSd2Hp2.reset();
+   mSd2Lp1.reset();
+   mSd2Lp2.reset();
+   mSd2Lp3.reset();
+   mSd2Lp4.reset();
 }
 
 float DriveStage::shapeOnly(float x) const {
@@ -330,6 +441,9 @@ float DriveStage::shapeOnly(float x) const {
       return crush(x) * mMakeup;
    case kDriveGermanium:
       return germaniumShape(x) * mMakeup;
+   case kDriveCrunch:
+   case kDriveLead:
+      return sd2Shape(x) * mMakeup;
    }
 }
 
@@ -415,6 +529,42 @@ float DriveStage::process(float x) {
                 const float railed =
                    clampv(slewed * kMxrInputVolts, -kMxrRail, kMxrRail);
                 return mMxrOutLp.tick(mxrClipper(railed)) / kMxrOutputVolts * mMakeup;
+             }) * mTrim;
+
+   case kDriveCrunch:
+      // One stage: the input network, the gain shelf with the clipper across
+      // its feedback resistor, and R32 with C24 on the way out.
+      return mOversampler.tick(x, [this](float sample) {
+                const float in = mSd2InHp.tick(sample) * kSdcInputVolts;
+                const float lift = mSd2ShelfHp.tick(in); // what the leg passes
+                const float rf = mSd2ShelfGain * kSdcRg;
+                const float u = diodeNode(lift / kSdcRg, 1.0f / rf, mSd2FbIsP, mSd2FbVp,
+                                          mSd2FbIsN, mSd2FbVn);
+                const float out = clampv(in + u, -kSd2Rail, kSd2Rail);
+                return mSd2Lp4.tick(mSd2Lp1.tick(out)) / kSd2Rail * mMakeup;
+             }) * mTrim;
+
+   case kDriveLead:
+      // Three stages and two clippers, in the order the signal meets them.
+      return mOversampler.tick(x, [this](float sample) {
+                const float in = mSd2InHp.tick(sample) * kSdlInputVolts;
+                const float lift = mSd2ShelfHp.tick(in);
+                const float rf = mSd2ShelfGain * kSdlRg;
+                const float a = mSd2Lp1.tick(clampv(
+                   in + diodeNode(lift / kSdlRg, 1.0f / rf, kSiIs, 1.0f, kSiIs, 1.0f),
+                   -kSd2Rail, kSd2Rail));
+                const float b =
+                   clampv(-mSd2Lp2.tick(mSd2Hp2.tick(a)) * mSd2Gain2, -kSd2Rail, kSd2Rail);
+                // The LEDs, shunt to ground behind R52.
+                const float c = mSd2Lp3.tick(diodeNode(b / kSdlShuntR,
+                                                       1.0f / kSdlShuntR + 1.0f / kSdlShuntLoad,
+                                                       kLedIs, kLedVt, kLedIs, kLedVt));
+                // And the asymmetric silicon, in 4a's feedback loop.
+                const float d = clampv(-mSd2Lp4.tick(diodeNode(c * mSd2Gain3 / kSdlRf3,
+                                                               1.0f / kSdlRf3, mSd2FbIsP,
+                                                               mSd2FbVp, mSd2FbIsN, mSd2FbVn)),
+                                       -kSd2Rail, kSd2Rail);
+                return clampv(-d * mSd2Gain4, -kSd2Rail, kSd2Rail) / kSd2Rail * mMakeup;
              }) * mTrim;
 
    default:
@@ -503,6 +653,59 @@ void DriveStage::setParams(int model, float drive, float bias, float mix) {
       const float bits = 9.0f - mDrive * 7.0f;
       mCrushStep = 2.0f / (std::exp2(bits) - 1.0f);
       mCrushOffset = mBias * mCrushStep * 0.5f;
+      mPre = 1.0f;
+      break;
+   }
+
+   case kDriveCrunch:
+   case kDriveLead: {
+      const float twice = static_cast<float>(mSampleRate * 2.0);
+      if (mModel == kDriveCrunch) {
+         // GAIN-C over R37, with C28 making it a shelf: unity below 50 Hz,
+         // up to 383 above it. The pot is an A taper, so the gain is stepped
+         // exponentially across the knob as the pedal's own knob steps it.
+         const float gMin = 1.0f + kSdcRfMin / kSdcRg;
+         const float gMax = 1.0f + kSdcRfMax / kSdcRg;
+         const float gain = gMin * std::pow(gMax / gMin, mDrive);
+         mSd2ShelfGain = gain - 1.0f;
+         mSd2ShelfHp.setCutoff(
+            static_cast<float>(1.0 / (6.283185307 * kSdcRg * kSdcCg)), twice);
+         // The M5218 is a decent audio part rather than a 741, so its
+         // bandwidth limit lands near the top of the band and C15 is what
+         // actually sets the corner. Both are gentle and both are here.
+         const float bw = 10.0e6f / gain;
+         mSd2Lp1.setCutoff(bw > twice * 0.45f ? twice * 0.45f : bw, twice);
+         mSd2Lp4.setCutoff(kSdcOutLpHz, twice);
+         // D7 and D6 in series against D4 on its own. Bias leans the pair
+         // further apart or brings it back towards matched.
+         const float lean = mBias * 0.35f;
+         mSd2FbIsP = kLedSiIs;
+         mSd2FbVp = kLedSiVt * (1.0f + lean);
+         mSd2FbIsN = kLedIs;
+         mSd2FbVn = kLedVt * (1.0f - lean);
+      } else {
+         const float gain = 1.0f + (kSdlRfMax / kSdlRg) * mDrive * mDrive;
+         // A pot at zero is a short, and a short across the feedback resistor
+         // makes the stage a follower -- but it also makes 1/Rf infinite and
+         // the solver's first step 0 * inf. The floor is the wiper and track
+         // resistance a real pot still has at the end of its travel, which is
+         // both the physical answer and a finite one.
+         mSd2ShelfGain = std::max(gain - 1.0f, kSdlRgFloor / kSdlRg);
+         mSd2ShelfHp.setCutoff(
+            static_cast<float>(1.0 / (6.283185307 * kSdlRg * kSdlCg)), twice);
+         mSd2Lp1.setCutoff(kSdlLp1Hz, twice);
+         mSd2Lp4.setCutoff(kSdlLp4Hz, twice);
+         mSd2Gain2 = kSdlGain2;
+         mSd2Gain3 = kSdlGain3;
+         mSd2Gain4 = kSdlGain4;
+         // D10 alone against D11 and D16 in series: the same silicon, one
+         // side needing twice the voltage.
+         const float lean = mBias * 0.35f;
+         mSd2FbIsP = kSiIs;
+         mSd2FbVp = kSiVt2 * (1.0f + lean);
+         mSd2FbIsN = kSiIs;
+         mSd2FbVn = kSiVt * (1.0f - lean);
+      }
       mPre = 1.0f;
       break;
    }
@@ -638,6 +841,17 @@ void DriveStage::setParams(int model, float drive, float bias, float mix) {
       break;
    case kDriveCrush:
       mTrim = 1.56f;
+      break;
+   case kDriveCrunch:
+      // Both SD-2 channels come out under the rest of the set for the same
+      // reason Germanium does: their gain legs leave the bottom of the band
+      // alone, and the RMS matching measures a curve rather than a filter.
+      // Measured 1.9 dB down.
+      mTrim = 1.24f;
+      break;
+   case kDriveLead:
+      // And 2.5 dB, this one being the more heavily filtered of the two.
+      mTrim = 1.33f;
       break;
    case kDriveGermanium:
       // The quietest of them before matching, and for a reason that is the

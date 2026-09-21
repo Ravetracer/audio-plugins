@@ -97,12 +97,12 @@ says so in its own tooltip.
 | **Dist Mix** | -- | How much of the driven signal is heard against the clean one. At zero the stage is bypassed. |
 | **Volume** | VR8 | Stops at unity, because the output stage does. |
 
-### The drive stage's eight models
+### The drive stage's ten models
 
 Everything in front of this stage is fixed by the service notes. There is no
 schematic for the stage itself, so seven of the eight are built the other way
 round -- from the literature, every one an equation out of a named source, with
-the source in the code beside it. The eighth has a schematic of its own:
+the source in the code beside it. The last three have schematics of their own:
 
 | Type | Source | What it is |
 |---|---|---|
@@ -114,6 +114,8 @@ the source in the code beside it. The eighth has a schematic of its own:
 | **Rectifier** | *DAFX* 4.3.3 | Folds the negative half onto the positive one and doubles the fundamental: an octave over the note rather than an edge on it. |
 | **Crush** | Pirkle, eq 19.1 | The quantiser, twelve bits down to three. |
 | **Germanium** | the MXR Distortion+'s schematic, plus [ElectroSmash's analysis](https://electrosmash.mas-effects.com/mxr-distortion-plus-analysis.html) | The pedal, component by component: a non-inverting 741 whose 47 nF leg gives it unity gain at DC and up to 46 dB above a corner the Drive knob moves from 3 Hz to 720 Hz, the 741's own 4.7 kHz bandwidth at full gain, and a shunt pair of germanium 1N270s behind a 10 k resistor. The only model whose gain depends on frequency, which is why it stays tight on a bass line where the rest thicken. |
+| **Crunch** | the BOSS SD-2's service notes (May 1993) | The pedal's CRUNCH channel: one non-inverting stage whose gain leg is 250 k over 680 R with 4.7 uF beneath it, and an asymmetric clipper *in the feedback loop* -- an LED and a silicon diode in series one way, an LED alone the other. Those thresholds are 2.2 V and 1.6 V, high enough that it stops distorting altogether as a note decays. |
+| **Lead** | the same service notes | The pedal's LEAD channel, which is a different circuit: three gain stages with two clippers between them -- red LEDs shunt to ground, then asymmetric silicon in a feedback loop -- and a lowpass after every one. Six thousand times the gain before the first clipper, and the most frequency-selective model here by a distance. |
 
 Both books insist that a nonlinearity needs oversampling, so every model runs at
 twice the sample rate. Soft Clip is the exception, deliberately: it predates all
@@ -133,10 +135,23 @@ Its Bias control is the diode-array modification the schematic itself suggests
 beside D1 and D2: a second diode in series on one side, doubling that side's
 forward drop. Centred is the matched germanium pair the pedal shipped with.
 
-**Why eight and not fourteen.** There were fourteen, and they all sounded the
+**Crunch and Lead are one pedal and two circuits.** The SD-2's MODE switch does
+not re-voice a chain, it selects between two complete ones -- which is why its
+pots are dual-gang, a section per mode. Two entries in the Type list keep a
+switch off a panel that has no room for one.
+
+Their service notes end with measured output waveforms, and those are what the
+self-test holds the models to. Fed the notes' own 200 Hz square at 20 mV peak
+to peak, Crunch keeps a tall leading spike and sags towards the next edge while
+Lead is flat and ringing -- crest factor 1.78 against 1.09. The sag is not a
+fitted curve: C28 and R37 give the gain leg a 3.2 ms time constant and half a
+cycle at 200 Hz is 2.5 ms, so the stage is still recovering when the next edge
+arrives. Take that shelf out and three checks fail.
+
+**Why ten and not fourteen.** There were fourteen, and they all sounded the
 same: any two memoryless clippers driven hard enough become the same square
 wave, level matching removes what is left, and none of them had filtering of its
-own. What tells these eight apart is that they are built differently. The
+own. What tells these ten apart is that they are built differently. The
 self-test measures it now instead of assuming it -- each model's drive is
 searched for the setting that gives 25 % THD and their harmonic distributions
 are compared there, so two models that measure the same at the same distortion

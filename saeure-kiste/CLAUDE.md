@@ -44,6 +44,14 @@ instrument. Two documents:
   which gives the corner frequencies and agrees with the drawing everywhere
   the two overlap. It is cited as `[ESmash]` in `dsp/drive.h`.
 
+As of 0.10.0 there is a second pedal in there, and a better document than the
+first: `!dev/distortion/BOSS Dual OverDrive SD-2.pdf` is Roland's own **service
+notes** for that pedal (May 1993, First Edition) -- a parts list, the full
+circuit diagram, and an appendix of measured output waveforms. It is the same
+class of source as the 303's own service notes, and it is used the same way:
+values off the drawing, and the appendix as the test rather than as an input.
+`Crunch` and `Lead` are its two channels.
+
 **The schematics in `!dev/distortion/` are not ours to redistribute**, the same
 rule as the service notes beside them. Gitignored; never commit them.
 
@@ -401,6 +409,31 @@ tool names and an environment variable from the folder name, and
   steps per sample at 2x. Do not "simplify" it into a transfer curve with a
   knee: the series resistance is exactly what makes it soft, and a curve throws
   that away.
+- **The SD-2 is two circuits, not one circuit with a switch.** Its MODE switch
+  selects between two complete chains with their own pot sections -- which is
+  why `Crunch` and `Lead` are two entries in the Type list rather than one
+  model with a parameter. Diff the two branches in `setParams()`: they share
+  only the input highpass and the rails.
+- **Each SD-2 channel needs its own input reference, and that is the circuit.**
+  Crunch's single stage starts at a gain of 15.7 and its clipper sits at 1.6 V,
+  so it needs a hot input to do anything; Lead has 430 times through it before
+  its pot is touched. The pedal has a GAIN pot per mode and this plugin has one
+  Drive knob, so `kSdcInputVolts` and `kSdlInputVolts` are where each channel
+  starts on it. They are the only fitted numbers in either model. Changing one
+  changes what Drive does across its whole travel -- check the THD sweep, not
+  just one setting.
+- **A pot at zero is a short, and a short is a division by zero.** Lead's
+  feedback resistance goes to nothing at the bottom of Drive, `1/Rf` went to
+  infinity and the solver's first step was `0 * inf`. The floor is the wiper
+  and track resistance a real pot still has. **The suite did not catch this**,
+  because the finiteness check measured one drive setting. It sweeps Drive and
+  Bias now. Any new model: assume the bug is at an extreme of a control, not in
+  the middle.
+- **An asymmetric diode pair needs the `-1` of each Shockley term.** The
+  symmetric germanium pair did not, because the two constants cancelled.
+  Without it an unmatched pair carries a current at rest and the clipper's node
+  sits off zero -- a DC offset that the amplifier's blocker then turns into a
+  thump on every note.
 - **The version lives in two places** — `project(... VERSION)` in
   `CMakeLists.txt` and `kPluginVersion` in `src/saeurekiste.h`. A
   `static_assert` fails the build when they disagree. Bump both.

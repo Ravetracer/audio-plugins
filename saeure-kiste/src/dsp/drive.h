@@ -63,6 +63,8 @@ enum DriveModel {
    kDriveRectifier,    // [DAFX] 4.3.3, [Pirkle] table 19.2 HWR/FWR
    kDriveCrush,        // [Pirkle] eq 19.1
    kDriveGermanium,    // the MXR Distortion+ circuit, from its schematic
+   kDriveCrunch,       // the BOSS SD-2's CRUNCH channel, from its service notes
+   kDriveLead,         // and its LEAD channel, which is a different circuit
    kNumDriveModels
 };
 
@@ -132,6 +134,54 @@ enum DriveModel {
 // one of these has done. Bias walks between the two: centred is the matched
 // pair the pedal shipped with, and either extreme is a second diode in series
 // on that side, clipping at twice the voltage and putting even harmonics in.
+//
+// ------------------------------------------------------- Crunch and Lead
+//
+// The BOSS SD-2 Dual OverDrive, from its own service notes (May 1993, First
+// Edition) -- the same kind of document as the ones the rest of this
+// instrument is built from, down to the measured output waveforms in the
+// appendix.
+//
+// It is two models because it is two *circuits*. The pedal's MODE switch does
+// not re-voice one chain; it picks between two complete ones, each with its
+// own gain, tone and level pot section -- which is why the pots are dual-gang.
+// Putting them in the Type list costs nothing and keeps a switch off a panel
+// that has no room for one.
+//
+// CRUNCH is one stage. Op-amp 2a non-inverting, the gain leg is VR1b (250 k)
+// plus R36 (10 k) over R37 (680 R) with C28 (4.7 uF) under it -- so unity at
+// DC, up to 383 above a corner at 50 Hz -- and the clipper is *in the feedback
+// loop*: D7 (an LED) and D6 (silicon) in series one way against D4 (an LED)
+// alone the other. That asymmetry is the model, and those thresholds are
+// high: about 2.2 V against 1.6 V, where a green-box overdrive clips at 0.6.
+// A clipper that high stays out of the way until the playing gets loud, which
+// is the whole difference between crunch and distortion.
+//
+// LEAD is three gain stages with two clippers between them, and it is where
+// the pedal earns "dual":
+//
+//   3b   non-inverting, VR1a (250 k) over R28 (4.7 k) and C10 (82 n): up to
+//        54, cornering at 413 Hz, so it is already voiced before it clips
+//   3a   inverting, R29 (1 M) over R38 (15 k): another 67, with C20 (180 p)
+//        putting a lowpass at 884 Hz across it
+//   --   D14 and D15, red LEDs, *shunt* to ground behind R52 (1 k)
+//   4a   inverting, and asymmetric silicon in the feedback loop: D10 one way
+//        against D11 and D16 in series the other
+//   4b   inverting, after two more RC sections
+//
+// Six thousand times the gain before the first clipper, into two clippers in
+// series, each with a lowpass after it. That is why the service notes' own
+// scope traces of the two modes look nothing like each other: CRUNCH keeps the
+// spike and the decay of the square it is fed, and LEAD is flattened and
+// ringing. The self-test drives the models with the same 200 Hz square the
+// appendix specifies and checks for exactly that difference.
+//
+// Not modelled, and why: the JFET switches and the CMOS gates around them are
+// the bypass, not the sound; the input network reduces to a 62 Hz highpass
+// once the buffer in front of it is taken as ideal; and the pedal's own TONE
+// stack is left at its centre because this plugin has a Tone control of its
+// own sitting right after this stage, and two tone controls fighting is worse
+// than one.
 //
 // Seven from the books, and deliberately not more.
 //
@@ -217,9 +267,14 @@ private:
    float tubeDafx(float x) const;
    static float fuzzDafx(float x, float gain, float asymmetry);
    float rectifier(float x) const;
-   // The shunt clipper, solved rather than shaped: Newton on the node between
-   // R5, the diode pair and the output pot.
+   // The node between a resistive network and a pair of diodes, solved by
+   // Newton rather than shaped by a curve. `src` is the current driven into
+   // the node and `g` the linear conductance away from it, so this serves a
+   // shunt clipper and a feedback clipper alike -- the two differ only in what
+   // is done with the answer.
+   static float diodeNode(float src, float g, float isP, float vP, float isN, float vN);
    float mxrClipper(float v) const;
+   float sd2Shape(float x) const;
    // The memoryless part of the circuit -- the stage's own gain, the rails and
    // the clipper -- without the filters around it.
    float germaniumShape(float x) const;
@@ -284,6 +339,25 @@ private:
    float mMxrShelfGain = 1.0f; // Rf/Rg, the amount the shelf lifts by
    float mMxrVp = 1.0f;        // the positive diode's n*Vt, times its count
    float mMxrVn = 1.0f;        // and the negative one's
+
+   // Crunch and Lead: the SD-2's two channels. One set of members serves both
+   // because the shapes are the same kind of thing in a different order; which
+   // of them are used is decided by the model.
+   OnePoleHp mSd2InHp;   // the input network, reduced
+   OnePoleHp mSd2ShelfHp;// the gain leg's capacitor, as a shelf
+   OnePoleHp mSd2Hp2;    // Lead: C18 into R38
+   OnePoleLp mSd2Lp1;    // the first stage's own top-end limit
+   OnePoleLp mSd2Lp2;    // Lead: C20 across R29, at 884 Hz
+   OnePoleLp mSd2Lp3;    // Lead: C37 after the LEDs
+   OnePoleLp mSd2Lp4;    // Lead: C41 across R59, and Crunch: C24 after R32
+   float mSd2ShelfGain = 1.0f;
+   float mSd2Gain2 = 1.0f;
+   float mSd2Gain3 = 1.0f;
+   float mSd2Gain4 = 1.0f;
+   // The two clippers. Each direction carries its own saturation current and
+   // its own n*Vt, because a stack of unlike diodes is not one diode scaled.
+   float mSd2FbIsP = 1.0f, mSd2FbVp = 1.0f;
+   float mSd2FbIsN = 1.0f, mSd2FbVn = 1.0f;
 
    Oversampler2x mOversampler;
 };

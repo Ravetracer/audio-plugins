@@ -26,7 +26,8 @@ const char *const kSweepSpeedNames[] = {"Normal", "Fast", "Slow"};
 // A preset stores the *name*, so reordering this table would silently change
 // what an old preset loads as.
 const char *const kDistNames[] = {"Soft Clip", "Overdrive", "Tube",      "Valve Stack",
-                                  "Fuzz",      "Rectifier", "Crush",     "Germanium"};
+                                  "Fuzz",      "Rectifier", "Crush",     "Germanium",
+                                  "Crunch",    "Lead"};
 const char *const kOnOffNames[] = {"Off", "On"};
 const char *const kDelaySyncNames[] = {"Free", "Synced"};
 // A preset stores the *name*, so this list may not be reordered.

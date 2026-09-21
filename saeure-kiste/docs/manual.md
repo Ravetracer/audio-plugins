@@ -8,7 +8,7 @@ subtitle: CLAP and VST3 instrument for Linux and Windows
 
 *A monophonic acid bass synthesiser. Linux and Windows, CLAP and VST3.*
 
-Version 0.9.0
+Version 0.10.0
 
 ---
 
@@ -147,15 +147,15 @@ the modification are gathered in §10.
 | **Drive** | 0 – 100 % | 20 % | How hard the model is worked. What it actually moves depends on the model: Schetzen's thresholds, Bendiksen's `dist`, a triode's saturation, a bit depth. |
 | **Bias** | −100 – +100 % | 0 % | Where the model sits on its own curve. At the centre each one is at the operating point its source specifies; away from it the two halves of the wave are treated differently, which is what puts even harmonics into a sound that otherwise has only odd ones. |
 | **Tone** | 800 Hz – 18 kHz | 8 kHz | A lowpass after the drive. At the top of its range it does nothing. |
-| **Type** | 8 models | Soft Clip | Which model the stage is. See below. |
+| **Type** | 10 models | Soft Clip | Which model the stage is. See below. |
 | **Dist Mix** | 0 – 100 % | 100 % | How much of the driven signal is heard against the clean one. At zero the stage is bypassed however Drive and Type are set. |
 
-#### The eight models
+#### The ten models
 
 Everything in front of this stage is fixed by the service notes. There is no
-schematic for the stage itself, so seven of the eight are built the other way
+schematic for the stage itself, so seven of the ten are built the other way
 round — from the literature, every one an equation out of a named source. The
-eighth is built from a circuit, and is described under the table.
+other three are built from circuits, and are described under the table.
 
 - **[DAFX]** U. Zölzer (ed.), *DAFX: Digital Audio Effects*, 2nd edition, Wiley
   2011, chapter 4, *Nonlinear processing* (Dutilleux, Dempwolf, Holters,
@@ -177,6 +177,8 @@ eighth is built from a circuit, and is described under the table.
 | **Rectifier** | [DAFX] 4.3.3, [Pirkle] table 19.2 | Folds the negative half of the wave onto the positive one, which doubles the number of zero crossings and therefore the fundamental. An octave *over* the note rather than an edge on it, and the only model here that changes the pitch of what it is given. Bias runs it from half-wave to full-wave. |
 | **Crush** | [Pirkle] eq 19.1 | Quantised to fewer bits, twelve down to three. Digital rather than a circuit, and unmistakable. |
 | **Germanium** | the pedal's schematic + [ESmash] | A 1970s stompbox, modelled component by component. The one model here that distorts part of the spectrum and leaves the rest alone. |
+| **Crunch** | a 1993 pedal's service notes | One channel of a two-channel overdrive: a single stage with an asymmetric clipper in its feedback loop, clipping high enough that it stops distorting as a note decays. |
+| **Lead** | the same service notes | The other channel of the same pedal, and a different circuit: three gain stages with two clippers between them. Saturated, compressed and narrow. |
 
 A hard model is made usable with **Dist Mix**: Fuzz or Rectifier at 25 % adds
 something to a line that is otherwise still the machine.
@@ -213,13 +215,38 @@ Centred, Bias is the matched pair the pedal shipped with; either way from centre
 puts a second diode in series on that side, clipping at twice the voltage and
 putting even harmonics in.
 
+**Crunch and Lead are one pedal**, a dual overdrive from 1993, and two models
+because the pedal's mode switch does not re-voice a chain — it picks between
+two complete ones, each with its own gain, tone and level. Putting both in this
+list keeps a switch off a panel with no room for one.
+
+*Crunch* is a single stage with the clipping diodes in its feedback loop rather
+than across the path, and with an unusual pair in there: an LED and a silicon
+diode in series one way against an LED alone the other. That puts the
+thresholds at about 2.2 V and 1.6 V, where most overdrives clip at 0.6 — high
+enough that the stage plays clean until you hit it, and stops distorting
+altogether as a note decays. It is the one model here that gets out of the way.
+
+*Lead* is the other extreme: three gain stages with two clippers between them —
+red LEDs shunt to ground, then asymmetric silicon in a feedback loop — and a
+lowpass after every one. There are six thousand times the gain before the first
+clipper, so it is saturated wherever you put the knob, and everything below a
+couple of hundred hertz has been filtered away before it gets there. Narrow,
+compressed and sustaining, which is what a lead channel is for. It will not do
+a bass line on its own; it is very good under one at a low Dist Mix.
+
+Both were built from the pedal's service notes, which end with photographs of
+its output fed a 200 Hz square. Those two pictures are the test: one keeps a
+tall spike and sags towards the next edge, the other is flat and ringing, and
+the models are held to the same difference.
+
 **Both sources say the same thing about aliasing** — a nonlinearity needs
 oversampling ([DAFX] 4.1.1 and figure 4.5, [Pirkle] 19.1) — so every model here
 runs at twice the sample rate with an interpolating filter on the way in and a
 band-limiting one on the way out. Soft Clip is the exception, and deliberately:
 it is the stage that predates all of this and it renders what it always did.
 
-**Why eight and not fourteen.** There were fourteen, once, and they all sounded
+**Why ten and not fourteen.** There were fourteen, once, and they all sounded
 the same. Any two memoryless clippers driven hard enough become the same square
 wave; matching their levels removes what little is left; and none of them had
 any filtering of its own. What tells these apart is that they are built

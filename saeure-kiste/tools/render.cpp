@@ -4239,6 +4239,22 @@ int runSelfTest(const clap_plugin_entry_t *entry, double sampleRate) {
       for (int model = 0; model < kNumDriveModels; ++model) {
          const Spectrum s = measure(model, 0.7, 0.0, 0.8);
 
+         // Finiteness is checked across the whole of Drive and both ends of
+         // Bias rather than at one setting, because the settings that break a
+         // model are its extremes and 0.7 is neither. A model whose feedback
+         // resistance goes to zero at the bottom of the knob divides by it
+         // there and nowhere else; this suite passed such a model until the
+         // sweep was added, because it only ever asked at 0.7.
+         for (int i = 0; i <= 8 && finite; ++i)
+            for (int b = -1; b <= 1 && finite; ++b) {
+               const Spectrum e = measure(model, i / 8.0, b, 0.8);
+               if (!e.finite || !std::isfinite(e.peak) || !std::isfinite(e.thd)) {
+                  finite = false;
+                  std::printf("  [dbg] model %d not finite at drive %.3f bias %d\n", model,
+                              i / 8.0, b);
+               }
+            }
+
          loud.push_back(s);
          if (!s.finite)
             finite = false;
@@ -4346,6 +4362,61 @@ int runSelfTest(const clap_plugin_entry_t *entry, double sampleRate) {
       // and the tanh does not. That is audible on an instrument whose every
       // note decays, and it is the whole reason both are in the set.
       check(closest > 0.15, "no two drive models produce the same spectrum at the same THD");
+
+      // 2c. Crunch and Lead against the service notes they were built from.
+      //
+      // The SD-2's service notes end with measured output waveforms: a 200 Hz
+      // square at 20 mV peak to peak into the input, photographed at the
+      // output for both modes. The two pictures differ in a way that is worth
+      // holding the models to, and it is not a spectrum -- it is the *shape*
+      // of the half-cycle. CRUNCH keeps a tall leading spike and then sags
+      // towards the next edge, because its clipper sits at 1.6 V and lets go
+      // as soon as the signal falls. LEAD is flat and ringing: three stages
+      // and two clippers leave nothing of the envelope at all.
+      //
+      // Crest factor measures exactly that. A signal that spikes and sags has
+      // a high one; a flattened one approaches the 1.0 of a square.
+      {
+         // Driven at the level the notes specify rather than at this
+         // instrument's, because the shape they photographed is the shape at
+         // *their* input: 20 mV peak to peak, which is 10 mV of peak against
+         // each channel's own volts-per-unit.
+         auto crest = [](int model, float amplitude) {
+            const double rate = 48000.0;
+            DriveStage stage;
+            stage.prepare(rate);
+            stage.setParams(model, 0.5f, 0.0f, 1.0f);
+            double peak = 0.0, sum = 0.0;
+            int n = 0;
+            for (int i = 0; i < 24000; ++i) {
+               // The service notes' own test signal, at this instrument's
+               // scale: a 200 Hz square.
+               const double phase = std::fmod(200.0 * i / rate, 1.0);
+               const float y = stage.tick(phase < 0.5 ? amplitude : -amplitude);
+               if (i >= 6000) {
+                  peak = std::max(peak, std::fabs(static_cast<double>(y)));
+                  sum += static_cast<double>(y) * y;
+                  ++n;
+               }
+            }
+            return n > 0 && sum > 0.0 ? peak / std::sqrt(sum / n) : 0.0;
+         };
+         const double crunch = crest(kDriveCrunch, 0.010f / 0.12f);
+         const double lead = crest(kDriveLead, 0.010f / 0.02f);
+         std::printf("       crest factor on the notes' 200 Hz square: Crunch %.2f, Lead %.2f\n",
+                     crunch, lead);
+         // Where Crunch's spike comes from, and why this is a test of the
+         // circuit rather than of a preference: C28 and R37 give the gain leg
+         // a time constant of 3.2 ms, and half a cycle of a 200 Hz square is
+         // 2.5 ms. So the stage's gain is still falling when the next edge
+         // arrives -- it starts a half-cycle at 383 and has not finished
+         // getting back to 1. Lead's leg is C10 with R28, 0.39 ms, which is
+         // over and done with long before the edge, and its two clippers
+         // flatten what is left.
+         check(crunch > 1.5, "Crunch keeps the spike the service notes photograph");
+         check(lead < 1.25, "and Lead flattens it, as its own picture does");
+         check(crunch > lead * 1.4, "and the two are not the same shape");
+      }
 
       // 2b. Germanium against the analysis it was built from.
       //

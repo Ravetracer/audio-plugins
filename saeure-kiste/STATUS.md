@@ -1,11 +1,83 @@
 # SäureKiste -- status
 
-Version 0.9.0. Linux and Windows, CLAP and VST3. 63 parameters, 27 presets,
-builds clean, self-test passes with no failures across 271 checks, and
+Version 0.10.0. Linux and Windows, CLAP and VST3. 63 parameters, 27 presets,
+builds clean, self-test passes with no failures across 274 checks, and
 `tools/check-instances.sh` passes with two editors open at once.
 
 Six of seven fixes were confirmed by backing the bug out and watching the suite
 fail; the seventh has no contract to assert. See `TODO.md` §3.
+
+0.10.0 adds the ninth and tenth drive models, and they are one pedal.
+
+**Crunch and Lead** are the two channels of the BOSS SD-2 Dual OverDrive,
+modelled from its service notes (May 1993, First Edition) -- the same kind of
+document the rest of this instrument is built from, measured waveforms and all.
+
+They are two models because the pedal is two *circuits*. Its MODE switch does
+not re-voice one chain, it selects between two complete ones, each with its own
+gain, tone and level pot section; the pots are dual-gang for that reason. Two
+entries in the Type list cost nothing and keep a switch off a panel with no
+room for one.
+
+**Crunch** is one stage. Op-amp 2a non-inverting, the gain leg VR1b (250 k) and
+R36 (10 k) over R37 (680 R) with C28 (4.7 uF) beneath it, and the clipper in
+the feedback loop: D7 (an LED) and D6 (silicon) in series one way against D4
+(an LED) alone the other. Those thresholds are about 2.2 V against 1.6 V, where
+a green-box overdrive clips at 0.6 -- which is the whole difference between
+crunch and distortion. It stops distorting entirely as a note decays, and the
+suite measures that: its quiet-signal ratio is 0.00.
+
+**Lead** is three gain stages with two clippers between them. 3b
+non-inverting (up to 54, cornering at 413 Hz), 3a inverting (another 67, with a
+884 Hz lowpass across it), then D14 and D15 -- red LEDs, shunt to ground behind
+R52 -- then 4a with asymmetric silicon in its feedback loop, then 4b. Six
+thousand times the gain before the first clipper. It is the most
+frequency-selective model in the set by a distance: its THD at 80 Hz is 0.27 of
+its THD at 1 kHz, against Germanium's 0.89 and 1.00 for a plain clipper.
+
+**The service notes' own scope traces are the test.** The appendix photographs
+the output of both modes fed a 200 Hz square at 20 mV peak to peak, and the two
+pictures differ in shape rather than in spectrum: Crunch keeps a tall leading
+spike and sags towards the next edge, Lead is flat and ringing. The suite
+drives both models with that same square at that same level and measures crest
+factor -- Crunch 1.78, Lead 1.09.
+
+That sag is not a fitted curve, it is C28 and R37: a 3.2 ms time constant
+against a 2.5 ms half-cycle, so the stage's gain is still falling when the next
+edge arrives. Take the shelf out and three checks fail, including the
+distinctness one, which was confirmed by taking it out.
+
+**Two bugs the suite found, and one hole it had.**
+
+Lead divided by zero at the bottom of the Drive knob: a pot at zero shorts the
+feedback resistor, which is a follower in the circuit and `1/0` in the model,
+and the first Newton step was then `0 * inf`. **The suite did not catch it**,
+because the finiteness check measured every model at one drive setting -- 0.7
+-- and the failure was at 0.0. It now sweeps the whole of Drive and both ends
+of Bias. That is the real fix; the model's floor is the wiper and track
+resistance a real pot still has at its end stop.
+
+The asymmetric diode pairs needed the `-1` of each Shockley term, which the
+symmetric germanium pair had not: without it an unmatched pair carries current
+at rest and the clipper's node sits off zero.
+
+**Input reference.** The one fitted number in either channel, and it has to be
+per channel: Crunch's single stage starts at a gain of 15.7 and needs a hot
+input before its 1.6 V clipper does anything, while Lead has 430 times through
+it before its own pot is touched. The pedal has a separate GAIN pot per mode;
+this plugin has one Drive knob, so where each channel starts on it is set here
+instead. 0.12 V and 0.02 V per unit, either side of the notes' own 20 mV test
+signal.
+
+**Levels.** Measured on Machine Running at 55 % drive as every other trim was:
+1.9 dB and 2.5 dB under the set, for the same reason Germanium was -- their
+gain legs leave the bottom of the band alone and the RMS matching measures a
+curve rather than a filter. Trims 1.24 and 1.33; both now land within 0.1 dB.
+
+**On the names.** "Crunch" and "Lead" are the pedal's own words for its two
+modes, printed on its panel, and they describe what each one is -- which is
+the rule the rest of this list follows. The maker's name is not on the panel
+here, and is in the repository and the service notes as usual.
 
 0.9.0 adds an eighth drive model, and it is the first one taken from a circuit
 rather than from a book.
