@@ -12,6 +12,7 @@
 // anyway.
 //
 //   docgen --params                  the parameter reference, as Markdown
+//   docgen --params-brief            the same table without the explanations
 //   docgen --presets <presets-dir>   the preset library, as Markdown
 //
 // PLUGINCORE_DOC_NS names the plugin namespace to document, e.g. -DPLUGINCORE_DOC_NS=rainyday.
@@ -86,7 +87,15 @@ std::string range(const ParamDesc &d) {
    return display(d, d.min) + " … " + display(d, d.max);
 }
 
-void emitParams() {
+// `brief` leaves out the "What it does" column.
+//
+// The explanations come from each parameter's `tip`, which is written for the
+// plugin's own help line and names the hardware it models outright. A manual
+// that may not print those names therefore cannot take the tips -- but it can
+// still take the part that actually goes stale, which is the ranges and the
+// defaults. A brief table is a reference a manual can carry beside its own
+// hand-written prose without either repeating it or contradicting it.
+void emitParams(bool brief = false) {
    const ParamDesc *table = plugin::paramTable();
    const uint32_t count = plugin::kNumParams;
 
@@ -99,22 +108,36 @@ void emitParams() {
          modules.push_back(m);
    }
 
-   std::printf("There are %u parameters, grouped the way the plugin window groups\n"
-               "them. Every one is automatable and modulatable from the host, and every\n"
-               "one can be typed in directly by clicking its value in the window. The\n"
-               "name in `code` is the key used in preset files.\n\n",
-               count);
+   if (brief)
+      std::printf("Every parameter, its range and where it starts, grouped the way the\n"
+                  "plugin window groups them. This table is generated from the\n"
+                  "instrument itself, so it cannot disagree with the build. What each\n"
+                  "control is for is in the chapters above. Every one is automatable and\n"
+                  "modulatable from the host, and every one can be typed in directly by\n"
+                  "clicking its value in the window; the name in `code` is the key used\n"
+                  "in preset files.\n\n");
+   else
+      std::printf("There are %u parameters, grouped the way the plugin window groups\n"
+                  "them. Every one is automatable and modulatable from the host, and every\n"
+                  "one can be typed in directly by clicking its value in the window. The\n"
+                  "name in `code` is the key used in preset files.\n\n",
+                  count);
 
    for (const std::string &m : modules) {
       std::printf("### %s\n\n", m.c_str());
-      std::printf("| Parameter | Range | Default | What it does |\n");
-      std::printf("|---|---|---|---|\n");
+      std::printf(brief ? "| Parameter | Range | Default |\n"
+                        : "| Parameter | Range | Default | What it does |\n");
+      std::printf(brief ? "|---|---|---|\n" : "|---|---|---|---|\n");
       for (uint32_t i = 0; i < count; ++i) {
          const ParamDesc &d = table[i];
          if (m != d.module)
             continue;
-         std::printf("| **%s**<br>`%s` | %s | %s | %s |\n", d.name, d.key, range(d).c_str(),
-                     display(d, d.def).c_str(), cell(d.tip).c_str());
+         if (brief)
+            std::printf("| **%s**<br>`%s` | %s | %s |\n", d.name, d.key, range(d).c_str(),
+                        display(d, d.def).c_str());
+         else
+            std::printf("| **%s**<br>`%s` | %s | %s | %s |\n", d.name, d.key, range(d).c_str(),
+                        display(d, d.def).c_str(), cell(d.tip).c_str());
       }
       std::printf("\n");
    }
@@ -201,6 +224,10 @@ void emitPresets(const char *dir) {
 
 int main(int argc, char **argv) {
    const std::string mode = argc > 1 ? argv[1] : "";
+   if (mode == "--params-brief") {
+      emitParams(true);
+      return 0;
+   }
    if (mode == "--params") {
       emitParams();
       return 0;
@@ -209,6 +236,6 @@ int main(int argc, char **argv) {
       emitPresets(argv[2]);
       return 0;
    }
-   std::fprintf(stderr, "usage: docgen --params | --presets <dir>\n");
+   std::fprintf(stderr, "usage: docgen --params | --params-brief | --presets <dir>\n");
    return 2;
 }

@@ -483,13 +483,31 @@ Every plugin ships a PDF manual in its release archives, built by
 that HTML is self-contained (inlined stylesheet, logo as a data URI) and is what
 a website would publish.
 
-**Two of the chapters are generated, not written.** `shared/tools/docgen.cpp`
+**Three of the substitutions are generated, not written.** `shared/tools/docgen.cpp`
 reads the plugin's own `paramTable()` and its preset files and emits the
 parameter reference and the preset library as Markdown, which the script
 substitutes into `<plugin>/docs/manual.md` at `{{PARAMETER_REFERENCE}}` and
 `{{PRESET_LIBRARY}}` (`{{PLUGIN}}` and `{{VERSION}}` are substituted too, and an
 unsubstituted `{{...}}` is an error rather than silently shipped). So the
 parameter tables cannot drift from the build.
+
+`{{PARAMETER_SUMMARY}}` is the third, added in SäureKiste 0.8.0 and **not yet
+ported to Verdalis**: the same table as `{{PARAMETER_REFERENCE}}` with the
+"What it does" column left out (`docgen --params-brief`). It exists because the
+explanations come from each parameter's `tip`, which is written for the plugin's
+help line and names the hardware outright -- so a manual that may not print
+those names cannot take the full reference, but can still carry the part that
+goes stale, which is the ranges and the defaults. SäureKiste uses it as an
+appendix behind its hand-written control chapter.
+
+**A manual is not obliged to use any of them, and that is a trap.** SäureKiste's
+carried none until 0.8.0: `make-manual.sh` built `docgen`, generated both
+chapters and substituted them into a document with no placeholders, silently, for
+every release. An *unsubstituted* `{{...}}` is a hard error; an *unused*
+generated section was not, and the hand-written control tables drifted from
+`params.cpp` for three releases behind it. If a manual here has no
+`{{PARAMETER_REFERENCE}}` and no `{{PARAMETER_SUMMARY}}`, that is a finding, not
+a style choice.
 
 `docgen` is compiled directly with `g++` by the script rather than through the
 plugin's CMake project, because release builds switch the offline tools off and

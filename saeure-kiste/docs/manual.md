@@ -906,3 +906,12 @@ be read off the circuit is fixed, and anything that could not is a knob.
 
 The honest summary: this is fitted to a circuit diagram and an alignment
 procedure. It has never been listened to against a real one.
+
+## Appendix. Every parameter
+
+The chapters above explain what each control is for and why it is where it is.
+This table is the other half of that: the complete list, with every range and
+every starting value, **generated from the instrument itself** when this manual
+was built. It cannot disagree with the plugin you have.
+
+{{PARAMETER_SUMMARY}}

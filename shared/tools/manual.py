@@ -12,7 +12,7 @@ logo is embedded as a data URI -- so the HTML is publishable as a web manual on
 its own and wkhtmltopdf needs no access to the filesystem to render it.
 
   manual.py --plugin RainyDay --version 1.5.1 --source docs/manual.md \
-            --params params.md --presets presets.md \
+            --params params.md --params-brief params-brief.md --presets presets.md \
             --css shared/tools/manual.css --logo _designs/logo.png \
             --out RainyDay-Manual.html
 """
@@ -203,6 +203,9 @@ def main():
     ap.add_argument("--version", required=True)
     ap.add_argument("--source", required=True)
     ap.add_argument("--params", required=True)
+    # The same table without the explanations, for a manual that wants a
+    # drift-proof reference beside its own prose rather than instead of it.
+    ap.add_argument("--params-brief", dest="params_brief", default="")
     ap.add_argument("--presets", required=True)
     ap.add_argument("--css", required=True)
     # Optional: a collection that has no logo yet still builds a manual, it
@@ -218,6 +221,15 @@ def main():
 
     substitutions = {
         "{{PARAMETER_REFERENCE}}": pathlib.Path(args.params).read_text(encoding="utf-8"),
+        # Left unsubstituted when no brief table was supplied, so the check
+        # below catches it. Substituting an empty string instead would drop
+        # the appendix out of the manual without saying anything -- which is
+        # exactly how the generated chapters went missing in the first place.
+        **(
+            {"{{PARAMETER_SUMMARY}}": pathlib.Path(args.params_brief).read_text(encoding="utf-8")}
+            if args.params_brief
+            else {}
+        ),
         "{{PRESET_LIBRARY}}": pathlib.Path(args.presets).read_text(encoding="utf-8"),
         "{{PLUGIN}}": display,
         "{{VERSION}}": args.version,

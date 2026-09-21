@@ -71,6 +71,7 @@ trap 'rm -rf "$work"' EXIT
    -o "${work}/docgen"
 
 "${work}/docgen" --params > "${work}/params.md"
+"${work}/docgen" --params-brief > "${work}/params-brief.md"
 "${work}/docgen" --presets "${src}/presets" > "${work}/presets.md"
 
 # ---------------------------------------------------------------- the document
@@ -85,7 +86,8 @@ base="${name}-${version}-Manual"
 python3 "${here}/manual.py" \
    --plugin "$name" --display-name "$display" --version "$version" \
    --source "${src}/docs/manual.md" \
-   --params "${work}/params.md" --presets "${work}/presets.md" \
+   --params "${work}/params.md" --params-brief "${work}/params-brief.md" \
+   --presets "${work}/presets.md" \
    --css "${here}/manual.css" \
    ${logo:+--logo "$logo"} \
    --out "${out_dir}/${base}.html"
