@@ -91,7 +91,11 @@ same reason.
 
 ## 3. The controls
 
-Eight are the machine's front panel. Six are not, and are marked **(added)**.
+Eight are the machine's front panel: Waveform, Tuning, Cutoff, Resonance, Env
+Mod, Decay, Accent and Volume. Everything else is an addition. Four of them sit
+on those same panels and are marked **(added)**; the Drive, Delay and Mods
+panels are additions entire and say so in their headings; and the controls of
+the modification are gathered in §10.
 
 ### VCO
 
@@ -108,11 +112,11 @@ Eight are the machine's front panel. Six are not, and are marked **(added)**.
 
 | Control | Range | Default | |
 |---|---|---|---|
-| **Cutoff** | 100 Hz – 2.5 kHz | 500 Hz | VR3. The centre is 500 Hz because the factory alignment procedure puts it there: with cutoff centred and resonance full, TM3 is trimmed until the filter rings at 2 ms ± 0.5 ms, and 2 ms is 500 Hz. |
+| **Cutoff** | 30 Hz – 5 kHz | 500 Hz | VR3. The centre is 500 Hz because the factory alignment procedure puts it there: with cutoff centred and resonance full, TM3 is trimmed until the filter rings at 2 ms ± 0.5 ms, and 2 ms is 500 Hz. The machine's own travel is 100 Hz – 2.5 kHz; the wider range is the modification's — see §10. |
 | **Resonance** | 0 – 100 % | 35 % | VR4. It stops just short of oscillation, because the machine does — the ringing waveform printed for that alignment check dies away. A silverbox that sustains a tone is a modified one. |
 | **Env Mod** | 0 – 100 % | 50 % | VR5, and the one control that does two things at once. See §4. |
-| **Decay** | 200 ms – 2.5 s | 600 ms | VR6. The range is printed on the schematic. The envelope has no attack worth the name and no sustain at all — it is triggered and it falls. An accented note ignores this knob. |
-| **Tracking** *(added)* | 0 – 100 % | 0 % | Filter key follow. The machine has **none**: its pitch CV reaches the oscillator and stops, so a note two octaves up meets the same filter as the root. 0 % is the machine. |
+| **Decay** | 30 ms – 3 s | 600 ms | VR6. The envelope has no attack worth the name and no sustain at all — it is triggered and it falls. An accented note ignores this knob. The schematic's own range is 200 ms – 2.5 s; the wider one is the modification's — see §10. |
+| **Tracking** *(added)* | 0 – 200 % | 0 % | Filter key follow. The machine has **none**: its pitch CV reaches the oscillator and stops, so a note two octaves up meets the same filter as the root. 0 % is the machine, 100 % is one-for-one, and past that the filter climbs faster than the note. |
 
 ### Accent
 
@@ -132,7 +136,7 @@ Eight are the machine's front panel. Six are not, and are marked **(added)**.
 
 | Control | Range | Default | |
 |---|---|---|---|
-| **Slide Time** *(added)* | 10 – 300 ms | 60 ms | Fixed on the hardware by C35 (0.22 µF) and its resistor network; a control here because the notes now come from a host. 60 ms is where the original sits. |
+| **Slide Time** *(added)* | 10 – 360 ms | 60 ms | Fixed on the hardware by C35 (0.22 µF) and its resistor network; a control here because the notes now come from a host. 60 ms is where the original sits, and the travel past 300 ms is the modification's — see §10. |
 
 ### Drive *(the whole panel is added)*
 
@@ -271,7 +275,7 @@ yours.
 | **Acc Decay** | 20 ms – 2.5 s | 200 ms | The decay an accented note is forced onto by the 4066. **Set it equal to Decay and accents stop being shorter** — the change the hardware modification put a front-panel switch on, and the most-requested one to this circuit there has ever been. |
 | **Droop** | 1 – 400 Hz | 25 Hz | The tilt on the square. Down for a clean square, up to thin it towards a pulse. Does nothing on the sawtooth. |
 | **Ladder** | 0 – 200 % | 100 % | How hard the feedback is driven into its own saturation. Down and the filter is cleaner and rings harder; up and it fights back. |
-| **Res Range** | 50 – 130 % | 100 % | How much feedback Resonance can ask for. 100 % is the machine — just below oscillation. **Above it the filter sings**, which a stock machine cannot do. |
+| **Res Range** | 50 – 200 % | 100 % | How much feedback Resonance can ask for. 100 % is the machine — just below oscillation. **Above it the filter sings**, which a stock machine cannot do. |
 | **Drift** | 0 – 100 % | 0 % | Oscillator instability. Deterministic: the wander is seeded at reset, so a render is still repeatable to the sample. |
 
 ## 4. Env Mod, and why it is strange
@@ -571,9 +575,9 @@ a triplet swing both land on whole ticks rather than between two of them.
 
 | Control | Range | Default | |
 |---|---|---|---|
-| **Mode** | MIDI / Sequencer | MIDI | Where the notes come from. |
+| **Mode** | MIDI / Sequencer / Live | MIDI | Where the notes come from, and in Live what the keys are for. See §2 and §6. |
 | **Rate** | 1/32 – 1/8 | 1/16 | How long one step lasts. The triplet settings are not something the hardware could do. |
-| **Steps** | 1 – 16 | 16 | How many steps before it repeats. The machine took the same range, and the interesting part of it is the bit that is not 16: fifteen sixteenths against a four-four bar walks the pattern round the beat and comes back after fifteen bars. |
+| **Steps** | 1 – 128 | 16 | How many steps before it repeats. The machine stopped at 16, and the interesting part of that range is the bit that is not 16: fifteen sixteenths against a four-four bar walks the pattern round the beat and comes back after fifteen bars. Past 16 it stops being a bass figure that repeats every bar — see §6. |
 | **Gate** | 0 – 100 % | 50 % | How much of its step a note holds. It does not apply to a step marked Slide — that one holds past the next step's start on purpose. |
 | **Swing** | 50 – 75 % | 50 % | Delays every second step. 66.7 % is triplet swing. The hardware's steps were exactly even. |
 | **Pattern** | 1 – 64 | 1 | Which pattern the grid edits, and the one the chain starts from. |
@@ -737,6 +741,20 @@ file's own tempo is not imported at all: tempo here belongs to the host.
 | **Oscillator** | Res Range at 120 %, so the ladder sings instead of ringing. |
 | **Tired Machine** | Drift at 55 %. Nothing quite holds still. |
 | **Plain Envelope** | Env Bias at zero — the gimmick switched off, for comparison. |
+| **Teeth** | Beastly. Resonance at 92 %, the accent sweep pushed to four and a half octaves and the drive at 85 %, with almost every step accented — so the accent circuit never empties. |
+
+Eight of them are about the sequencer rather than the sound, and are the place
+to start if you want to hear the plugin play itself:
+
+| Preset | |
+|---|---|
+| **Machine Running** | Mode set to Sequencer: press play in the host and the pattern runs, locked to the timeline. Sixteen steps, three slides and four accents, at the settings the rest of the library was built around. |
+| **Fifteen Steps** | The same with Steps at 15. Fifteen sixteenths against a four-four bar never lands in the same place twice and comes back round after fifteen bars. |
+| **Swung Line** | Swing at 66.7 %, which puts every second step exactly where a triplet would be, with a short gate to let the shuffle breathe. The hardware could not do this at all. |
+| **Vibrato Steps** | A vibrato on four of the sixteen steps, delayed 90 ms so it arrives after the note starts. Another thing the machine cannot do. |
+| **Daylight** | Happy: a major pentatonic line with no minor third anywhere in it, played short and bright, both slides moving upward. |
+| **Homesick** | Sad: natural minor at half the speed, a long decay and a gate that nearly fills its step, ending on a note that does not resolve. |
+| **Basement** | Dark: the square wave an octave down, cutoff almost shut, seven notes in sixteen steps so most of the bar is the tail of the last one. |
 
 ### Driving their own sequencer
 
