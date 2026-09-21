@@ -1,0 +1,77 @@
+# SaeureKiste preset
+format = 1
+name = Halo
+author = SaeureKiste
+description = The Lead model used the way it is worth using: underneath rather than instead of. It is three gain stages and two clippers with everything below a couple of hundred hertz filtered off before the first of them, so on its own it is a thin, saturated buzz and no kind of bass sound at all. At 30 % Dist Mix it stops being the signal and becomes a layer over it -- the filter's own output keeps the weight and the model adds a band of upper harmonics that sustains through the decay. Long notes, because that is what it flatters: four tied runs in the bar, and an Amp Decay long enough that they hold.
+
+# VCO
+waveform = Sawtooth
+tuning = 0
+
+# VCF
+cutoff = 300
+resonance = 0.66
+envmod = 0.62
+decay = 700
+tracking = 0
+
+# Accent
+accent = 0.65
+accent_threshold = 100
+accent_decay = 140
+
+# Slide
+slide_time = 90
+
+# Drive
+drive = 0.8
+tone = 14000
+
+# Output
+volume = 0
+
+# Mods
+env_bias = 1.5
+env_depth = 5
+acc_sweep = 3.5
+acc_build = 0.75
+acc_gain = 90
+acc_decay_time = 300
+droop = 25
+ladder = 100
+res_range = 100
+drift = 0
+
+# Sequencer
+mode = Sequencer
+seq_rate = 1/16
+seq_steps = 16
+gate = 0.7
+swing = 50
+
+# Vibrato
+vib_depth = 25
+vib_rate = 6
+vib_delay = 60
+
+# Generator
+rand_seed = 1
+rand_scale = Minor
+rand_root = C
+rand_notes = 0.78
+rand_accent = 0.3
+rand_slide = 0.2
+rand_octave = 0.22
+rand_vibrato = 0.06
+
+# Drive
+dist_type = Lead
+dist_mix = 0.3
+dist_bias = 0
+
+# Sequence
+seq_pitch   = C   C   C   .   G   G   .   A#  A#  A#  .   F   F   F   F   .
+seq_octave  = .   .   .   .   .   .   .   .   .   .   .   .   .   .   .   .
+seq_slide   = x   x   .   .   x   .   .   x   x   .   .   x   x   x   .   .
+seq_accent  = x   .   .   .   x   .   .   x   .   .   .   x   .   .   .   .
+seq_vibrato = .   .   .   .   .   .   .   .   .   .   .   .   .   .   .   .

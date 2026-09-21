@@ -12,7 +12,7 @@ of truth for what works and what does not.
 
 ## What it is, in one paragraph
 
-Linux and Windows, CLAP and VST3, 63 parameters, 27 presets. VCO → four-stage transistor
+Linux and Windows, CLAP and VST3, 63 parameters, 30 presets. VCO → four-stage transistor
 ladder → VCA, with the decay envelope, the accent circuit and the slide lag
 around it, then a drive stage of seven models and a delay after all of it. It plays either
 from the host over MIDI or from its own sequencer locked to the host transport,

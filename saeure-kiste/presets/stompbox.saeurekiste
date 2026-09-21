@@ -1,0 +1,77 @@
+# SaeureKiste preset
+format = 1
+name = Stompbox
+author = SaeureKiste
+description = The Germanium model doing the one thing no other drive here does: distorting the harmonics and leaving the fundamental alone. Its gain stage has unity gain at the bottom and forty-odd decibels above a corner that Drive moves, so at 70 % the corner is up around 700 Hz and everything below it goes through clean. The line is written low and jumps an octave twice a bar, and both octaves survive -- the bottom keeps its weight where every other model would thicken it into mush. Tone is left wide open because the model has its own top-end roll-off built in.
+
+# VCO
+waveform = Sawtooth
+tuning = 0
+
+# VCF
+cutoff = 420
+resonance = 0.68
+envmod = 0.78
+decay = 320
+tracking = 0
+
+# Accent
+accent = 0.72
+accent_threshold = 100
+accent_decay = 68
+
+# Slide
+slide_time = 60
+
+# Drive
+drive = 0.7
+tone = 18000
+
+# Output
+volume = -2
+
+# Mods
+env_bias = 1.5
+env_depth = 5
+acc_sweep = 3.5
+acc_build = 0.75
+acc_gain = 90
+acc_decay_time = 200
+droop = 25
+ladder = 100
+res_range = 100
+drift = 0
+
+# Sequencer
+mode = Sequencer
+seq_rate = 1/16
+seq_steps = 16
+gate = 0.55
+swing = 50
+
+# Vibrato
+vib_depth = 25
+vib_rate = 6
+vib_delay = 60
+
+# Generator
+rand_seed = 1
+rand_scale = Minor
+rand_root = C
+rand_notes = 0.78
+rand_accent = 0.3
+rand_slide = 0.2
+rand_octave = 0.22
+rand_vibrato = 0.06
+
+# Drive
+dist_type = Germanium
+dist_mix = 1
+dist_bias = 0
+
+# Sequence
+seq_pitch   = C   C   C   G   C   .   D#  C   C   C   A#  .   C   G   F   D#
+seq_octave  = .   .   +   .   .   .   .   .   .   +   .   .   .   .   .   .
+seq_slide   = .   .   .   x   .   .   .   .   .   .   x   .   .   .   x   .
+seq_accent  = x   .   .   .   x   .   .   .   x   .   .   .   x   .   .   x
+seq_vibrato = .   .   .   .   .   .   .   .   .   .   .   .   .   .   .   .

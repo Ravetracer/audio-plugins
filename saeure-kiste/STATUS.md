@@ -1,11 +1,26 @@
 # SäureKiste -- status
 
-Version 0.10.0. Linux and Windows, CLAP and VST3. 63 parameters, 27 presets,
+Version 0.11.0. Linux and Windows, CLAP and VST3. 63 parameters, 30 presets,
 builds clean, self-test passes with no failures across 282 checks, and
 `tools/check-instances.sh` passes with two editors open at once.
 
 Six of seven fixes were confirmed by backing the bug out and watching the suite
 fail; the seventh has no contract to assert. See `TODO.md` §3.
+
+0.11.0 gives the three pedal-derived drive models presets of their own, which
+the library did not have: every one of the twenty-seven was written before they
+existed and every one of them was on Soft Clip.
+
+| | |
+|---|---|
+| **Stompbox** | Germanium at 70 % drive, where its gain corner sits up around 700 Hz. Written low with two octave jumps a bar, because the point of the model is that both octaves keep their weight. Tone wide open -- the model has a top-end roll-off of its own. |
+| **Dig In** | Crunch at 45 %, which puts its 1.6 V clipper right between an accented step and a plain one. Seven accents in sixteen, and the plain steps left quiet enough to hear that they are not distorting. The distortion is played rather than set. |
+| **Halo** | Lead at 30 % Dist Mix, underneath the line rather than instead of it. On its own the model is a thin saturated buzz with nothing under 200 Hz; mixed in, it is a band of upper harmonics over the filter's own output. Four tied runs in the bar, because it flatters long notes. |
+
+They are 1 to 2 dB under the rest of the library rather than level with it, and
+that is the models rather than the presets: the seven book models are matched
+to each other and Soft Clip -- which every other preset uses -- is deliberately
+the loud one. Their Volume sits higher to make most of it back.
 
 0.10.0 also imports MIDI files, and imports one file as readily as a folder.
 

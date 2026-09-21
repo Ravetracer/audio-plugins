@@ -22,7 +22,7 @@ the Muffler, the soft attack, the volume envelope as a control, the three accent
 sweep speeds, and the widened ranges. Every one of them defaults to the stock
 circuit, so the plugin is a TB-303 until you ask it not to be.
 
-Sixty-three parameters, twenty-seven presets.
+Sixty-three parameters, thirty presets.
 
 Not affiliated with or endorsed by Roland Corporation. *TB-303* is their
 trademark and is used here only to name what was modelled. Not affiliated with

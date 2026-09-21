@@ -8,7 +8,7 @@ subtitle: CLAP and VST3 instrument for Linux and Windows
 
 *A monophonic acid bass synthesiser. Linux and Windows, CLAP and VST3.*
 
-Version 0.10.0
+Version 0.11.0
 
 ---
 
@@ -36,7 +36,7 @@ its author's own published manual — see §10. Every one of those controls
 defaults to the stock circuit, so the plugin is the original until you ask it
 not to be.
 
-Sixty-three parameters, twenty-seven presets.
+Sixty-three parameters, thirty presets.
 
 Not affiliated with or endorsed by Roland Corporation. *TB-303* is their
 trademark, used here only to name what was modelled. Not affiliated with or
@@ -824,6 +824,9 @@ file's own tempo is not imported at all: tempo here belongs to the host.
 | **Oscillator** | Res Range at 120 %, so the ladder sings instead of ringing. |
 | **Tired Machine** | Drift at 55 %. Nothing quite holds still. |
 | **Plain Envelope** | Env Bias at zero — the gimmick switched off, for comparison. |
+| **Stompbox** | The germanium pedal model, driven hard enough that its gain corner sits up around 700 Hz — so the harmonics distort and the fundamental does not. Written low with octave jumps, and both octaves keep their weight. |
+| **Dig In** | The crunch channel, which clips about three times higher than most overdrives. An unaccented step barely reaches it; an accented one hits it hard. The distortion is played rather than set. |
+| **Halo** | The lead channel at 30 % Dist Mix — underneath the line instead of instead of it. On its own it is a thin saturated buzz; mixed in, it is a band of upper harmonics that sustains through the decay. Long tied notes, because that is what it flatters. |
 | **Teeth** | Beastly. Resonance at 92 %, the accent sweep pushed to four and a half octaves and the drive at 85 %, with almost every step accented — so the accent circuit never empties. |
 
 Eight of them are about the sequencer rather than the sound, and are the place

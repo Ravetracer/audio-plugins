@@ -1,0 +1,77 @@
+# SaeureKiste preset
+format = 1
+name = Dig In
+author = SaeureKiste
+description = The Crunch model, which clips higher than anything else in the list -- about 1.6 volts, where most overdrives give way at 0.6. That is what makes it the dynamic one: an unaccented step barely reaches the diodes and comes through the way the filter left it, and an accented one hits them hard. So the distortion is played rather than set, and the pattern is written for it -- seven accents in sixteen steps, with the plain steps left quiet enough to hear the difference. Drive is at 45 %, which puts the threshold right between the two.
+
+# VCO
+waveform = Sawtooth
+tuning = 0
+
+# VCF
+cutoff = 380
+resonance = 0.74
+envmod = 0.7
+decay = 260
+tracking = 0
+
+# Accent
+accent = 0.85
+accent_threshold = 100
+accent_decay = 90
+
+# Slide
+slide_time = 60
+
+# Drive
+drive = 0.45
+tone = 11000
+
+# Output
+volume = -1
+
+# Mods
+env_bias = 1.5
+env_depth = 5
+acc_sweep = 4
+acc_build = 0.8
+acc_gain = 95
+acc_decay_time = 200
+droop = 25
+ladder = 100
+res_range = 100
+drift = 0
+
+# Sequencer
+mode = Sequencer
+seq_rate = 1/16
+seq_steps = 16
+gate = 0.45
+swing = 50
+
+# Vibrato
+vib_depth = 25
+vib_rate = 6
+vib_delay = 60
+
+# Generator
+rand_seed = 1
+rand_scale = Minor
+rand_root = C
+rand_notes = 0.78
+rand_accent = 0.3
+rand_slide = 0.2
+rand_octave = 0.22
+rand_vibrato = 0.06
+
+# Drive
+dist_type = Crunch
+dist_mix = 1
+dist_bias = 0
+
+# Sequence
+seq_pitch   = C   .   C   C   G   .   C   A#  C   .   D#  C   G   .   C   F
+seq_octave  = .   .   .   .   .   .   +   .   .   .   .   .   .   .   +   .
+seq_slide   = .   .   .   .   .   .   .   x   .   .   .   .   .   .   .   .
+seq_accent  = x   .   .   x   x   .   x   .   x   .   .   .   x   .   x   .
+seq_vibrato = .   .   .   .   .   .   .   .   .   .   .   .   .   .   .   .
