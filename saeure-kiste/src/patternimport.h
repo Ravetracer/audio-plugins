@@ -72,6 +72,23 @@ struct AblImport {
 bool parseAblPattern(const char *text, size_t length, const std::string &name, AblImport &out,
                      std::string &error);
 
+// A Standard MIDI File, as one pattern. Format 0 or 1, every track merged,
+// quantised to sixteenths.
+//
+// Three conventions are read back exactly as this plugin's own MIDI export
+// writes them (see midifile.h): a velocity at or above the accent threshold is
+// an accent, a note still sounding when the next step begins is a slide, and a
+// step bracketed by CC1 carries a vibrato. That symmetry is what lets a
+// pattern dragged out of the window come back in unchanged, and the self-test
+// holds it to exactly that.
+//
+// A file that repeats is reduced to what repeats. The smallest period that
+// divides the file's length and reproduces it exactly becomes the pattern --
+// four bars of a one bar figure import as one bar -- and a file that does not
+// repeat exactly is left alone at its full length, up to the bank's 128 steps.
+bool parseMidiPattern(const char *bytes, size_t length, const std::string &name, AblImport &out,
+                      std::string &error);
+
 // A .param sidecar's knob settings, applied over an already-parsed import.
 // They win over the .pat header: the sidecar carries ABL's whole front panel
 // under its own spelling, and the header carries a subset. Returns false if
@@ -81,17 +98,24 @@ bool applyAblParams(const char *text, size_t length, AblImport &out);
 // The preset file the import becomes.
 std::string ablPresetText(const AblImport &import);
 
-// Every .pat file under `root`, written into `presetDir` as presets: one
+// Every pattern file under `root`, written into `presetDir` as presets: one
 // subfolder per directory that holds any, named after that directory. So
 // picking one pack of patterns imports one shelf and picking the folder they
 // all live in imports every shelf at once, which is the reason to do this by
 // folder rather than by file.
 //
+// `root` may also be a single file, which is a folder of one and lands on the
+// shelf named after the directory it came from -- so importing one pattern now
+// and the rest of its folder later puts them in the same place.
+//
+// The formats are told apart by extension: .pat is one of the three text or
+// XML shapes above, .mid and .midi are Standard MIDI Files.
+//
 // Returns how many presets were written, 0 on failure with `error` filled, and
 // names the first folder it made in `firstFolder` so the browser can open on
 // it. An existing folder of the same name is never merged into: the new one
 // gets a number, exactly as importing the same preset pack twice does.
-int importAblFolder(const std::string &root, const std::string &presetDir,
+int importPatternFiles(const std::string &root, const std::string &presetDir,
                     std::string &firstFolder, std::string &error);
 
 } // namespace saeurekiste

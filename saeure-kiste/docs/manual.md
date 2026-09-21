@@ -751,12 +751,30 @@ was written, so the patterns inside a preset travel with it.
 
 ### Importing patterns from elsewhere
 
-*Pattern folder…* in the IMPORT menu reads `.pat` files — the pattern format
-written by AudioRealism Bassline. It asks for a **folder** rather than a file,
-and every `.pat` anywhere under it becomes a preset: one shelf per directory,
-named after that directory. Point it at a single pack of patterns and you get
-one shelf; point it at the folder they all live in and you get all of them at
-once.
+*Pattern file…* and *Pattern folder…* in the IMPORT menu read somebody else's
+patterns — one at a time, or a whole directory at a time. Every pattern file
+under the folder you pick becomes a preset: one shelf per directory, named
+after that directory. Point it at a single pack of patterns and you get one
+shelf; point it at the folder they all live in and you get all of them at once.
+A single file lands on the shelf its own folder would have made, so importing
+one now and the rest later puts them together.
+
+Two kinds of file are read. **`.mid` and `.midi`** are ordinary MIDI files, of
+the sort any DAW or pattern library will give you. **`.pat`** is the pattern
+format written by AudioRealism Bassline.
+
+**A MIDI file comes back the way this plugin writes one.** A velocity at or
+above the accent threshold becomes an accent, a note still sounding when the
+next step begins becomes a slide, and a step bracketed by the modulation wheel
+becomes a vibrato — the same three things the plugin's own MIDI output and its
+drag-out use. So a pattern dragged into your DAW, edited there and imported
+again is still the pattern it was.
+
+**A file that repeats is reduced to what repeats.** Pattern libraries are often
+written as four bars of a one-bar figure; that imports as one bar, because that
+is the pattern. A file that does not repeat exactly is left at its full length,
+up to the 128 steps the sequencer holds. The grid is sixteenths, and the
+instrument is monophonic, so one note per step.
 
 Three shapes of `.pat` are read — ABL2's four columns, ABL3's six, and the XML
 patch a Reason rack writes under the same extension. Which one a file is comes

@@ -45,7 +45,16 @@ preset, which exists for exactly this.
   remaining part of the signal path with no control over it.
 - **Filter coefficients update every 8 samples.** Inaudible on the envelopes
   this instrument has, but a fast automated cutoff sweep would show it.
-- **Only ABL's formats are read.** *Pattern folder...* takes ABL2 text, ABL3
+- **MIDI import quantises to sixteenths and nothing else.** A file written in
+  triplets or thirty-seconds loses something, and nothing in the file says it
+  was meant differently. Reading the shortest inter-onset interval and picking
+  a grid from it would handle the common cases; it would also turn a wrong
+  import into a mysterious one, which is why it is not done yet.
+- **MIDI import takes one note per step.** The instrument is monophonic, so a
+  chord becomes its earliest, lowest note. Taking the *top* note would suit a
+  lead line better than a bass one. Nothing in the library this was written
+  against has chords in it.
+- **Only ABL's and MIDI's formats are read.** *Pattern folder...* takes ABL2 text, ABL3
   text, the Reason JukeboxPatch and the `.param` sidecar, and nothing else.
   Anything new goes in `src/abl.cpp` beside them: the format is picked per
   file from its content rather than per import, so a folder may hold a

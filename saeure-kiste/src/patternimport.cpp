@@ -1,5 +1,6 @@
-#include "abl.h"
+#include "patternimport.h"
 
+#include "midifile.h"
 #include "params.h"
 
 #include <algorithm>
@@ -74,7 +75,19 @@ struct RawStep {
    int key = -1; // MIDI key, or -1 for a rest
    bool slide = false;
    bool accent = false;
+   bool vibrato = false; // only the MIDI reader sets this; ABL has no such flag
+
+   // Compared step by step to find a repeat, which is how a four-bar file
+   // that says the same thing four times becomes one bar.
+   bool operator==(const RawStep &o) const {
+      return key == o.key && slide == o.slide && accent == o.accent && vibrato == o.vibrato;
+   }
 };
+
+// What this plugin's own MIDI export calls an accent, read back the same way.
+// It is the Accent At parameter's default rather than a number of its own, so
+// the two halves of the convention cannot drift apart.
+constexpr int kMidiAccentVelocity = 100;
 
 using KnobList = std::vector<std::pair<std::string, double>>;
 
@@ -299,6 +312,86 @@ bool parseXmlPatch(const std::string &all, KnobList &knobs,
    return true;
 }
 
+// Everything a parsed file has in common once it is a list of patterns: fit
+// the octaves, pack the steps, and fill in the parameters that describe the
+// pattern rather than the sound. Shared by every format this file reads,
+// because none of them differ after this point.
+bool buildImport(std::vector<std::vector<RawStep>> &patterns, const std::string &name,
+                 AblImport &out, std::string &error) {
+   while (!patterns.empty() && patterns.back().empty())
+      patterns.pop_back();
+   if (patterns.empty()) {
+      error = "No pattern in " + name + ".";
+      return false;
+   }
+   if (static_cast<int>(patterns.size()) > kMaxPatterns)
+      patterns.resize(kMaxPatterns);
+
+   // How far the whole file has to move so that as many steps as possible land
+   // inside the +-2 octaves a step can carry. The rest is Pattern Oct, which
+   // shifts the bank as a whole -- so a line written two octaves up is still
+   // that line rather than a flattened copy of it.
+   //
+   // Fewest clipped steps wins; between two shifts that clip the same number,
+   // the one that leaves the steps nearest their own middle wins, so a line
+   // written three octaves up becomes Pattern Oct 3 and sixteen steps at zero
+   // rather than Pattern Oct 1 and sixteen steps pinned at the top of their
+   // range with no room left to edit them.
+   int bestShift = 0;
+   int bestClipped = -1;
+   int bestSpread = 0;
+   for (int shift = -4; shift <= 4; ++shift) {
+      int clipped = 0;
+      int spread = 0;
+      for (const auto &p : patterns)
+         for (const RawStep &s : p) {
+            if (s.key < 0)
+               continue;
+            const int octave = floorDiv12(s.key - kAblBaseKey) - shift;
+            if (octave < -kMaxOctave || octave > kMaxOctave)
+               ++clipped;
+            spread += std::abs(std::min(kMaxOctave, std::max(-kMaxOctave, octave)));
+         }
+      if (bestClipped < 0 || clipped < bestClipped ||
+          (clipped == bestClipped && spread < bestSpread)) {
+         bestClipped = clipped;
+         bestSpread = spread;
+         bestShift = shift;
+      }
+   }
+
+   for (int p = 0; p < kMaxPatterns; ++p)
+      clearPattern(out.bank.pattern(p));
+   out.bank.present = true;
+   for (size_t p = 0; p < patterns.size(); ++p) {
+      uint16_t *bank = out.bank.pattern(static_cast<int>(p));
+      for (size_t i = 0; i < patterns[p].size(); ++i) {
+         const RawStep &r = patterns[p][i];
+         Step s;
+         if (r.key >= 0) {
+            const int rel = r.key - kAblBaseKey;
+            s.note = ((rel % 12) + 12) % 12;
+            s.octave = std::min(kMaxOctave, std::max(-kMaxOctave, floorDiv12(rel) - bestShift));
+         }
+         s.slide = r.slide;
+         s.accent = r.accent;
+         s.vibrato = r.vibrato;
+         bank[i] = s.pack();
+      }
+      out.steps = std::max(out.steps, static_cast<int>(patterns[p].size()));
+   }
+   out.patternCount = static_cast<int>(patterns.size());
+   out.clipped = bestClipped < 0 ? 0 : bestClipped;
+
+   out.preset.name = name;
+   out.preset.author = "Imported";
+
+   setParam(out.preset, kParamMode, 1.0); // Sequencer: the pattern is the point
+   setParam(out.preset, kParamSeqSteps, static_cast<double>(std::max(1, out.steps)));
+   setParam(out.preset, kParamPatternOctave, static_cast<double>(bestShift));
+   return true;
+}
+
 } // namespace
 
 bool parseAblPattern(const char *text, size_t length, const std::string &name, AblImport &out,
@@ -369,81 +462,120 @@ bool parseAblPattern(const char *text, size_t length, const std::string &name, A
       if (static_cast<int>(patterns.back().size()) < kMaxSteps)
          patterns.back().push_back(s);
    }
-   while (!patterns.empty() && patterns.back().empty())
-      patterns.pop_back();
-   if (patterns.empty()) {
-      error = "No pattern in " + name + ".";
+   if (!buildImport(patterns, name, out, error))
       return false;
-   }
-   if (static_cast<int>(patterns.size()) > kMaxPatterns)
-      patterns.resize(kMaxPatterns);
 
-   // How far the whole file has to move so that as many steps as possible land
-   // inside the +-2 octaves a step can carry. The rest is Pattern Oct, which
-   // shifts the bank as a whole -- so a line written two octaves up is still
-   // that line rather than a flattened copy of it.
-   //
-   // Fewest clipped steps wins; between two shifts that clip the same number,
-   // the one that leaves the steps nearest their own middle wins, so a line
-   // written three octaves up becomes Pattern Oct 3 and sixteen steps at zero
-   // rather than Pattern Oct 1 and sixteen steps pinned at the top of their
-   // range with no room left to edit them.
-   int bestShift = 0;
-   int bestClipped = -1;
-   int bestSpread = 0;
-   for (int shift = -4; shift <= 4; ++shift) {
-      int clipped = 0;
-      int spread = 0;
-      for (const auto &p : patterns)
-         for (const RawStep &s : p) {
-            if (s.key < 0)
-               continue;
-            const int octave = floorDiv12(s.key - kAblBaseKey) - shift;
-            if (octave < -kMaxOctave || octave > kMaxOctave)
-               ++clipped;
-            spread += std::abs(std::min(kMaxOctave, std::max(-kMaxOctave, octave)));
-         }
-      if (bestClipped < 0 || clipped < bestClipped ||
-          (clipped == bestClipped && spread < bestSpread)) {
-         bestClipped = clipped;
-         bestSpread = spread;
-         bestShift = shift;
-      }
-   }
-
-   for (int p = 0; p < kMaxPatterns; ++p)
-      clearPattern(out.bank.pattern(p));
-   out.bank.present = true;
-   for (size_t p = 0; p < patterns.size(); ++p) {
-      uint16_t *bank = out.bank.pattern(static_cast<int>(p));
-      for (size_t i = 0; i < patterns[p].size(); ++i) {
-         const RawStep &r = patterns[p][i];
-         Step s;
-         if (r.key >= 0) {
-            const int rel = r.key - kAblBaseKey;
-            s.note = ((rel % 12) + 12) % 12;
-            s.octave = std::min(kMaxOctave, std::max(-kMaxOctave, floorDiv12(rel) - bestShift));
-         }
-         s.slide = r.slide;
-         s.accent = r.accent;
-         bank[i] = s.pack();
-      }
-      out.steps = std::max(out.steps, static_cast<int>(patterns[p].size()));
-   }
-   out.patternCount = static_cast<int>(patterns.size());
-   out.clipped = bestClipped < 0 ? 0 : bestClipped;
-
-   out.preset.name = name;
-   out.preset.author = "Imported";
    out.preset.description =
       "Imported from an ABL text pattern file. The notes, slides and accents are exactly what "
       "the file held; the knob settings are that file's own, read through this plugin's ranges, "
       "which puts them in the right area rather than on the same number.";
 
    mapKnobs(knobs, out.preset);
-   setParam(out.preset, kParamMode, 1.0); // Sequencer: the pattern is the point
-   setParam(out.preset, kParamSeqSteps, static_cast<double>(std::max(1, out.steps)));
-   setParam(out.preset, kParamPatternOctave, static_cast<double>(bestShift));
+   return true;
+}
+
+// ------------------------------------------------------------------- MIDI
+
+bool parseMidiPattern(const char *bytes, size_t length, const std::string &name, AblImport &out,
+                      std::string &error) {
+   out = AblImport();
+   MidiRead midi;
+   if (!parseMidiFile(bytes, length, midi, error))
+      return false;
+
+   // The grid. A step here is a sixteenth, which is this sequencer's own
+   // default Rate and what every file in the library this was written against
+   // uses. A file written in triplets or thirty-seconds quantises to the
+   // nearest sixteenth and loses something; there is no way to know it was
+   // meant differently from the file alone, and guessing a grid per file would
+   // turn a wrong import into a mysterious one.
+   const long ticks = midi.division / 4;
+   if (ticks <= 0) {
+      error = "That MIDI file's resolution is too coarse to read as steps.";
+      return false;
+   }
+
+   long lastOnset = 0;
+   for (const MidiNote &n : midi.notes)
+      lastOnset = std::max(lastOnset, n.onset);
+   int used = static_cast<int>((lastOnset + ticks / 2) / ticks) + 1;
+   if (used > kMaxSteps * 8)
+      used = kMaxSteps * 8; // a long file, reduced below and then truncated
+   std::vector<RawStep> grid(static_cast<size_t>(used));
+   std::vector<long> release(static_cast<size_t>(used), -1);
+
+   for (const MidiNote &n : midi.notes) {
+      const int step = static_cast<int>((n.onset + ticks / 2) / ticks);
+      if (step < 0 || step >= used)
+         continue;
+      // One note per step: this instrument is monophonic and a step holds one
+      // pitch. The earliest onset wins, and the lowest key breaks a tie --
+      // which on a bass part is the note somebody meant.
+      if (grid[static_cast<size_t>(step)].key >= 0)
+         continue;
+      grid[static_cast<size_t>(step)].key = n.key;
+      // The same three conventions this plugin's own MIDI *export* uses, read
+      // back: a velocity at or above the accent threshold is an accent, and a
+      // note still held when the next step starts is a slide. See midifile.h
+      // -- the two halves have to agree or a pattern will not survive being
+      // dragged out and imported again, which the self-test checks.
+      grid[static_cast<size_t>(step)].accent = n.velocity >= kMidiAccentVelocity;
+      release[static_cast<size_t>(step)] = n.release;
+   }
+   for (int i = 0; i < used; ++i) {
+      if (grid[static_cast<size_t>(i)].key < 0)
+         continue;
+      // Held past the start of the next step, with a tick of slack for a file
+      // that was quantised by something else.
+      const long nextOnset = static_cast<long>(i + 1) * ticks;
+      grid[static_cast<size_t>(i)].slide = release[static_cast<size_t>(i)] > nextOnset + 1;
+   }
+   // CC1 brackets a vibrato step, which is the third of the export's
+   // conventions: the controller goes up at the note's onset and down at its
+   // release. So the rule is the same one the notes get -- quantise the *up*
+   // to its nearest step and mark that step -- rather than asking what the
+   // controller was doing at some point inside the step. Sampling a moment
+   // instead is what the first version did, and with the gate at a half the
+   // release landed exactly on the point being sampled and won.
+   for (const auto &m : midi.mod) {
+      if (!m.second)
+         continue;
+      const int step = static_cast<int>((m.first + ticks / 2) / ticks);
+      if (step >= 0 && step < used)
+         grid[static_cast<size_t>(step)].vibrato = true;
+   }
+
+   // The loop, taken out. These files are written as four bars of a one bar
+   // figure as often as not, and a pattern that says the same thing four times
+   // is harder to edit and no different to listen to. The smallest period that
+   // divides the length and repeats it exactly is the pattern; anything that
+   // does not repeat exactly is left at its full length.
+   int period = used;
+   for (int p = 1; p < used; ++p) {
+      if (used % p != 0)
+         continue;
+      bool repeats = true;
+      for (int i = p; i < used && repeats; ++i)
+         repeats = grid[static_cast<size_t>(i)] == grid[static_cast<size_t>(i % p)];
+      if (repeats) {
+         period = p;
+         break;
+      }
+   }
+   grid.resize(static_cast<size_t>(period));
+   if (static_cast<int>(grid.size()) > kMaxSteps)
+      grid.resize(kMaxSteps);
+
+   std::vector<std::vector<RawStep>> patterns;
+   patterns.push_back(grid);
+   if (!buildImport(patterns, name, out, error))
+      return false;
+
+   out.preset.description =
+      "Imported from a MIDI file. The notes, their octaves and the accents are what the file "
+      "held; a note still sounding when the next step began became a slide, and a velocity at "
+      "or above the accent threshold became an accent. Nothing else in the file is a thing this "
+      "pattern has anywhere to put.";
    return true;
 }
 
@@ -470,7 +602,7 @@ std::string ablPresetText(const AblImport &import) {
    return formatPreset(import.preset, &import.bank);
 }
 
-int importAblFolder(const std::string &root, const std::string &presetDir,
+int importPatternFiles(const std::string &root, const std::string &presetDir,
                     std::string &firstFolder, std::string &error) {
    if (presetDir.empty()) {
       error = "No user preset directory: neither XDG_CONFIG_HOME nor HOME is set.";
@@ -479,6 +611,15 @@ int importAblFolder(const std::string &root, const std::string &presetDir,
 
    std::error_code ec;
    std::map<std::string, std::vector<std::filesystem::path>> byFolder;
+
+   // A single file is a folder of one. The shelf is then named after the
+   // directory the file sits in, exactly as it would be if the whole directory
+   // had been picked -- so importing one pattern and later importing the rest
+   // of its folder puts them together rather than in two places.
+   if (std::filesystem::is_regular_file(root, ec)) {
+      const std::filesystem::path one(root);
+      byFolder[one.parent_path().filename().string()].push_back(one);
+   } else
    for (std::filesystem::recursive_directory_iterator it(root, ec), end; it != end;
         it.increment(ec)) {
       if (ec)
@@ -488,11 +629,11 @@ int importAblFolder(const std::string &root, const std::string &presetDir,
       std::string ext = it->path().extension().string();
       for (char &c : ext)
          c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
-      if (ext == ".pat")
+      if (ext == ".pat" || ext == ".mid" || ext == ".midi")
          byFolder[it->path().parent_path().filename().string()].push_back(it->path());
    }
    if (byFolder.empty()) {
-      error = "No .pat pattern files in that folder.";
+      error = "No pattern files in that folder: nothing ending .pat, .mid or .midi.";
       return 0;
    }
 
@@ -517,9 +658,20 @@ int importAblFolder(const std::string &root, const std::string &presetDir,
          buf << in.rdbuf();
          const std::string text = buf.str();
 
+         // Which reader, decided by the extension: a MIDI file and a text
+         // pattern have nothing in common to sniff for, unlike the three
+         // shapes of .pat, which do.
+         std::string fext = file.extension().string();
+         for (char &c : fext)
+            c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+         const bool isMidi = fext == ".mid" || fext == ".midi";
+
          AblImport import;
          std::string perr;
-         if (!parseAblPattern(text.c_str(), text.size(), file.stem().string(), import, perr)) {
+         const bool read =
+            isMidi ? parseMidiPattern(text.c_str(), text.size(), file.stem().string(), import, perr)
+                   : parseAblPattern(text.c_str(), text.size(), file.stem().string(), import, perr);
+         if (!read) {
             error = perr; // reported only if nothing at all could be read
             continue;
          }
@@ -529,7 +681,7 @@ int importAblFolder(const std::string &root, const std::string &presetDir,
          // and wins, because it is the more complete of the two.
          std::filesystem::path sidecar = file;
          sidecar.replace_extension(".param");
-         std::ifstream side(sidecar, std::ios::binary);
+         std::ifstream side(isMidi ? std::filesystem::path() : sidecar, std::ios::binary);
          if (side) {
             std::ostringstream sbuf;
             sbuf << side.rdbuf();

@@ -18,7 +18,7 @@
 #include "dsp/delay.h"
 #include "entry.h"
 #include "factories.h"
-#include "abl.h"
+#include "patternimport.h"
 #include "midifile.h"
 #include "params.h"
 #include "presets_generated.h"
@@ -1960,7 +1960,7 @@ private:
    // abl.cpp; all that belongs here is where the presets go and telling the
    // library to look again afterwards.
    bool importPatternFolder(const std::string &root, std::string &folder, std::string &error) {
-      if (importAblFolder(root, userPresetDir(), folder, error) == 0)
+      if (importPatternFiles(root, userPresetDir(), folder, error) == 0)
          return false;
       mPresets.clear();
       mPresetsScanned = false;
@@ -1969,12 +1969,16 @@ private:
    }
 
    bool guiImportPack(const std::string &path, std::string &folder, std::string &error) override {
-      // A directory is not a pack: it is a folder of foreign pattern files, and
-      // the browser's IMPORT menu offers both through this one call because
-      // what comes out the far end is the same thing either way -- a new shelf
-      // of presets in the user library.
+      // A directory, or a file with a pattern format's extension, is not a
+      // pack. The browser's IMPORT menu offers all of them through this one
+      // call because what comes out the far end is the same thing either way:
+      // a new shelf of presets in the user library.
       std::error_code dirEc;
-      if (std::filesystem::is_directory(path, dirEc))
+      std::string ext = std::filesystem::path(path).extension().string();
+      for (char &c : ext)
+         c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+      if (std::filesystem::is_directory(path, dirEc) || ext == ".pat" || ext == ".mid" ||
+          ext == ".midi")
          return importPatternFolder(path, folder, error);
 
       std::string packName;

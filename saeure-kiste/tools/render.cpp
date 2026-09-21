@@ -68,7 +68,7 @@ const char *dlerrorCompat() { return "see GetLastError()"; }
 #include "params.h"
 #include <sstream>
 
-#include "abl.h"
+#include "patternimport.h"
 #include "midifile.h"
 #include "pattern.h"
 #include "saeurekiste.h"
@@ -3409,6 +3409,94 @@ int runSelfTest(const clap_plugin_entry_t *entry, double sampleRate) {
       check(before == 0.5 && after == 1.0 && cutoffEntries == 1,
             "the sidecar replaces the header's value rather than sitting behind it");
 
+      // ------------------------------------------------------------ MIDI
+      //
+      // The strongest test available here, and it is free: this plugin already
+      // writes MIDI files, and the reader was built to the same three
+      // conventions. So a pattern written out and read back has to be the
+      // pattern that went out -- notes, octaves, slides, accents and vibratos.
+      // If either half of the convention drifts, this is what says so.
+      {
+         uint16_t pat[kMaxSteps];
+         clearPattern(pat);
+         const int notes[8] = {0, 7, 3, 3, 10, -1, 5, 5};
+         for (int i = 0; i < 8; ++i) {
+            Step st;
+            st.note = notes[i];
+            if (notes[i] >= 0) {
+               st.octave = i == 4 ? 1 : (i == 6 ? -1 : 0);
+               st.accent = (i % 3) == 0;
+               // A tie: step 2 slides into step 3, which is the same pitch.
+               st.slide = i == 2 || i == 6;
+               st.vibrato = i == 1;
+            } else {
+               st.note = -1;
+            }
+            pat[i] = st.pack();
+         }
+
+         MidiExport spec;
+         spec.steps = pat;
+         spec.length = 8;
+         spec.stepsPerBeat = 4.0;
+         spec.gate = 0.5;
+         spec.swingPercent = 50.0;
+         spec.tempoBpm = 120.0;
+         spec.accentVelocity = 100.0; // the threshold the reader uses
+         spec.patternNumber = 1;
+         const std::string midi = patternToMidiFile(spec);
+
+         AblImport back;
+         std::string merr;
+         check(!midi.empty() && parseMidiPattern(midi.c_str(), midi.size(), "Round", back, merr),
+               "a pattern written as MIDI reads back as a pattern");
+         double shift = 0.0;
+         for (const auto &kv : back.preset.values)
+            if (kv.first == kParamPatternOctave)
+               shift = kv.second;
+         bool same = back.steps == 8 && shift == 0.0;
+         for (int i = 0; i < 8 && same; ++i) {
+            const Step a = Step::unpack(pat[i]);
+            const Step b = Step::unpack(back.bank.pattern(0)[i]);
+            same = a.note == b.note && a.octave == b.octave && a.accent == b.accent &&
+                   a.slide == b.slide && a.vibrato == b.vibrato;
+            if (!same)
+               std::printf("  [dbg] step %d out (%d,%d,%d%d%d) back (%d,%d,%d%d%d)\n", i, a.note,
+                           a.octave, a.accent, a.slide, a.vibrato, b.note, b.octave, b.accent,
+                           b.slide, b.vibrato);
+         }
+         check(same, "and every step of it survives the round trip intact");
+
+         // The loop, taken out. The same eight steps written four times over
+         // have to come back as eight, because that is the pattern.
+         uint16_t four[kMaxSteps];
+         clearPattern(four);
+         for (int i = 0; i < 32; ++i)
+            four[i] = pat[i % 8];
+         spec.steps = four;
+         spec.length = 32;
+         AblImport reduced;
+         const std::string longer = patternToMidiFile(spec);
+         check(parseMidiPattern(longer.c_str(), longer.size(), "Loop", reduced, merr) &&
+                  reduced.steps == 8,
+               "a file that says the same eight steps four times imports as eight");
+
+         // And one that does not repeat is left alone. Changing a single step
+         // of the second copy is enough, which is the point: the reduction is
+         // exact or it does not happen.
+         four[9] = Step().pack();
+         spec.steps = four;
+         AblImport kept;
+         const std::string uneven = patternToMidiFile(spec);
+         check(parseMidiPattern(uneven.c_str(), uneven.size(), "NoLoop", kept, merr) &&
+                  kept.steps == 32,
+               "and one step of difference is enough to keep all thirty-two");
+
+         AblImport notMidi;
+         check(!parseMidiPattern("MThd not really", 15, "Bad", notMidi, merr),
+               "something that is not a MIDI file is refused");
+      }
+
       // And the folder walk, on a real filesystem: two directories of patterns
       // under one root have to come out as two shelves, and a second import of
       // the same root must not mix itself into the first.
@@ -3435,7 +3523,7 @@ int runSelfTest(const clap_plugin_entry_t *entry, double sampleRate) {
 
          std::string first;
          std::string ferr;
-         check(importAblFolder(root + "/src", root + "/out", first, ferr) == 3,
+         check(importPatternFiles(root + "/src", root + "/out", first, ferr) == 3,
                "three pattern files under two folders import as three presets -- and a "
                ".param sidecar is not one of them");
          check(first == "Acid", "and the browser is pointed at the first folder made");
@@ -3459,13 +3547,41 @@ int runSelfTest(const clap_plugin_entry_t *entry, double sampleRate) {
          // The same root again: a second shelf rather than a merge, so the two
          // imports cannot end up half of each.
          std::string second;
-         check(importAblFolder(root + "/src", root + "/out", second, ferr) == 3 &&
+         check(importPatternFiles(root + "/src", root + "/out", second, ferr) == 3 &&
                   second == "Acid_2",
                "importing the same folder twice gives a second shelf rather than a mixture");
 
+         // One file rather than a folder: a folder of one, landing on the
+         // shelf its directory would have made.
+         std::string oneFolder;
+         std::string oneErr;
+         check(importPatternFiles(root + "/src/Techno/Three.pat", root + "/out2", oneFolder,
+                                  oneErr) == 1 &&
+                  oneFolder == "Techno",
+               "a single pattern file imports on its own, onto its own folder's shelf");
+
+         // And a MIDI file through the same call, picked by its extension.
+         uint16_t one[kMaxSteps];
+         clearPattern(one);
+         Step only;
+         only.note = 4;
+         one[0] = only.pack();
+         MidiExport ms;
+         ms.steps = one;
+         ms.length = 4;
+         ms.accentVelocity = 100.0;
+         std::string mwerr;
+         check(writePresetFile(root + "/src/Techno/Four.mid", patternToMidiFile(ms), mwerr),
+               "a MIDI file is written into the folder under test");
+         std::string midFolder;
+         std::string midErr;
+         check(importPatternFiles(root + "/src/Techno/Four.mid", root + "/out3", midFolder,
+                                  midErr) == 1,
+               "and a .mid imports through the same call as a .pat");
+
          std::string dirErr;
          std::string none;
-         check(importAblFolder(root + "/out/Techno", root + "/out", none, dirErr) == 0 &&
+         check(importPatternFiles(root + "/out/Acid", root + "/out", none, dirErr) == 0 &&
                   !dirErr.empty(),
                "a folder with no pattern files in it says so");
 

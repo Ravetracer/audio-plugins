@@ -1,11 +1,51 @@
 # SäureKiste -- status
 
 Version 0.10.0. Linux and Windows, CLAP and VST3. 63 parameters, 27 presets,
-builds clean, self-test passes with no failures across 274 checks, and
+builds clean, self-test passes with no failures across 282 checks, and
 `tools/check-instances.sh` passes with two editors open at once.
 
 Six of seven fixes were confirmed by backing the bug out and watching the suite
 fail; the seventh has no contract to assert. See `TODO.md` §3.
+
+0.10.0 also imports MIDI files, and imports one file as readily as a folder.
+
+**Standard MIDI Files** join the three shapes of `.pat` the browser already
+read. Format 0 or 1, every track merged, quantised to sixteenths, one pattern
+per file. The reader is in `src/midifile.cpp` beside the writer that was
+already there, which is the point of putting it there: **the three conventions
+are read back exactly as they are written.** A velocity at or above the accent
+threshold is an accent, a note still sounding when the next step begins is a
+slide, and a step bracketed by CC1 carries a vibrato.
+
+That symmetry is the test, and it is the strongest one in this file because it
+cost nothing: a pattern is written out with `patternToMidiFile()` and read back
+with `parseMidiPattern()`, and every step has to come back as it went --
+pitches, octaves, slides, accents and vibratos. Breaking the slide rule or the
+accent threshold fails it, both confirmed by breaking them.
+
+**A file that repeats is reduced to what repeats.** The smallest period that
+divides the file's length and reproduces it exactly becomes the pattern, so
+four bars of a one-bar figure import as one bar; a file that does not repeat
+exactly is left at its full length. Over the sixty-file library this was
+written against: 29 files reduce to 16 steps, 7 to 8, 4 to 4, 2 to 32, and 18
+are genuinely four bars of different material and are kept whole.
+
+**One file or a folder.** `importPatternFiles()` takes either; a single file is
+a folder of one and lands on the shelf its own directory would have made, so
+importing one pattern now and the rest of its folder later puts them together.
+The browser's IMPORT menu grew a "Pattern file..." row beside "Pattern
+folder...".
+
+`src/abl.{h,cpp}` is now `src/patternimport.{h,cpp}`, because a file called
+`abl.cpp` that reads MIDI is a lie. Everything the formats have in common once
+they are a list of steps -- the octave fitting, the packing, the parameters
+that describe the pattern -- is one `buildImport()` they all call.
+
+One thing the round trip caught before anything else did: the vibrato flag was
+read by asking what CC1 was doing at the middle of the step, and with the gate
+at a half the controller's release landed exactly on the point being sampled
+and won. The rule is now the same one the notes get -- quantise the *up* to its
+nearest step -- which is both simpler and symmetric with everything else here.
 
 0.10.0 adds the ninth and tenth drive models, and they are one pedal.
 

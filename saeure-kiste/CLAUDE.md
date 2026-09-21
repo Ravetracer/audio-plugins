@@ -141,9 +141,9 @@ saeure-kiste/
 │   │                        steps, gates, slides, accents, the chain and the
 │   │                        seeded generator
 │   ├── midifile.{h,cpp}     a pattern as a standard MIDI file, for the drag
-│   ├── abl.{h,cpp}          reading ABL's .pat text pattern format, and the
-│   │                        folder walk that turns a library of them into
-│   │                        shelves of presets
+│   ├── patternimport.{h,cpp} reading somebody else's patterns -- ABL's three
+│   │                        .pat shapes and Standard MIDI Files -- and the
+│   │                        walk that turns a library into shelves of presets
 │   ├── gui/dragfile.{h,cpp} the desktop drag itself: XDND on X11, OLE on win32
 │   ├── gui/seqwindow.{h,cpp} the sequencer's piano-roll window
 │   └── dsp/acid_engine.{h,cpp}  the circuit
@@ -384,7 +384,7 @@ tool names and an environment variable from the folder name, and
   *first* entry it finds for a parameter and stops, so a second value for the
   same id is silently dropped -- which would have made the sidecar a no-op
   wherever the `.pat` header already carried the knob. `setParam` in
-  `abl.cpp` replaces in place for exactly that reason.
+  `patternimport.cpp` replaces in place for exactly that reason.
 - **ABL's pitch zero is this plugin's C at octave 0**, which is MIDI key 36 and
   is also what ABL2 spells `c-3`. That coincidence is what makes the two forms
   comparable at all; it is written down in `kAblBaseKey` and should stay tied
@@ -434,6 +434,21 @@ tool names and an environment variable from the folder name, and
   Without it an unmatched pair carries a current at rest and the clipper's node
   sits off zero -- a DC offset that the amplifier's blocker then turns into a
   thump on every note.
+- **The MIDI reader and the MIDI writer share three conventions and must stay
+  that way.** Accent is a velocity at or above the threshold, slide is an
+  overlap, vibrato is CC1 around the step. Both halves are in
+  `src/midifile.cpp` for that reason, and the self-test round-trips a pattern
+  through both. Change one and change the other, or the round trip fails --
+  which is the point of it.
+- **Quantise the CC1 *up*, do not sample the controller mid-step.** The first
+  version asked what CC1 was doing at the middle of each step; with the gate at
+  a half, the controller's release lands exactly there and wins, and every
+  vibrato was lost. Note onsets are quantised to their nearest step and the
+  controller is too.
+- **The loop reduction is exact or it does not happen.** The smallest period
+  that *divides* the length and reproduces it with `==` on every step. No
+  tolerance, no "close enough": a pattern that nearly repeats is a pattern that
+  does not, and shortening it would throw away the bar that differs.
 - **The version lives in two places** — `project(... VERSION)` in
   `CMakeLists.txt` and `kPluginVersion` in `src/saeurekiste.h`. A
   `static_assert` fails the build when they disagree. Bump both.

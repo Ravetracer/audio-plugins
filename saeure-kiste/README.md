@@ -442,12 +442,21 @@ wherever the desktop's file chooser can reach, and **IMPORT...** lists the packs
 it can see plus *Other file...* for one from anywhere else. An import never
 overwrites: the pack becomes a new folder named after itself.
 
-### Importing ABL patterns
+### Importing patterns
 
-**IMPORT... -> *Pattern folder...*** reads the pattern files written by
-AudioRealism Bassline. It asks for a directory rather than a file, and every
-`.pat` under it becomes a preset: one folder per source directory, named after
-it, so a library of eighteen folders imports as eighteen shelves in one go.
+**IMPORT... -> *Pattern file...* / *Pattern folder...*** reads somebody else's
+patterns, one at a time or a directory at a time. Every pattern file under the
+chosen path becomes a preset: one folder per source directory, named after it,
+so a library of eighteen folders imports as eighteen shelves in one go. A
+single file is a folder of one and lands on the shelf its own directory would
+have made, so importing one now and the rest later puts them together.
+
+Two families are read, told apart by extension:
+
+- `.mid` / `.midi` -- Standard MIDI Files, format 0 or 1, every track merged,
+  quantised to sixteenths, one pattern per file. See below.
+- `.pat` -- the pattern files written by AudioRealism Bassline, in three
+  shapes.
 
 Three shapes, picked per file from what is in it rather than from the
 extension, so one folder may hold a mixture:
@@ -472,6 +481,32 @@ preset in the right area rather than on the same number: the two instruments
 model the same machine and do not share knob curves. Volume is anchored rather
 than swept, so ABL's own default arrives as this plugin's default. ABL's tempo,
 its high-pass and its distortion model are dropped.
+
+#### MIDI
+
+The reader is in `src/midifile.cpp` beside the writer that was already there,
+and that is deliberate: **the three conventions are read back exactly as this
+plugin writes them.** A velocity at or above the accent threshold is an accent,
+a note still sounding when the next step begins is a slide, and a step
+bracketed by CC1 carries a vibrato. So a pattern dragged out of the window into
+a DAW and imported again is the pattern that left -- and that round trip is the
+self-test, because it cost nothing to write and catches either half of the
+convention drifting.
+
+**A file that repeats is reduced to what repeats.** The smallest period that
+divides its length and reproduces it exactly becomes the pattern, so four bars
+of a one-bar figure import as one bar. A file that does not repeat exactly is
+left whole, up to the bank's 128 steps. Over a sixty-file library: 29 reduced
+to 16 steps, 13 to 8 or fewer, and 18 were genuinely four bars and were kept.
+
+The grid is sixteenths, which is this sequencer's own default Rate. A file
+written in triplets or thirty-seconds quantises to the nearest sixteenth and
+loses something; nothing in the file says it was meant differently, and
+guessing a grid per file would turn a wrong import into a mysterious one. One
+note per step, earliest onset first and the lowest key breaking a tie, because
+the instrument is monophonic.
+
+#### ABL
 
 ABL3's six columns are `pitch down up slide accent gate`. That order is not
 guesswork: it is fixed by the JukeboxPatch, which writes the same per-step

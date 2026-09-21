@@ -14,6 +14,8 @@
 
 #include <cstdint>
 #include <string>
+#include <utility>
+#include <vector>
 
 namespace saeurekiste {
 
@@ -38,5 +40,36 @@ std::string midiExportPath(int patternNumber);
 
 // Writes `bytes` to `path`. Returns false and fills `error` if it could not.
 bool writeMidiFile(const std::string &path, const std::string &bytes, std::string &error);
+
+// ------------------------------------------------------------------ reading
+//
+// The other direction, for importing somebody else's pattern. Only what a
+// pattern needs comes back: the notes, and the CC1 the vibrato convention
+// uses. Tempo, key, port and the rest of a MIDI file are dropped, because a
+// pattern here has none of them -- the tempo belongs to the host and the
+// pattern is sixteen steps of pitch rather than a timeline.
+
+struct MidiNote {
+   long onset = 0;   // in ticks from the start of the file
+   long release = 0; // its note-off, which is what says whether it slides
+   int key = 0;
+   int velocity = 0;
+};
+
+struct MidiRead {
+   int division = 96;              // ticks to the quarter note
+   std::vector<MidiNote> notes;    // sorted by onset, then by key
+   std::vector<std::pair<long, bool>> mod; // CC1 on and off, in ticks
+};
+
+// Parses format 0 and format 1, merging every track: a pattern is one voice
+// and which track its notes were written on is not something this plugin has
+// anywhere to put. Returns false for anything that is not a MIDI file, or that
+// is one with no notes in it.
+//
+// SMPTE timecode divisions are refused rather than guessed at. A pattern is
+// counted in beats and an SMPTE file is counted in seconds, so there is no
+// conversion that does not need a tempo this plugin does not have.
+bool parseMidiFile(const char *bytes, size_t length, MidiRead &out, std::string &error);
 
 } // namespace saeurekiste

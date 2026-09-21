@@ -224,4 +224,179 @@ bool writeMidiFile(const std::string &path, const std::string &bytes, std::strin
    return ok;
 }
 
+
+// ------------------------------------------------------------------ reading
+
+namespace {
+
+// A standard MIDI file is big-endian throughout, and its delta times are the
+// variable-length quantity the spec calls a "variable-length value": seven
+// bits per byte, high bit set on every byte but the last.
+struct Reader {
+   const unsigned char *p;
+   size_t left;
+
+   bool need(size_t n) const { return left >= n; }
+   unsigned char byte() {
+      --left;
+      return *p++;
+   }
+   uint32_t be(int n) {
+      uint32_t v = 0;
+      for (int i = 0; i < n; ++i)
+         v = (v << 8) | byte();
+      return v;
+   }
+   // Returns false on a quantity that never terminates, which is what a
+   // truncated file looks like from in here.
+   bool vlq(uint32_t &out) {
+      out = 0;
+      for (int i = 0; i < 4; ++i) {
+         if (!need(1))
+            return false;
+         const unsigned char c = byte();
+         out = (out << 7) | (c & 0x7Fu);
+         if (!(c & 0x80u))
+            return true;
+      }
+      return false;
+   }
+};
+
+} // namespace
+
+bool parseMidiFile(const char *bytes, size_t length, MidiRead &out, std::string &error) {
+   out = MidiRead();
+   if (!bytes || length < 14 || std::string(bytes, 4) != "MThd") {
+      error = "Not a MIDI file.";
+      return false;
+   }
+   Reader h{reinterpret_cast<const unsigned char *>(bytes) + 8, 6};
+   const uint32_t headerLen = static_cast<uint32_t>(
+      (static_cast<unsigned char>(bytes[4]) << 24) | (static_cast<unsigned char>(bytes[5]) << 16) |
+      (static_cast<unsigned char>(bytes[6]) << 8) | static_cast<unsigned char>(bytes[7]));
+   const int format = static_cast<int>(h.be(2));
+   const int tracks = static_cast<int>(h.be(2));
+   const int division = static_cast<int>(static_cast<int16_t>(h.be(2)));
+   if (format > 1) {
+      error = "Only format 0 and format 1 MIDI files are read.";
+      return false;
+   }
+   if (division <= 0) {
+      error = "That MIDI file is timed in SMPTE frames rather than in beats.";
+      return false;
+   }
+   out.division = division;
+
+   // Note-ons waiting for their note-off, per key. A list rather than one
+   // entry, because a file may legitimately restart a key before releasing it.
+   std::vector<std::pair<long, int>> pending[128];
+
+   size_t pos = 8 + headerLen;
+   for (int t = 0; t < tracks && pos + 8 <= length; ++t) {
+      if (std::string(bytes + pos, 4) != "MTrk")
+         break;
+      const uint32_t trackLen = static_cast<uint32_t>(
+         (static_cast<unsigned char>(bytes[pos + 4]) << 24) |
+         (static_cast<unsigned char>(bytes[pos + 5]) << 16) |
+         (static_cast<unsigned char>(bytes[pos + 6]) << 8) |
+         static_cast<unsigned char>(bytes[pos + 7]));
+      pos += 8;
+      const size_t end = trackLen > length - pos ? length : pos + trackLen;
+      Reader r{reinterpret_cast<const unsigned char *>(bytes) + pos, end - pos};
+      long now = 0;
+      unsigned char running = 0;
+      while (r.need(1)) {
+         uint32_t delta = 0;
+         if (!r.vlq(delta))
+            break;
+         now += static_cast<long>(delta);
+         if (!r.need(1))
+            break;
+         unsigned char status = *r.p;
+         if (status & 0x80u) {
+            r.byte();
+            if (status < 0xF0u)
+               running = status;
+         } else {
+            // Running status: the last channel status byte still applies.
+            status = running;
+            if (!status)
+               break;
+         }
+
+         if (status == 0xFFu) { // meta
+            if (!r.need(1))
+               break;
+            r.byte(); // the type, which nothing here needs
+            uint32_t len = 0;
+            if (!r.vlq(len) || !r.need(len))
+               break;
+            r.p += len;
+            r.left -= len;
+            continue;
+         }
+         if (status == 0xF0u || status == 0xF7u) { // sysex
+            uint32_t len = 0;
+            if (!r.vlq(len) || !r.need(len))
+               break;
+            r.p += len;
+            r.left -= len;
+            continue;
+         }
+
+         const unsigned char high = status & 0xF0u;
+         const int operands = (high == 0xC0u || high == 0xD0u) ? 1 : 2;
+         if (!r.need(static_cast<size_t>(operands)))
+            break;
+         const int d1 = r.byte();
+         const int d2 = operands == 2 ? r.byte() : 0;
+
+         if (high == 0x90u && d2 > 0) {
+            pending[d1 & 127].emplace_back(now, d2);
+         } else if (high == 0x80u || (high == 0x90u && d2 == 0)) {
+            auto &q = pending[d1 & 127];
+            if (!q.empty()) {
+               MidiNote n;
+               n.onset = q.front().first;
+               n.velocity = q.front().second;
+               n.release = now;
+               n.key = d1 & 127;
+               out.notes.push_back(n);
+               q.erase(q.begin());
+            }
+         } else if (high == 0xB0u && d1 == 1) {
+            out.mod.emplace_back(now, d2 > 0);
+         }
+      }
+      pos = end;
+   }
+
+   // A note still held at the end of the file is released there rather than
+   // dropped: a one-bar loop exported without a final note-off is still a
+   // pattern, and throwing its last note away would be the wrong answer.
+   long last = 0;
+   for (const MidiNote &n : out.notes)
+      last = std::max(last, n.release);
+   for (int k = 0; k < 128; ++k)
+      for (const auto &held : pending[k]) {
+         MidiNote n;
+         n.onset = held.first;
+         n.velocity = held.second;
+         n.release = std::max(last, held.first + 1);
+         n.key = k;
+         out.notes.push_back(n);
+      }
+
+   if (out.notes.empty()) {
+      error = "That MIDI file has no notes in it.";
+      return false;
+   }
+   std::sort(out.notes.begin(), out.notes.end(), [](const MidiNote &a, const MidiNote &b) {
+      return a.onset != b.onset ? a.onset < b.onset : a.key < b.key;
+   });
+   std::sort(out.mod.begin(), out.mod.end());
+   return true;
+}
+
 } // namespace saeurekiste

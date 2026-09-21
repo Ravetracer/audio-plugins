@@ -1622,7 +1622,7 @@ private:
    // The packs, then "Other file...", then "Pattern folder...". The last two
    // need a desktop chooser and are left out where there is none.
    int browserImportCount() const {
-      return static_cast<int>(mImportPacks.size()) + (fileDialogAvailable() ? 2 : 0);
+      return static_cast<int>(mImportPacks.size()) + (fileDialogAvailable() ? 3 : 0);
    }
 
    Rect browserScrollbar() const {
@@ -1871,8 +1871,8 @@ private:
          setColor(cr, mSpec.theme.textMute);
          drawText(cr, last.x + last.w + 12.0, last.y + last.h - 6.0,
                   mBrowserStatus.empty()
-                     ? "A pack is one file holding a whole folder; IMPORT also reads a "
-                       "folder of ABL .pat patterns."
+                     ? "A pack is one file holding a whole folder; IMPORT also reads "
+                       ".pat and .mid patterns, one or a folder at a time."
                      : mBrowserStatus.c_str(),
                   9, false, Align::Left);
 
@@ -1897,6 +1897,7 @@ private:
                const int extra = row - static_cast<int>(mImportPacks.size());
                std::string label = extra < 0    ? fileNameOf(mImportPacks[row])
                                    : extra == 0 ? "Other file..."
+                                   : extra == 1 ? "Pattern file..."
                                                 : "Pattern folder...";
                setColor(cr, mSpec.theme.text, hot ? 1.0 : 0.85);
                drawText(cr, r.x + 8, r.y + r.h - 6.0, label.c_str(), 10, extra >= 0, Align::Left);
@@ -3776,10 +3777,14 @@ private:
                      importPack(openFileDialog("Import preset pack", "Preset pack",
                                                packExtensionFromPath(
                                                   mDelegate.guiPackPathFor("pack"))));
+                  } else if (extra == 1) {
+                     // One foreign pattern file rather than a pack. The plugin
+                     // tells them apart by what the path is, so the window does
+                     // not have to know the formats -- only enough to put a
+                     // useful filter on the chooser.
+                     mDelegate.guiKeyboardTaken();
+                     importPack(openFileDialog("Import a pattern", "Pattern file", "pat"));
                   } else {
-                     // A folder of foreign pattern files rather than a pack.
-                     // The plugin tells the two apart by what the path is, so
-                     // the window does not have to know the format at all.
                      mDelegate.guiKeyboardTaken();
                      importPack(openFolderDialog("Import a folder of patterns"));
                   }
