@@ -417,6 +417,43 @@ wherever the desktop's file chooser can reach, and **IMPORT...** lists the packs
 it can see plus *Other file...* for one from anywhere else. An import never
 overwrites: the pack becomes a new folder named after itself.
 
+### Importing ABL patterns
+
+**IMPORT... -> *Pattern folder...*** reads the pattern files written by
+AudioRealism Bassline. It asks for a directory rather than a file, and every
+`.pat` under it becomes a preset: one folder per source directory, named after
+it, so a library of eighteen folders imports as eighteen shelves in one go.
+
+Three shapes, picked per file from what is in it rather than from the
+extension, so one folder may hold a mixture:
+
+| Shape | |
+|---|---|
+| ABL2 text | four columns, `note gate slide accent`, the note spelled `c#3` |
+| ABL3 text | six columns, `pitch down up slide accent gate` |
+| Reason JukeboxPatch | XML under the same `.pat` extension: `dpitch`/`ddown`/`dup`/`dslide`/`daccent`/`dgate` per step, plus `dpatternlength` |
+
+A `.param` file beside a `.pat` is that pattern's knobs on their own, one
+`"Reso Trim" = 0.50000000` per line. It is applied after the header and wins,
+because it carries ABL's whole front panel where the header carries a subset --
+one file in the reference library has no header at all and only its sidecar. A
+`.param` on its own holds no pattern and is not imported.
+
+The notes, octaves, slides and accents come across exactly as the file has them
+-- a step with its gate off is a rest -- and a file holding several patterns
+fills that many slots of the bank. The header's knob settings are read as
+normalised positions through this plugin's own ranges, which puts an imported
+preset in the right area rather than on the same number: the two instruments
+model the same machine and do not share knob curves. Volume is anchored rather
+than swept, so ABL's own default arrives as this plugin's default. ABL's tempo,
+its high-pass and its distortion model are dropped.
+
+ABL3's six columns are `pitch down up slide accent gate`. That order is not
+guesswork: it is fixed by the JukeboxPatch, which writes the same per-step
+values under those names in that order -- and the self-test holds it there by
+reading the same four steps in all three shapes and requiring identical
+output.
+
 There are two ways back to the start, and the difference between them is the
 sequencer. **Factory Reset** puts every parameter back to the value the table
 gives it and leaves whatever you had written in the pattern bank alone.

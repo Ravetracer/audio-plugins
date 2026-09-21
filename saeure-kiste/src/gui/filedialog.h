@@ -1,8 +1,9 @@
 #pragma once
 
 // The desktop's own file chooser, for the two places this plugin needs one:
-// writing a preset pack somewhere other than its own packs folder, and reading
-// one from wherever it was downloaded to.
+// writing a preset pack somewhere other than its own packs folder, reading one
+// from wherever it was downloaded to, and picking the folder of foreign pattern
+// files to import.
 //
 // There is no toolkit here -- the window is raw X11 and Cairo, which is what
 // keeps the plugin a single file with no runtime dependencies -- so there is no
@@ -28,5 +29,10 @@ std::string openFileDialog(const std::string &title, const std::string &filterNa
                            const std::string &extension);
 std::string saveFileDialog(const std::string &title, const std::string &suggestedPath,
                            const std::string &filterName, const std::string &extension);
+
+// A directory rather than a file, for importing a whole folder of patterns at
+// once. Same deal: the chosen path, or empty if there was no chooser or the
+// user cancelled.
+std::string openFolderDialog(const std::string &title);
 
 } // namespace saeurekiste

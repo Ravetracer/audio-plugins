@@ -116,6 +116,9 @@ saeure-kiste/
 │   │                        steps, gates, slides, accents, the chain and the
 │   │                        seeded generator
 │   ├── midifile.{h,cpp}     a pattern as a standard MIDI file, for the drag
+│   ├── abl.{h,cpp}          reading ABL's .pat text pattern format, and the
+│   │                        folder walk that turns a library of them into
+│   │                        shelves of presets
 │   ├── gui/dragfile.{h,cpp} the desktop drag itself: XDND on X11, OLE on win32
 │   ├── gui/seqwindow.{h,cpp} the sequencer's piano-roll window
 │   └── dsp/acid_engine.{h,cpp}  the circuit
@@ -330,6 +333,37 @@ tool names and an environment variable from the folder name, and
   discovery, which is the same for every instance by definition.
   `tools/check-instances.sh` proves it from the outside, with two editors open.
 
+- **ABL3's six columns are `pitch down up slide accent gate`, and nothing in
+  the format says so.** The order was recovered from a Reason JukeboxPatch
+  sitting in the same pattern library, which writes the same per-step values as
+  named XML properties -- `dpitch`, `ddown`, `dup`, `dslide`, `daccent`,
+  `dgate` -- in exactly that order. Statistics on the corpus do not separate
+  the four flag columns: slide and accent occur at similar rates and neither
+  correlates with pitch. The self-test pins it by reading the same four steps
+  in ABL2's four columns and ABL3's six and requiring identical output, which
+  was confirmed by swapping two columns and watching it fail. Do not
+  "simplify" that test away -- it is the only thing holding the order, and it
+  covers the XML reader too, which names the same six fields in a table whose
+  order is just as easy to disturb.
+- **A `.pat` is three different file formats.** ABL2 text, ABL3 text and a
+  Reason JukeboxPatch, all under the same extension. `parseAblPattern` picks
+  by content -- the XML by its first non-space character -- because the
+  extension does not distinguish them, and a library holds a mixture. A fourth
+  shape goes in the same place.
+- **`decay` and `dpatternlength` both begin with `d`.** The XML's step fields
+  are `dpitch`, `ddown`, `dup`, `dslide`, `daccent`, `dgate` *plus a step
+  index*, so the split is a prefix match followed by digits to the end of the
+  name, not a prefix match alone. Getting that wrong files the decay knob as a
+  step; the self-test checks it.
+- **A `.param` sidecar must overwrite, not append.** `formatPreset` takes the
+  *first* entry it finds for a parameter and stops, so a second value for the
+  same id is silently dropped -- which would have made the sidecar a no-op
+  wherever the `.pat` header already carried the knob. `setParam` in
+  `abl.cpp` replaces in place for exactly that reason.
+- **ABL's pitch zero is this plugin's C at octave 0**, which is MIDI key 36 and
+  is also what ABL2 spells `c-3`. That coincidence is what makes the two forms
+  comparable at all; it is written down in `kAblBaseKey` and should stay tied
+  to the `36 +` in `seqFire()`.
 - **The version lives in two places** — `project(... VERSION)` in
   `CMakeLists.txt` and `kPluginVersion` in `src/saeurekiste.h`. A
   `static_assert` fails the build when they disagree. Bump both.

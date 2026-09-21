@@ -18,6 +18,7 @@
 #include "dsp/delay.h"
 #include "entry.h"
 #include "factories.h"
+#include "abl.h"
 #include "midifile.h"
 #include "params.h"
 #include "presets_generated.h"
@@ -1955,7 +1956,27 @@ private:
       return writePresetFile(path, text, error);
    }
 
+   // A folder of foreign pattern files. The walk and the parsing are in
+   // abl.cpp; all that belongs here is where the presets go and telling the
+   // library to look again afterwards.
+   bool importPatternFolder(const std::string &root, std::string &folder, std::string &error) {
+      if (importAblFolder(root, userPresetDir(), folder, error) == 0)
+         return false;
+      mPresets.clear();
+      mPresetsScanned = false;
+      ensurePresetList();
+      return true;
+   }
+
    bool guiImportPack(const std::string &path, std::string &folder, std::string &error) override {
+      // A directory is not a pack: it is a folder of foreign pattern files, and
+      // the browser's IMPORT menu offers both through this one call because
+      // what comes out the far end is the same thing either way -- a new shelf
+      // of presets in the user library.
+      std::error_code dirEc;
+      if (std::filesystem::is_directory(path, dirEc))
+         return importPatternFolder(path, folder, error);
+
       std::string packName;
       std::vector<plugincore::PresetPackEntry> entries;
       if (!plugincore::parsePresetPackFile(presetContext(), path, packName, entries, error))

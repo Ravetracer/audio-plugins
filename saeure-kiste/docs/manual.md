@@ -8,7 +8,7 @@ subtitle: CLAP and VST3 instrument for Linux and Windows
 
 *A monophonic acid bass synthesiser. Linux and Windows, CLAP and VST3.*
 
-Version 0.7.1
+Version 0.8.0
 
 ---
 
@@ -673,12 +673,46 @@ browser has three buttons:
 |---|---|
 | **EXPORT** | Writes the selected folder to `…/SaeureKiste/packs/<folder>.saeurekistepack` and says where it went. |
 | **EXPORT AS…** | The same, through the desktop's own file chooser, for handing the pack to somebody else. Only shown when there is a chooser to open — zenity or kdialog on Linux, the system one on Windows. |
-| **IMPORT…** | Lists the packs in the packs folder, plus *Other file…* for one from anywhere else. |
+| **IMPORT…** | Lists the packs in the packs folder, plus *Other file…* for one from anywhere else and *Pattern folder…* for patterns written by another instrument. |
 
 An import never overwrites anything: the pack becomes a new folder named after
 itself, and importing the same pack twice gives two folders rather than a
 mixture of both versions in one. A pack carries each preset's text exactly as it
 was written, so the patterns inside a preset travel with it.
+
+### Importing patterns from elsewhere
+
+*Pattern folder…* in the IMPORT menu reads `.pat` files — the pattern format
+written by AudioRealism Bassline. It asks for a **folder** rather than a file,
+and every `.pat` anywhere under it becomes a preset: one shelf per directory,
+named after that directory. Point it at a single pack of patterns and you get
+one shelf; point it at the folder they all live in and you get all of them at
+once.
+
+Three shapes of `.pat` are read — ABL2's four columns, ABL3's six, and the XML
+patch a Reason rack writes under the same extension. Which one a file is comes
+from what is in it rather than from what it is called, so a folder holding a
+mixture imports in one go. A `.param` file sitting beside a `.pat` of the same
+name is that pattern's knob settings on their own; it is picked up with the
+pattern and takes precedence over the settings in the pattern's own header,
+which is often the shorter list. A `.param` with no `.pat` beside it holds no
+pattern and is skipped.
+
+What arrives is the line itself — the notes, their octaves, the slides and the
+accents, exactly as the file has them, with a step whose gate is off imported
+as a rest. A file that holds several patterns fills that many slots of the
+bank. A line written higher or lower than a step can carry on its own is moved
+as a whole with Pattern Oct rather than flattened, and Mode is set to
+*Sequencer*, so an imported preset plays its pattern the moment the host's
+transport runs.
+
+The knob settings in the file's header come across too — tuning, cutoff,
+resonance, envelope modulation, decay, accent, waveform, volume and, where the
+file has them, drive and distortion. **Treat them as a starting point rather
+than as a copy.** They arrive as positions on this instrument's own controls,
+and two instruments modelling the same machine still do not share the same knob
+curves, so an imported preset lands in the right area and wants a nudge. The
+file's own tempo is not imported at all: tempo here belongs to the host.
 
 ### The factory library
 

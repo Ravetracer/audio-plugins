@@ -7,6 +7,7 @@
 #if defined(_WIN32)
 #   include <windows.h>
 #   include <commdlg.h>
+#   include <shlobj.h>
 #else
 #   include <unistd.h>
 #endif
@@ -91,6 +92,22 @@ std::string saveFileDialog(const std::string &title, const std::string &suggeste
    ofn.lpstrDefExt = wext.c_str();
    ofn.Flags = OFN_OVERWRITEPROMPT | OFN_PATHMUSTEXIST | OFN_NOCHANGEDIR | OFN_EXPLORER;
    return GetSaveFileNameW(&ofn) ? narrow(file) : std::string();
+}
+
+std::string openFolderDialog(const std::string &title) {
+   // SHBrowseForFolder rather than IFileDialog: it needs no COM apartment of
+   // its own, which matters in a plugin that does not own the host's thread.
+   const std::wstring wtitle = widen(title);
+   BROWSEINFOW bi{};
+   bi.lpszTitle = wtitle.c_str();
+   bi.ulFlags = BIF_RETURNONLYFSDIRS | BIF_NEWDIALOGSTYLE;
+   LPITEMIDLIST id = SHBrowseForFolderW(&bi);
+   if (!id)
+      return std::string();
+   wchar_t path[MAX_PATH] = {0};
+   const bool ok = SHGetPathFromIDListW(id, path) != FALSE;
+   CoTaskMemFree(id);
+   return ok ? narrow(path) : std::string();
 }
 
 #else
@@ -187,6 +204,16 @@ std::string saveFileDialog(const std::string &title, const std::string &suggeste
    return runChooser("kdialog --title " + quote(title) + " --getsavefilename " +
                      quote(suggestedPath) + " " + quote("*." + extension + "|" + filterName) +
                      " 2>/dev/null");
+}
+
+std::string openFolderDialog(const std::string &title) {
+   const char *tool = chooser();
+   if (!tool)
+      return std::string();
+   if (std::strcmp(tool, "zenity") == 0)
+      return runChooser("zenity --file-selection --directory --title=" + quote(title) +
+                        " 2>/dev/null");
+   return runChooser("kdialog --title " + quote(title) + " --getexistingdirectory . 2>/dev/null");
 }
 
 #endif

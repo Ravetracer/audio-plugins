@@ -68,6 +68,7 @@ const char *dlerrorCompat() { return "see GetLastError()"; }
 #include "params.h"
 #include <sstream>
 
+#include "abl.h"
 #include "midifile.h"
 #include "pattern.h"
 #include "saeurekiste.h"
@@ -3213,6 +3214,263 @@ int runSelfTest(const clap_plugin_entry_t *entry, double sampleRate) {
          clearPattern(empty);
          spec.steps = empty;
          check(patternToMidiFile(spec).empty(), "an empty pattern writes no file at all");
+      }
+   }
+
+   // --- reading ABL's .pat text pattern format.
+   //
+   // The corpus this was written against is not in the repository -- it is
+   // somebody else's pattern library -- so the cases here are written out by
+   // hand. The one that earns its place is the pair: the same four steps in
+   // ABL2's four columns and in ABL3's six have to come out identical, which
+   // is the only thing holding ABL3's column order in place.
+   {
+      using namespace saeurekiste;
+      const char kAbl2[] =
+         "; ABL2 Meta tag: 4\r\n"
+         "; Tune: 0.500000 Cutoff: 0.500000 Resonance: 0.250000 Envmod: 0.000000 "
+         "Decay: 0.000000 Accent: 0.000000 Waveform: 1.000000 Volume: 0.750000 \r\n"
+         "c-3 1 0 0\r\n"
+         "d#4 1 1 0\r\n"
+         "a-2 1 0 1\r\n"
+         "c-3 0 0 0\r\n";
+      // pitch, down, up, slide, accent, gate.
+      const char kAbl3[] =
+         "; ABL3 Meta tag: 4\n"
+         "; Tune: 0.500000 Cutoff: 0.500000 Resonance: 0.250000 Envmod: 0.000000 "
+         "Decay: 0.000000 Accent: 0.000000 Waveform: 1.000000 Volume: 0.750000 \n"
+         "0 0 0 0 0 1\n"
+         "3 0 1 1 0 1\n"
+         "9 1 0 0 1 1\n"
+         "0 0 0 0 0 0\n";
+
+      AblImport two, three;
+      std::string err;
+      check(parseAblPattern(kAbl2, sizeof(kAbl2) - 1, "Two", two, err), "an ABL2 file parses");
+      check(parseAblPattern(kAbl3, sizeof(kAbl3) - 1, "Three", three, err), "an ABL3 file parses");
+
+      const uint16_t *a = two.bank.pattern(0);
+      const uint16_t *b = three.bank.pattern(0);
+      bool same = two.steps == 4 && three.steps == 4;
+      for (int i = 0; i < kMaxSteps; ++i)
+         same = same && a[i] == b[i];
+      check(same, "the same four steps in ABL2's four columns and ABL3's six read identically");
+
+      const Step s0 = Step::unpack(a[0]);
+      const Step s1 = Step::unpack(a[1]);
+      const Step s2 = Step::unpack(a[2]);
+      const Step s3 = Step::unpack(a[3]);
+      check(s0.note == 0 && s0.octave == 0, "ABL's c-3 is this plugin's C at the middle octave");
+      check(s1.note == 3 && s1.octave == 1 && s1.slide && !s1.accent,
+            "a sharp an octave up keeps its octave and its slide");
+      check(s2.note == 9 && s2.octave == -1 && s2.accent && !s2.slide,
+            "a note an octave down keeps its octave and its accent");
+      check(s3.note < 0, "a step with its gate off is a rest");
+      check(two.patternCount == 1 && two.clipped == 0, "one pattern, and nothing had to be moved");
+
+      // The knobs. Tune and Volume are the two that are not a plain sweep of
+      // this plugin's range, so they are the two worth asserting.
+      double tuning = 1.0, volume = 0.0, waveform = -1.0;
+      for (const auto &kv : two.preset.values) {
+         if (kv.first == kParamTuning)
+            tuning = kv.second;
+         else if (kv.first == kParamVolume)
+            volume = kv.second;
+         else if (kv.first == kParamWaveform)
+            waveform = kv.second;
+      }
+      check(std::fabs(tuning) < 1e-9, "ABL's centred Tune imports as no detune at all");
+      check(std::fabs(volume - paramTable()[kParamVolume].def) < 1e-9,
+            "ABL's default Volume imports as this plugin's default");
+      check(waveform == 1.0, "ABL's Waveform 1.0 is the square wave");
+
+      // A file may hold several patterns, and they go into the bank in order.
+      const char kBank[] =
+         "; ABL2 Meta tag: 1\n"
+         "c-3 1 0 0\n"
+         "; ABL2 Meta tag: 2\n"
+         "e-3 1 0 0\n"
+         "g-3 1 0 0\n";
+      AblImport bank;
+      check(parseAblPattern(kBank, sizeof(kBank) - 1, "Bank", bank, err) &&
+               bank.patternCount == 2 && bank.steps == 2,
+            "a file holding two patterns fills two slots of the bank");
+      check(Step::unpack(bank.bank.pattern(1)[1]).note == 7,
+            "the second pattern's second step is its own");
+
+      // Everything past +-2 octaves has to move as a whole, because a step
+      // cannot carry more than that on its own.
+      const char kHigh[] =
+         "; ABL2 Meta tag: 2\n"
+         "c-6 1 0 0\n"
+         "c-6 1 0 0\n";
+      AblImport high;
+      check(parseAblPattern(kHigh, sizeof(kHigh) - 1, "High", high, err) && high.clipped == 0,
+            "a line three octaves up is moved rather than flattened");
+      double shift = 0.0;
+      for (const auto &kv : high.preset.values)
+         if (kv.first == kParamPatternOctave)
+            shift = kv.second;
+      check(shift == 3.0 && Step::unpack(high.bank.pattern(0)[0]).octave == 0,
+            "and what it is moved by is Pattern Oct");
+
+      // And the whole thing has to survive being written out and read back,
+      // because that is the only form it ever reaches the plugin in.
+      PresetData back;
+      PatternData backPattern;
+      const std::string text = ablPresetText(two);
+      check(parsePreset(text.c_str(), text.size(), back, &backPattern, err),
+            "an imported preset parses as a preset");
+      bool round = backPattern.present;
+      for (int i = 0; i < kMaxSteps; ++i)
+         round = round && backPattern.pattern(0)[i] == a[i];
+      check(round, "and reads back as the pattern that went in");
+
+      // Not every file with that extension is one of these.
+      AblImport nope;
+      check(!parseAblPattern("<?xml version=\"1.0\"?>\n", 22, "Xml", nope, err),
+            "XML with no pattern in it is refused rather than read as an empty one");
+
+      // The third shape: a .pat that is a Reason JukeboxPatch. Same four steps
+      // again, under the property names the six columns were named from, so
+      // this holds the XML reader against the text one the same way.
+      const char kXml[] =
+         "<?xml version=\"1.0\"?>\n"
+         "<JukeboxPatch version=\"1.0\" >\n"
+         " <Properties deviceProductID=\"se.audiorealism.abl3\" >\n"
+         "  <Object name=\"custom_properties\" >\n"
+         "   <Value property=\"tuning\" type=\"number\" >0.500000</Value>\n"
+         "   <Value property=\"waveform\" type=\"number\" >1.000000</Value>\n"
+         "   <Value property=\"resonance\" type=\"number\" >0.250000</Value>\n"
+         "   <Value property=\"dpatternlength\" type=\"number\" >4.000000</Value>\n"
+         "   <Value property=\"dpitch0\" type=\"number\" >0.000000</Value>\n"
+         "   <Value property=\"dpitch1\" type=\"number\" >3.000000</Value>\n"
+         "   <Value property=\"dpitch2\" type=\"number\" >9.000000</Value>\n"
+         "   <Value property=\"dpitch3\" type=\"number\" >0.000000</Value>\n"
+         "   <Value property=\"ddown2\" type=\"number\" >1.000000</Value>\n"
+         "   <Value property=\"dup1\" type=\"number\" >1.000000</Value>\n"
+         "   <Value property=\"dslide1\" type=\"number\" >1.000000</Value>\n"
+         "   <Value property=\"daccent2\" type=\"number\" >1.000000</Value>\n"
+         "   <Value property=\"dgate0\" type=\"number\" >1.000000</Value>\n"
+         "   <Value property=\"dgate1\" type=\"number\" >1.000000</Value>\n"
+         "   <Value property=\"dgate2\" type=\"number\" >1.000000</Value>\n"
+         "   <Value property=\"dgate3\" type=\"number\" >0.000000</Value>\n"
+         "  </Object>\n"
+         " </Properties>\n"
+         "</JukeboxPatch>\n";
+      AblImport patch;
+      check(parseAblPattern(kXml, sizeof(kXml) - 1, "Patch", patch, err),
+            "a Reason JukeboxPatch carrying a pattern is read as one");
+      bool sameXml = patch.steps == 4;
+      for (int i = 0; i < kMaxSteps; ++i)
+         sameXml = sameXml && patch.bank.pattern(0)[i] == a[i];
+      check(sameXml, "and reads as the same four steps the two text forms do");
+      double xmlWave = -1.0;
+      for (const auto &kv : patch.preset.values)
+         if (kv.first == kParamWaveform)
+            xmlWave = kv.second;
+      check(xmlWave == 1.0, "its knobs are read too, under their own property names");
+
+      // "decay" and "dpatternlength" both begin with a d and neither is a step
+      // field; a prefix test that got that wrong would put them in the grid.
+      const char kDecay[] =
+         "<Value property=\"decay\" type=\"number\" >1.000000</Value>\n"
+         "<Value property=\"dpitch0\" type=\"number\" >0.000000</Value>\n"
+         "<Value property=\"dgate0\" type=\"number\" >1.000000</Value>\n";
+      AblImport decayPatch;
+      double decayRaw = -1.0;
+      check(parseAblPattern(kDecay, sizeof(kDecay) - 1, "Decay", decayPatch, err) &&
+               decayPatch.steps == 1,
+            "a property whose name merely starts with d is a knob, not a step");
+      for (const auto &kv : decayPatch.preset.values)
+         if (kv.first == kParamDecay)
+            decayRaw = kv.second;
+      check(decayRaw == 1.0, "and it lands on the knob it names");
+
+      // A .param sidecar wins over the header it sits beside.
+      const char kParam[] =
+         "\"Tuning\" = 0.50000000\n"
+         "\"Cutoff\" = 1.00000000\n"
+         "\"Reso Trim\" = 0.50000000\n";
+      AblImport sided;
+      check(parseAblPattern(kAbl2, sizeof(kAbl2) - 1, "Sided", sided, err), "the .pat parses");
+      double before = -1.0;
+      for (const auto &kv : sided.preset.values)
+         if (kv.first == kParamCutoff)
+            before = kv.second;
+      check(applyAblParams(kParam, sizeof(kParam) - 1, sided), "its .param sidecar applies");
+      double after = -1.0;
+      int cutoffEntries = 0;
+      for (const auto &kv : sided.preset.values)
+         if (kv.first == kParamCutoff) {
+            after = kv.second;
+            ++cutoffEntries;
+         }
+      check(before == 0.5 && after == 1.0 && cutoffEntries == 1,
+            "the sidecar replaces the header's value rather than sitting behind it");
+
+      // And the folder walk, on a real filesystem: two directories of patterns
+      // under one root have to come out as two shelves, and a second import of
+      // the same root must not mix itself into the first.
+      const std::string root = (std::filesystem::temp_directory_path() /
+                                ("saeurekiste-abl-" + std::to_string(
+#if defined(_WIN32)
+                                    static_cast<unsigned long>(GetCurrentProcessId())
+#else
+                                    static_cast<unsigned long>(getpid())
+#endif
+                                    ))).string();
+      std::error_code ec;
+      std::filesystem::create_directories(root + "/src/Acid", ec);
+      std::filesystem::create_directories(root + "/src/Techno", ec);
+      std::filesystem::create_directories(root + "/out", ec);
+      if (!ec) {
+         std::string werr;
+         check(writePresetFile(root + "/src/Acid/One.pat", kAbl2, werr) &&
+                  writePresetFile(root + "/src/Acid/One.param", kParam, werr) &&
+                  writePresetFile(root + "/src/Acid/Two.pat", kAbl3, werr) &&
+                  writePresetFile(root + "/src/Techno/Three.pat", kXml, werr) &&
+                  writePresetFile(root + "/src/Techno/notes.txt", "ignore me", werr),
+               "the folder under test is laid out");
+
+         std::string first;
+         std::string ferr;
+         check(importAblFolder(root + "/src", root + "/out", first, ferr) == 3,
+               "three pattern files under two folders import as three presets -- and a "
+               ".param sidecar is not one of them");
+         check(first == "Acid", "and the browser is pointed at the first folder made");
+         check(std::filesystem::exists(root + "/out/Acid/One." + std::string(kPresetExtension)) &&
+                  std::filesystem::exists(root + "/out/Techno/Three." +
+                                          std::string(kPresetExtension)),
+               "each source folder became a shelf of its own, and only the .pat files were read");
+
+         // The sidecar beside One.pat has to have reached the file on disk.
+         PresetData sideBack;
+         std::string sideErr;
+         double sideCutoff = -1.0;
+         if (parsePresetFile(root + "/out/Acid/One." + std::string(kPresetExtension), sideBack,
+                             sideErr))
+            for (const auto &kv : sideBack.values)
+               if (kv.first == kParamCutoff)
+                  sideCutoff = kv.second;
+         check(std::fabs(sideCutoff - 1.0) < 1e-6,
+               "a .param beside a .pat is picked up by the walk, not only by hand");
+
+         // The same root again: a second shelf rather than a merge, so the two
+         // imports cannot end up half of each.
+         std::string second;
+         check(importAblFolder(root + "/src", root + "/out", second, ferr) == 3 &&
+                  second == "Acid_2",
+               "importing the same folder twice gives a second shelf rather than a mixture");
+
+         std::string dirErr;
+         std::string none;
+         check(importAblFolder(root + "/out/Techno", root + "/out", none, dirErr) == 0 &&
+                  !dirErr.empty(),
+               "a folder with no pattern files in it says so");
+
+         std::error_code rmec;
+         std::filesystem::remove_all(root, rmec);
       }
    }
 

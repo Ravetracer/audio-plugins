@@ -1,11 +1,68 @@
 # SäureKiste -- status
 
-Version 0.7.1. Linux and Windows, CLAP and VST3. 63 parameters, 27 presets,
-builds clean, self-test passes with no failures across 235 checks, and
+Version 0.8.0. Linux and Windows, CLAP and VST3. 63 parameters, 27 presets,
+builds clean, self-test passes with no failures across 268 checks, and
 `tools/check-instances.sh` passes with two editors open at once.
 
 Six of seven fixes were confirmed by backing the bug out and watching the suite
 fail; the seventh has no contract to assert. See `TODO.md` §3.
+
+0.8.0 imports patterns written by another instrument.
+
+**Reading the pattern formats** written by AudioRealism Bassline. The browser's
+IMPORT menu grew a second entry beside "Other file...": "Pattern folder..."
+asks for a directory rather than a file, and every `.pat` under it becomes a
+preset. One shelf per source directory, named after it, so pointing at a
+library of eighteen folders imports eighteen shelves in one go rather than one
+file at a time.
+
+Three shapes, all of them found in one library and all of them read:
+
+| | |
+|---|---|
+| **ABL2 text** | four columns, `note gate slide accent`, the note spelled `c#3` |
+| **ABL3 text** | six columns, `pitch down up slide accent gate`, the pitch a semitone offset |
+| **Reason JukeboxPatch** | XML under the same extension, the same per-step values as `dpitch`/`ddown`/`dup`/`dslide`/`daccent`/`dgate` plus `dpatternlength` |
+
+The format is picked per *file* from what is in it -- the XML by its first
+character, not by its extension -- so one folder may hold a mixture.
+
+A **`.param` sidecar** beside a `.pat` is that pattern's knobs on their own,
+one `"Reso Trim" = 0.50000000` per line. It carries ABL's whole front panel
+where the text header carries a subset, so it is applied after the header and
+wins. It holds no pattern and is never imported on its own. One file in the
+library has no knob header at all and only its sidecar, which is what the
+pairing is for.
+
+What comes across, and what does not:
+
+- The notes, their octaves, the slides and the accents, exactly as the file has
+  them. A step with its gate off is a rest.
+- The header's knob settings -- Tune, Cutoff, Resonance, Env Mod, Decay,
+  Accent, Waveform, Volume, and ABL3's Drive and Distort -- read as normalised
+  positions through this plugin's own ranges. That puts an imported preset in
+  the right area rather than on the same number: the two instruments model the
+  same machine but do not share knob curves. Volume is the exception and is
+  anchored rather than swept, so ABL's own default arrives as this plugin's.
+- ABL's tempo, its high-pass and its distortion model are dropped. The first
+  belongs to the host here, and neither of the others has a counterpart whose
+  setting would mean the same thing.
+- A file holding several patterns fills that many slots of the bank, up to the
+  bank's sixty-four.
+- A line written outside the +-2 octaves a step can carry is moved as a whole
+  with Pattern Oct, chosen so the steps sit nearest their own middle. Across a
+  library of 380 files not one step had to be pulled in.
+
+ABL3's column order is the one thing here that could not be read off the
+format: it is `pitch down up slide accent gate`, fixed by the JukeboxPatch,
+which writes the same per-step values under those names in that order. The
+self-test holds it in place by reading the same four steps in all three shapes
+and requiring identical output -- confirmed for both the text and the XML path
+by swapping two fields and watching the check fail.
+
+Across the 381-file library every file now reads: 380 text patterns, one
+JukeboxPatch, one sidecar applied, 444 patterns, and not one step whose octave
+had to be pulled in.
 
 0.7.1 fixes a crash in GEN, and it is the kind worth writing down because the
 test suite watched it go past.

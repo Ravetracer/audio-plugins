@@ -45,6 +45,27 @@ preset, which exists for exactly this.
   remaining part of the signal path with no control over it.
 - **Filter coefficients update every 8 samples.** Inaudible on the envelopes
   this instrument has, but a fast automated cutoff sweep would show it.
+- **Only ABL's formats are read.** *Pattern folder...* takes ABL2 text, ABL3
+  text, the Reason JukeboxPatch and the `.param` sidecar, and nothing else.
+  Anything new goes in `src/abl.cpp` beside them: the format is picked per
+  file from its content rather than per import, so a folder may hold a
+  mixture, and the shared tail -- octave fitting, knob mapping, preset text --
+  is reached by filling one `KnobList` and one vector of `RawStep`.
+- **A `.param` with no `.pat` beside it is skipped.** It is knob settings with
+  no pattern, so importing it would make a preset with somebody else's
+  sequence in it. Turning it into a preset over the *default* pattern would be
+  defensible and is not done, because nothing in the reference library needs
+  it.
+- **ABL's `Highpass`, `Pregain`, `Noise Level`, `Reso Trim`, `Gate Trim`,
+  `Detune`, `Bass Boost`, `VCF Trim` and `Treble Boost` are dropped.** The
+  `.param` sidecar names all of them. Some have no counterpart here at all;
+  `Detune` and `Reso Trim` arguably map onto Tuning and Res Range but not at
+  the same scale, and a wrong mapping is worse than none.
+- **An imported preset's drive type is whatever the default is.** ABL's
+  `DistType` is a normalised index into *its* list of models and this plugin's
+  seven are different models in a different order, so mapping the number would
+  be worse than not mapping it. A named table -- ABL's mode N is this plugin's
+  Type X -- would need somebody to sit and listen to both.
 - **No clear-all for the bank.** COPY and PASTE landed in 0.3.0 and DEL, which
   empties the selected slot, in 0.5.0; emptying the whole bank in one go still
   means DEL on each pattern, or loading Blank Slate.
