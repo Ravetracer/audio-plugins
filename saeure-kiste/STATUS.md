@@ -1,11 +1,28 @@
 # SäureKiste -- status
 
-Version 0.12.0. Linux and Windows, CLAP and VST3. 63 parameters, 30 presets,
-builds clean, self-test passes with no failures across 282 checks, and
+Version 0.13.0. Linux and Windows, CLAP and VST3. 63 parameters, 30 presets,
+builds clean, self-test passes with no failures across 285 checks, and
 `tools/check-instances.sh` passes with two editors open at once.
 
 Six of seven fixes were confirmed by backing the bug out and watching the suite
 fail; the seventh has no contract to assert. See `TODO.md` §3.
+
+0.13.0 makes a pattern change wait for the end of the pattern.
+
+Selecting a pattern while the sequencer runs -- a bank click, PREV and NEXT, a
+mapped pad in Live mode, or host automation -- no longer switches on the spot.
+The playing pattern runs to its last step and the new one starts on its first,
+which is what the machine did and what lets a change be played by hand without
+hitting the bar line to the sample. Until then the waiting pattern's cell and
+the PATTERN title flash. The audio thread keeps the pattern it took as
+`mActivePattern` and only re-reads the Pattern parameter on step 1 of a cycle,
+or on whatever step the sequencer starts on; with the sequencer stopped a
+selection still takes effect at once. A chain counts from the taken pattern, so
+it re-bases at the same boundary. The self-test checks it note for note against
+a reference render, and fails with the change backed out.
+
+Automation placed mid-pattern now waits for the pattern's end like everything
+else. Automation on a pattern boundary lands exactly as before.
 
 0.12.0 rearranges the window and adds a RESET button to the preset bar.
 

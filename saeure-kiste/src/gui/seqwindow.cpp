@@ -26,6 +26,7 @@
 #include "params.h"
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <cstdio>
 #include <cstring>
@@ -655,7 +656,9 @@ private:
             return true;
       }
       if (hasPattern() && (mSpec.pattern->seqPlayhead() != mLastPlayhead ||
-                           mSpec.pattern->seqPlayingPattern() != mLastPlayingPattern))
+                           mSpec.pattern->seqPlayingPattern() != mLastPlayingPattern ||
+                           mSpec.pattern->seqPendingPattern() != mLastPending ||
+                           (mLastPending >= 0 && pendingBlinkOn() != mLastBlinkOn)))
          return true;
       return mSpec.ornament && mSpec.ornament->animating(mDelegate.guiEventCounter());
    }
@@ -2727,7 +2730,9 @@ private:
                        first + cols > length ? length : first + cols, length);
       else
          std::snprintf(title, sizeof(title), "PATTERN %d", pat + 1);
-      setColor(cr, live ? t.accent : t.textMute);
+      // The title flashes with the bank cell while this pattern is queued.
+      const bool waiting = mSpec.pattern->seqPendingPattern() == pat;
+      setColor(cr, live && !(waiting && !pendingBlinkOn()) ? t.accent : t.textMute);
       drawText(cr, mSeqRect.x + kSeqPad, mSeqRect.y + 15, title, 9.5, true, Align::Left);
       if (mMapMode) {
          const int target = mSpec.pattern->seqLearnTarget();
@@ -2977,12 +2982,23 @@ private:
    // automated and saved like any other -- drawn here rather than on a panel
    // because this is where they are used.
 
+   // A pattern waiting for the playing one to end flashes, about twice a
+   // second, until it takes over.
+   static bool pendingBlinkOn() {
+      const auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                         std::chrono::steady_clock::now().time_since_epoch())
+                         .count();
+      return (ms / 250) % 2 == 0;
+   }
+
    void drawBank(cairo_t *cr) {
       if (!hasBank())
          return;
       const Theme &t = mSpec.theme;
       const int selected = editPattern();
       const int playing = mSpec.pattern->seqPlayingPattern();
+      mLastPending = mSpec.pattern->seqPendingPattern();
+      mLastBlinkOn = pendingBlinkOn();
       const int chainLen = paneValue(mSpec.chainLengthParam, 1);
       const int chainMode = paneValue(mSpec.chainModeParam, 0);
       // Stay never leaves the selected pattern, so shading a chain it does not
@@ -3028,7 +3044,14 @@ private:
 
          char num[16];
          std::snprintf(num, sizeof(num), "%d", i + 1);
-         setColor(cr, sel ? t.text : (used ? t.textDim : t.textMute), used || sel ? 1.0 : 0.75);
+         const bool flash = i == mLastPending && mLastBlinkOn && !mapping;
+         if (flash) {
+            roundedRect(cr, r.x, r.y, r.w, r.h, 3.0);
+            setColor(cr, t.accent, 0.85);
+            cairo_fill(cr);
+         }
+         setColor(cr, flash ? t.bgBottom : (sel ? t.text : (used ? t.textDim : t.textMute)),
+                  used || sel ? 1.0 : 0.75);
          drawText(cr, r.x + r.w * 0.5, r.y + r.h - 7.0, num, 8.0, sel, Align::Center);
 
          // In map mode the number is replaced by the note that selects it, so
@@ -4419,6 +4442,8 @@ private:
    double mSeqScrollGrab = 0.0; // pointer offset inside the thumb, in pixels
    int mLastPlayhead = -1;
    int mLastPlayingPattern = -1;
+   int mLastPending = -1;
+   bool mLastBlinkOn = false;
    // A bank control under the pointer. Those three are parameters but they are
    // not on a panel, so the shared hover machinery cannot see them and the help
    // line would have nothing to say about the two that need explaining most.

@@ -239,6 +239,9 @@ public:
    // Which pattern is sounding, or -1 when the sequencer is not running. Only
    // differs from seqPattern() while a chain is running.
    virtual int seqPlayingPattern() const = 0;
+   // The selected pattern while it is waiting for the playing one to reach its
+   // end, or -1 when nothing is waiting.
+   virtual int seqPendingPattern() const = 0;
    // Whether a pattern has any notes in it, for the bank grid's shading.
    virtual bool seqPatternEmpty(int pattern) const = 0;
 

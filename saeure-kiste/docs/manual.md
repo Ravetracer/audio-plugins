@@ -8,7 +8,7 @@ subtitle: CLAP and VST3 instrument for Linux and Windows
 
 *A monophonic acid bass synthesiser. Linux and Windows, CLAP and VST3.*
 
-Version 0.12.0
+Version 0.13.0
 
 ---
 
@@ -513,7 +513,9 @@ you want the pads to do is change pattern. In Live mode:
 - **A key the map does not know about simply runs the pattern**, at the pitch
   it was written at. That is how you start it without a transport, exactly as
   before — you just no longer have to pick the right key.
-- **A mapped key selects its pattern**, or steps the bank one either way.
+- **A mapped key selects its pattern**, or steps the bank one either way. The
+  pattern that is playing finishes first — see *Changing pattern while it
+  plays* below.
 - **Stepping stops at the ends.** Next on the last pattern stays on the last,
   prev on the first stays on the first. A pad that does nothing at the end of
   the bank is better than one that lands on pattern 1 halfway through a bar.
@@ -607,6 +609,15 @@ Which pattern plays is worked out from the host's beat position — not counted 
 as the sequencer goes — for the same reason the steps are. A loop, a seek or a
 scrub therefore lands on exactly the pattern it should, Random included: the same
 bar of the song always picks the same pattern, however it was reached.
+
+**Changing pattern while it plays.** A pattern selected while the sequencer is
+running does not cut in. The one playing runs to its last step, and the new one
+starts on its first — so a change can be pressed anywhere in the bar and still
+land on the beat. Until it takes over, its number flashes in the bank and the
+PATTERN title over the grid flashes with it. With the sequencer stopped, a
+selection takes effect at once. The same goes for PREV, NEXT, the mouse wheel,
+a mapped key and host automation: automation placed on a pattern boundary lands
+exactly there, and automation placed inside a pattern waits for its end.
 
 The selected pattern, the chain mode and the chain length are ordinary
 parameters, so a host can automate a pattern change like any other knob. The

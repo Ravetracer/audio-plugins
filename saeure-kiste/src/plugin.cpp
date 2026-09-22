@@ -787,6 +787,7 @@ private:
       mSeqKeyB = -1;
       mPlayhead.store(-1, std::memory_order_relaxed);
       mPlayingPattern.store(-1, std::memory_order_relaxed);
+      mActivePattern.store(-1, std::memory_order_relaxed);
       if (hadNotes)
          mEngine.releaseAll();
    }
@@ -816,9 +817,17 @@ private:
       if (k < 0 && k % len != 0)
          --cycle;
       const long idx = k - cycle * len;
-      const int pattern = chainPatternAt(static_cast<int>(realValue(kParamChainMode)),
-                                         seqPattern(), static_cast<int>(realValue(kParamChainLength)),
-                                         cycle);
+      // A newly selected pattern waits for the one playing to finish, as it
+      // did on the machine: the change is taken on the first step of a cycle,
+      // or on whatever step the sequencer starts on. Switching on the spot
+      // meant a player had to hit the bar line to the sample to stay in time.
+      int base = mActivePattern.load(std::memory_order_relaxed);
+      if (idx == 0 || base < 0) {
+         base = seqPattern();
+         mActivePattern.store(base, std::memory_order_relaxed);
+      }
+      const int pattern = chainPatternAt(static_cast<int>(realValue(kParamChainMode)), base,
+                                         static_cast<int>(realValue(kParamChainLength)), cycle);
       mLastFired = onsetPos;
       mPlayhead.store(static_cast<int>(idx), std::memory_order_relaxed);
       mPlayingPattern.store(pattern, std::memory_order_relaxed);
@@ -1185,6 +1194,12 @@ private:
    }
 
    int seqPlayingPattern() const override { return mPlayingPattern.load(std::memory_order_relaxed); }
+
+   int seqPendingPattern() const override {
+      const int active = mActivePattern.load(std::memory_order_relaxed);
+      const int selected = seqPattern();
+      return active >= 0 && active != selected ? selected : -1;
+   }
 
    bool seqPatternEmpty(int pattern) const override {
       if (pattern < 0 || pattern >= kMaxPatterns)
@@ -2313,6 +2328,10 @@ private:
    // and read by the window, which draws the bank grid from it; -1 when the
    // sequencer is not running.
    std::atomic<int> mPlayingPattern{-1};
+   // The selected pattern as the audio thread last took it, which is what the
+   // chain is counted from. Lags the Pattern parameter until the playing
+   // pattern reaches its end; -1 when the sequencer is not running.
+   std::atomic<int> mActivePattern{-1};
    // Whether the window's collapsible panel section is open. Not a parameter
    // and not part of a preset -- it is how the editor was left, nothing about
    // the sound -- but it belongs in the plugin's state so a reopened project

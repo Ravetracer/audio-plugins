@@ -2262,6 +2262,53 @@ int runSelfTest(const clap_plugin_entry_t *entry, double sampleRate) {
          plugin->reset(plugin);
       }
 
+      // A pattern selected while the sequencer runs waits for the playing one
+      // to reach its end. Selected half way through step 5 of a sixteen-step
+      // bar: the rest of that bar is still pattern 1, note for note, and the
+      // next bar is pattern 2 from its first step.
+      {
+         using namespace saeurekiste;
+         const double perStep = 60.0 / 130.0 / 4.0 * sampleRate;
+         auto onsIn = [&](double fromStep, double toStep) {
+            std::vector<std::pair<uint32_t, int>> out;
+            for (const clap_event_note_t &ev : gNoteOut)
+               if (ev.header.type == CLAP_EVENT_NOTE_ON && ev.header.time >= fromStep * perStep &&
+                   ev.header.time < toStep * perStep)
+                  out.emplace_back(ev.header.time, static_cast<int>(ev.key));
+            return out;
+         };
+         auto run = [&](int startPattern, const std::vector<SeqEvent> &schedule) {
+            gParamOverrides.clear();
+            gParamOverrides.emplace_back(kParamMode, static_cast<double>(kModeSequencer));
+            gParamOverrides.emplace_back(kParamSeqRate, static_cast<double>(kRate16));
+            gParamOverrides.emplace_back(kParamSeqSteps, 16.0);
+            gParamOverrides.emplace_back(kParamChainMode, static_cast<double>(kChainStay));
+            gParamOverrides.emplace_back(kParamPattern, static_cast<double>(startPattern));
+            plugin->reset(plugin);
+            renderSequence(plugin, sampleRate, 512, 32.0 * perStep / sampleRate, 0.0, schedule,
+                           true, 130.0);
+            gParamOverrides.clear();
+         };
+         run(1, {});
+         const auto stay = onsIn(4.5, 16.0);
+         run(2, {});
+         const auto next = onsIn(16.0, 32.0);
+         SeqEvent change{static_cast<uint32_t>(4.5 * perStep), CLAP_EVENT_PARAM_VALUE, 0, 0.0, 0};
+         change.paramId = kParamPattern;
+         change.paramValue = 2.0;
+         run(1, {change});
+         check(!stay.empty() && stay != next, "patterns 1 and 2 differ, so the check means something");
+         check(onsIn(4.5, 16.0) == stay, "a newly selected pattern lets the playing one finish");
+         check(onsIn(16.0, 32.0) == next, "and takes over on the next pattern's first step");
+
+         EventList restore;
+         restore.params.push_back(makeParamValue(kParamMode, 0.0));
+         restore.params.push_back(makeParamValue(kParamPattern, 1.0));
+         restore.build();
+         runOneBlock(plugin, restore);
+         plugin->reset(plugin);
+      }
+
       // Where a step lands when the bank is stepped, which is the rule the two
       // pads and the two buttons all go through.
       check(steppedPattern(0, -1, 64) == 0, "stepping back from the first stays there");
