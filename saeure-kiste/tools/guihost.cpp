@@ -4,7 +4,7 @@
 //
 //   ./saeurekiste-guihost [plugin.clap] [preset.saeurekiste] [seconds]
 //                         [--also <preset.saeurekiste|-> ...]
-//                         [--note <key>[@<seconds>] ...]
+//                         [--note <key>[@<seconds>[+<hold>]] ...]
 //                         [--scale <factor>]
 //
 // --scale asks the editor for a GUI scale before the window is made, the way a
@@ -12,7 +12,9 @@
 // taken at 2 is legible when it is printed, and one taken at 1 is not.
 //
 // --note plays one MIDI note into the first instance, `seconds` after the
-// window opens (2 by default), and may be repeated. It exists because some of
+// window opens (2 by default), held for `hold` seconds (a quarter of a second
+// by default), and may be repeated. A long hold runs the sequencer, which is
+// how a chain moving through the bank is watched. It exists because some of
 // the interface only answers to notes -- Live mode's pattern map is learned by
 // playing the note you want a pad to send -- and that half of the window
 // cannot be driven, photographed or tested without one.
@@ -115,10 +117,11 @@ void hostRequestCallback(const clap_host_t *) {}
 int main(int argc, char **argv) {
    std::string pluginPath = "./SaeureKiste.clap";
    int liveSeconds = 600;
-   // Notes to play into the first instance: the key, and when.
+   // Notes to play into the first instance: the key, when, and for how long.
    struct TimedNote {
       int key = 60;
       double at = 2.0;
+      double hold = 0.25;
    };
    std::vector<TimedNote> notes;
    double scale = 0.0; // 0 = leave the editor at whatever it defaults to
@@ -138,7 +141,7 @@ int main(int argc, char **argv) {
             scale = std::atof(argv[++i]);
          } else if (arg == "--note") {
             if (i + 1 >= argc) {
-               std::fprintf(stderr, "--note wants a key, optionally key@seconds\n");
+               std::fprintf(stderr, "--note wants a key, optionally key@seconds+hold\n");
                return 1;
             }
             const std::string spec = argv[++i];
@@ -147,6 +150,9 @@ int main(int argc, char **argv) {
             n.key = std::atoi(spec.substr(0, at).c_str());
             if (at != std::string::npos)
                n.at = std::atof(spec.c_str() + at + 1);
+            const size_t plus = spec.find('+', at == std::string::npos ? 0 : at);
+            if (plus != std::string::npos)
+               n.hold = std::atof(spec.c_str() + plus + 1);
             notes.push_back(n);
          } else if (arg == "--also") {
             if (i + 1 >= argc) {
@@ -354,7 +360,7 @@ int main(int argc, char **argv) {
       out.try_push = [](const clap_output_events_t *, const clap_event_header_t *) { return true; };
 
       const auto started = std::chrono::steady_clock::now();
-      // Each note is played once, a quarter of a second long, at its own time.
+      // Each note is played once, at its own time and for its own length.
       std::vector<bool> sent(notes.size(), false), released(notes.size(), false);
 
       while (gRunning.load()) {
@@ -376,7 +382,7 @@ int main(int argc, char **argv) {
                sent[i] = true;
                std::printf("note on  %d at %.2fs\n", notes[i].key, now);
                std::fflush(stdout);
-            } else if (sent[i] && !released[i] && now >= notes[i].at + 0.25) {
+            } else if (sent[i] && !released[i] && now >= notes[i].at + notes[i].hold) {
                ev.header.type = CLAP_EVENT_NOTE_OFF;
                ev.velocity = 0.0;
                pending.push_back(ev);

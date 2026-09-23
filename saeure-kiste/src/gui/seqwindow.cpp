@@ -2477,12 +2477,14 @@ private:
    static constexpr int kSeqColsShort = 16;
    static constexpr int kSeqColsLong = 32;
 
-   // The bank: eight by eight, and the two chain controls under it.
+   // The bank: eight by eight, and the three controls under it.
    static constexpr double kBankW = 232.0;
    static constexpr int kBankCols = 8;
-   static constexpr double kBankCellH = 24.0;
+   static constexpr double kBankCellH = 21.0;
+   static constexpr int kBankCtlRows = 4;
    static constexpr double kBankRowGap = 8.0;
-   static constexpr double kBankCtlH = 20.0;
+   static constexpr double kBankCtlH = 18.0;
+   static constexpr double kBankCtlGap = 3.0;
    static constexpr double kBankCtlLabelW = 50.0;
 
    bool hasPattern() const { return mSpec.pattern && mSpec.patternSteps > 0; }
@@ -2544,7 +2546,7 @@ private:
       seqScrollTo((head / cols) * cols);
    }
    // Which pattern the grid is editing.
-   int editPattern() const { return hasPattern() ? mSpec.pattern->seqPattern() : 0; }
+   int editPattern() const { return hasPattern() ? mSpec.pattern->seqShownPattern() : 0; }
    double seqCellW() const {
       return (mSeqRect.w - 2.0 * kSeqPad - kSeqLabelW) / static_cast<double>(seqCols());
    }
@@ -2663,7 +2665,7 @@ private:
    }
 
    double bankCtlY(int row) const {
-      return bankGridY() + bankRows() * kBankCellH + kBankRowGap + row * (kBankCtlH + 4.0);
+      return bankGridY() + bankRows() * kBankCellH + kBankRowGap + row * (kBankCtlH + kBankCtlGap);
    }
 
    // DEL, COPY and PASTE sit in the bank's title row, beside the word
@@ -2684,6 +2686,12 @@ private:
       return hasBank() ? Rect{mBankRect.x + mBankRect.w - kSeqPad - 46.0, mBankRect.y + 4.0, 46.0,
                               14.0}
                        : Rect{0, 0, 0, 0};
+   }
+
+   uint32_t bankCtlParam(int row) const {
+      const uint32_t ids[kBankCtlRows] = {mSpec.chainModeParam, mSpec.chainLengthParam,
+                                          mSpec.repeatParam, mSpec.triggerParam};
+      return ids[row];
    }
 
    Rect bankCtlRect(int row) const {
@@ -3083,11 +3091,12 @@ private:
       drawSeqButton(cr, bankCopyRect(), "COPY");
       drawSeqButton(cr, bankPasteRect(), "PASTE", mPatternClipHeld);
 
-      drawBankControl(cr, 0, mSpec.chainModeParam, "CHAIN");
-      drawBankControl(cr, 1, mSpec.chainLengthParam, "LENGTH");
+      static const char *const labels[kBankCtlRows] = {"CHAIN", "LENGTH", "REPEAT", "TRIGGER"};
+      for (int row = 0; row < kBankCtlRows; ++row)
+         drawBankControl(cr, row, bankCtlParam(row), labels[row]);
    }
 
-   // One of the two chain controls: a label, a value, and an arrow at each end
+   // One of the bank controls: a label, a value, and an arrow at each end
    // that steps it. The value is also dragged like a knob, which is the only
    // civilised way to reach 64 from 1.
    void drawBankControl(cairo_t *cr, int row, uint32_t id, const char *label) {
@@ -3309,8 +3318,8 @@ private:
          return true;
       }
 
-      for (int row = 0; row < 2; ++row) {
-         const uint32_t id = row == 0 ? mSpec.chainModeParam : mSpec.chainLengthParam;
+      for (int row = 0; row < kBankCtlRows; ++row) {
+         const uint32_t id = bankCtlParam(row);
          if (!hasParam(id))
             continue;
          const Rect r = bankCtlRect(row);
@@ -4155,12 +4164,12 @@ private:
       else if (holdsActive() && mHoldRect.contains(x, y))
          w = Widget::Hold;
 
-      // The bank's two chain controls are parameters with no cell, so the help
-      // line has to be told about them separately.
+      // The bank's controls are parameters with no cell, so the help line has
+      // to be told about them separately.
       int pane = -1;
       if (hasBank()) {
-         for (int row = 0; row < 2; ++row) {
-            const uint32_t pid = row == 0 ? mSpec.chainModeParam : mSpec.chainLengthParam;
+         for (int row = 0; row < kBankCtlRows; ++row) {
+            const uint32_t pid = bankCtlParam(row);
             if (hasParam(pid) && bankCtlRect(row).contains(x, y))
                pane = static_cast<int>(pid);
          }

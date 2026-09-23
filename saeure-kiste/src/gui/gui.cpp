@@ -134,8 +134,9 @@ constexpr int kAdvancedRow = 2;
 // label and its own - and + buttons up there next to GEN, which is where
 // anybody reaching for it is already looking -- and they are named here so the
 // check that every parameter has a home still counts them.
-constexpr uint32_t kPaneParams[] = {kParamPattern, kParamChainMode, kParamChainLength,
-                                    kParamRandSeed, kParamPatternOctave};
+constexpr uint32_t kPaneParams[] = {kParamPattern,       kParamChainMode,      kParamChainLength,
+                                    kParamRandSeed,      kParamPatternOctave,  kParamPatternTrigger,
+                                    kParamChainRepeat};
 constexpr int kNumPaneParams = static_cast<int>(sizeof(kPaneParams) / sizeof(kPaneParams[0]));
 
 // What RESET does not touch. Everything else goes back to the default in
@@ -144,14 +145,15 @@ constexpr int kNumPaneParams = static_cast<int>(sizeof(kPaneParams) / sizeof(kPa
 // Whittle's own "limit it to TB-303 sounds" setting, and the drive and the
 // delay are the two stages the machine does not have at all.
 //
-// These five are the exception because none of them is part of the sound: they
-// say which of the sixty-four patterns is playing, where the notes come from
-// and how fast the clock runs. A player who reaches for RESET wants the patch
+// These seven are the exception because none of them is part of the sound: they
+// say which of the sixty-four patterns is playing and when the next one takes
+// over, where the notes come from and how fast the clock runs. A player who reaches for RESET wants the patch
 // back to nothing, not the sequencer stopped and the bank back at pattern one
 // in the middle of a set. The pattern's own notes are not parameters and are
 // never touched by this.
 constexpr uint32_t kResetKeep[] = {kParamPattern, kParamChainMode, kParamChainLength,
-                                   kParamMode,    kParamSeqRate};
+                                   kParamMode,    kParamSeqRate,   kParamPatternTrigger,
+                                   kParamChainRepeat};
 constexpr int kNumResetKeep = static_cast<int>(sizeof(kResetKeep) / sizeof(kResetKeep[0]));
 
 // The layout is a table, and a table is easy to break by adding a parameter to
@@ -458,6 +460,8 @@ const WindowSpec kSpec = {
    /* patternParam   */ kParamPattern,
    /* chainModeParam */ kParamChainMode,
    /* chainLengthPar */ kParamChainLength,
+   /* repeatParam    */ kParamChainRepeat,
+   /* triggerParam   */ kParamPatternTrigger,
    /* advancedRow    */ kAdvancedRow,
    /* advancedLabel  */ "ADVANCED",
    /* windowExpandedH*/ kWindowExpandedH,

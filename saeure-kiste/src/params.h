@@ -164,6 +164,13 @@ enum ParamId : uint32_t {
    // octave is the one a bass line is actually moved by.
    kParamPatternOctave,
 
+   // When a newly selected pattern takes over from the playing one. Appended
+   // rather than beside the other bank controls because a parameter id is
+   // persisted and may never move.
+   kParamPatternTrigger,
+   // How many times each pattern in a chain plays before the chain moves on.
+   kParamChainRepeat,
+
    kNumParams
 };
 
@@ -204,6 +211,13 @@ enum ChainKind { kChainStay = 0, kChainNext, kChainFirst, kChainRandom, kNumChai
 // the sequencer stays a pure function of the host's beat position: a loop, a
 // seek or a scrub lands on exactly the pattern it should.
 int chainPatternAt(int mode, int start, int chainLength, long cycle);
+
+// When a pattern selected while the sequencer runs takes over. At End lets the
+// playing pattern reach its last step, which is the machine. Instant switches
+// on the next step and carries on from the same place in the new pattern.
+// Restart switches on the next step as well, but plays the new pattern from
+// its first step.
+enum TriggerKind { kTriggerAtEnd = 0, kTriggerInstant, kTriggerRestart, kNumTriggerModes };
 
 // Whether the delay takes its time from the Time knob or from the host's
 // tempo. Two positions rather than a flag, because it is drawn as a chip.

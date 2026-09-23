@@ -20,6 +20,7 @@ const char *const kScaleNames[] = {"Minor",  "Major",    "Minor Pent", "Major Pe
 const char *const kRootNames[] = {"C",  "C#", "D",  "D#", "E",  "F",
                                   "F#", "G",  "G#", "A",  "A#", "B"};
 const char *const kChainNames[] = {"Stay", "Next", "First", "Random"};
+const char *const kTriggerNames[] = {"At End", "Instant", "Restart"};
 const char *const kMufflerNames[] = {"Off", "Soft", "Hard"};
 const char *const kSweepSpeedNames[] = {"Normal", "Fast", "Slow"};
 // The drive stage's models, in the same order as DriveModel in dsp/drive.h.
@@ -511,6 +512,16 @@ const ParamDesc kParams[kNumParams] = {
         "would land outside MIDI's own range is clamped rather than wrapped, so a "
         "pattern pushed four octaves up flattens at the top instead of folding "
         "back into the bass."),
+   ENUM(kParamPatternTrigger, "pattern_trigger", "Trigger", "Sequencer", 0.0, kTriggerNames,
+        "When a pattern selected while the sequencer runs takes over. At End lets the "
+        "playing one reach its last step first, which is the hardware's behaviour and "
+        "the default. Instant switches on the next step and carries on from the same "
+        "place in the new pattern, for cutting between patterns mid-bar. Restart "
+        "switches on the next step too, but plays the new pattern from its first step."),
+   STEP(kParamChainRepeat, "chain_repeat", "Chain Repeat", "Sequencer", 1.0, 256.0, 1.0, "",
+        "How many times each pattern plays before the chain moves on. At 1 every pattern "
+        "plays once; at 4 a chain of four patterns is sixteen bars long. Stay ignores it; "
+        "First plays the selected pattern this many times before it settles on pattern 1."),
 };
 
 #undef LIN

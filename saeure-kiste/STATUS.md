@@ -1,11 +1,39 @@
 # SäureKiste -- status
 
-Version 0.13.0. Linux and Windows, CLAP and VST3. 63 parameters, 30 presets,
-builds clean, self-test passes with no failures across 285 checks, and
+Version 0.14.0. Linux and Windows, CLAP and VST3. 65 parameters, 30 presets,
+builds clean, self-test passes with no failures across 291 checks, and
 `tools/check-instances.sh` passes with two editors open at once.
 
 Six of seven fixes were confirmed by backing the bug out and watching the suite
 fail; the seventh has no contract to assert. See `TODO.md` §3.
+
+0.14.0 adds TRIGGER, under CHAIN and LENGTH in the bank, for when a pattern
+selected while the sequencer runs takes over. At End is 0.13.0's behaviour and
+the default. Instant switches on the next step and keeps the place in the bar,
+which is how every version before 0.13.0 behaved. Restart switches on the next
+step and plays the new pattern from its first: the audio thread keeps
+`mStepOffset`, the step the restart landed on, and counts the step index and
+the chain cycle from there. A stop or a transport jump clears it, so a seek
+still lands on the step the song says. The bank cells are 22 px rather than 24
+to make room for the extra rows. The self-test checks both new modes note for
+note against reference renders.
+
+It also adds REPEAT (`chain_repeat`, 1 to 256, default 1): how many cycles each
+pattern in a chain plays before the chain moves on. The chain is now worked out
+from the pass, `cycle / repeat` with floor division, so it is still a pure
+function of the beat position. The bank cells are 21 px and the controls 18 px
+to fit a fourth row.
+
+And the window follows a running chain. `seqShownPattern()` is the playing
+pattern while the chain mode is not Stay and the sequencer runs, the selected
+one otherwise; the grid, the bank cursor, GEN, the MIDI drag and PREV/NEXT all
+go through it. Before, the grid stayed on the selected pattern and the playhead
+disappeared as soon as the chain moved on. `guihost --note key@start+hold`
+holds a note long enough to watch it.
+
+The switch test in the self-test used to run against an empty pattern 2, so
+"takes over on the next pattern's first step" compared silence with silence. It
+now loads its own two-pattern bank and puts the state back afterwards.
 
 0.13.0 makes a pattern change wait for the end of the pattern.
 

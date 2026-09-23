@@ -788,6 +788,7 @@ private:
       mPlayhead.store(-1, std::memory_order_relaxed);
       mPlayingPattern.store(-1, std::memory_order_relaxed);
       mActivePattern.store(-1, std::memory_order_relaxed);
+      mStepOffset = 0;
       if (hadNotes)
          mEngine.releaseAll();
    }
@@ -807,7 +808,13 @@ private:
    }
 
    void seqStartStep(double onsetPos) {
-      const long k = static_cast<long>(std::floor(onsetPos + 1.0e-6));
+      const int trigger = static_cast<int>(realValue(kParamPatternTrigger));
+      int base = mActivePattern.load(std::memory_order_relaxed);
+      // Restart counts the new pattern from the step it takes over on, so the
+      // position the step and the chain are read from moves with it.
+      if (trigger == kTriggerRestart && base >= 0 && base != seqPattern())
+         mStepOffset = static_cast<long>(std::floor(onsetPos + 1.0e-6));
+      const long k = static_cast<long>(std::floor(onsetPos + 1.0e-6)) - mStepOffset;
       const int len = seqLength();
       // How many times round the pattern we are, which is what the chain
       // advances on, and where in it. Floor division rather than C's truncating
@@ -821,13 +828,18 @@ private:
       // did on the machine: the change is taken on the first step of a cycle,
       // or on whatever step the sequencer starts on. Switching on the spot
       // meant a player had to hit the bar line to the sample to stay in time.
-      int base = mActivePattern.load(std::memory_order_relaxed);
-      if (idx == 0 || base < 0) {
+      // Instant and Restart are for the player who wants exactly that.
+      if (idx == 0 || base < 0 || trigger != kTriggerAtEnd) {
          base = seqPattern();
          mActivePattern.store(base, std::memory_order_relaxed);
       }
+      // Chain Repeat plays each pattern that many cycles before moving on, so
+      // the chain counts passes rather than cycles. Floor division again.
+      const long repeat = static_cast<long>(realValue(kParamChainRepeat));
+      const long rep = repeat < 1 ? 1 : repeat;
+      const long pass = cycle >= 0 ? cycle / rep : -((-cycle + rep - 1) / rep);
       const int pattern = chainPatternAt(static_cast<int>(realValue(kParamChainMode)), base,
-                                         static_cast<int>(realValue(kParamChainLength)), cycle);
+                                         static_cast<int>(realValue(kParamChainLength)), pass);
       mLastFired = onsetPos;
       mPlayhead.store(static_cast<int>(idx), std::memory_order_relaxed);
       mPlayingPattern.store(pattern, std::memory_order_relaxed);
@@ -1002,6 +1014,9 @@ private:
                   mSeqOffA += delta;
                   mSeqOffB += delta;
                   mLastFired += delta;
+                  // A seek lands on the step the song says, not on one shifted
+                  // by the last Restart.
+                  mStepOffset = 0;
                }
             }
             mStepPos = fromSong;
@@ -1195,6 +1210,14 @@ private:
 
    int seqPlayingPattern() const override { return mPlayingPattern.load(std::memory_order_relaxed); }
 
+   // While a chain runs, the pattern on screen is the one playing: the grid,
+   // GEN, the MIDI drag and PREV/NEXT all act on what the player can see.
+   int seqShownPattern() const override {
+      const int playing = seqPlayingPattern();
+      const bool chained = static_cast<int>(realValue(kParamChainMode)) != kChainStay;
+      return chained && playing >= 0 ? playing : seqPattern();
+   }
+
    int seqPendingPattern() const override {
       const int active = mActivePattern.load(std::memory_order_relaxed);
       const int selected = seqPattern();
@@ -1289,7 +1312,7 @@ private:
    }
 
    void seqStepPattern(int delta) override {
-      const int want = steppedPattern(seqPattern(), delta, kMaxPatterns);
+      const int want = steppedPattern(seqShownPattern(), delta, kMaxPatterns);
       const ParamDesc &d = paramTable()[kParamPattern];
       const double v = clampv(static_cast<double>(want + 1), d.min, d.max);
       mValues[kParamPattern].store(v, std::memory_order_relaxed);
@@ -1316,7 +1339,7 @@ private:
    // The pattern as a standard MIDI file, for the window to drag into the host.
    // Main thread: every read here is an atomic the audio thread publishes.
    std::string seqExportMidi() override {
-      const int pat = seqPattern();
+      const int pat = seqShownPattern();
       uint16_t steps[kMaxSteps];
       for (int i = 0; i < kMaxSteps; ++i)
          steps[i] = mPattern[pat][i].load(std::memory_order_relaxed);
@@ -1358,7 +1381,7 @@ private:
 
       uint16_t steps[kMaxSteps];
       generatePattern(g, steps);
-      const int pattern = seqPattern();
+      const int pattern = seqShownPattern();
       for (int i = 0; i < kMaxSteps; ++i)
          mPattern[pattern][i].store(steps[i], std::memory_order_relaxed);
       mPresetEdited = true;
@@ -2332,6 +2355,9 @@ private:
    // chain is counted from. Lags the Pattern parameter until the playing
    // pattern reaches its end; -1 when the sequencer is not running.
    std::atomic<int> mActivePattern{-1};
+   // Where the pattern last restarted, in steps, when Trigger is Restart. The
+   // step and the chain cycle are counted from here. Audio thread only.
+   long mStepOffset = 0;
    // Whether the window's collapsible panel section is open. Not a parameter
    // and not part of a preset -- it is how the editor was left, nothing about
    // the sound -- but it belongs in the plugin's state so a reopened project

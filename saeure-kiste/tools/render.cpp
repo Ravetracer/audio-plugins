@@ -2266,8 +2266,59 @@ int runSelfTest(const clap_plugin_entry_t *entry, double sampleRate) {
       // to reach its end. Selected half way through step 5 of a sixteen-step
       // bar: the rest of that bar is still pattern 1, note for note, and the
       // next bar is pattern 2 from its first step.
-      {
+      //
+      // The bank is loaded rather than taken as found: pattern 2 used to be
+      // empty here, which made "pattern 2 takes over" pass by comparing
+      // silence with silence. Pattern 1 is all C; pattern 2 climbs a semitone
+      // a step, so a pattern played from the wrong step cannot pass for the
+      // right one. The state is put back afterwards.
+      const auto *switchLoad = static_cast<const clap_plugin_preset_load_t *>(
+         plugin->get_extension(plugin, CLAP_EXT_PRESET_LOAD));
+      if (state && switchLoad) {
          using namespace saeurekiste;
+         std::string saved;
+         clap_ostream_t sos{};
+         sos.ctx = &saved;
+         sos.write = [](const clap_ostream_t *st, const void *buf, uint64_t size) -> int64_t {
+            static_cast<std::string *>(st->ctx)->append(static_cast<const char *>(buf), size);
+            return static_cast<int64_t>(size);
+         };
+         state->save(plugin, &sos);
+
+         const std::string path =
+            (std::filesystem::temp_directory_path() /
+             ("saeurekiste-switch-" + std::to_string(
+#if defined(_WIN32)
+                 static_cast<unsigned long>(GetCurrentProcessId())
+#else
+                 static_cast<unsigned long>(getpid())
+#endif
+                 ) + "." + std::string(kPresetExtension)))
+               .string();
+         static const char *const climb[16] = {"C#", "D",  "D#", "E",  "F",  "F#", "G",  "G#",
+                                               "A",  "A#", "B",  "C#", "D",  "D#", "E",  "F"};
+         auto row = [](const char *key, auto tokenAt) {
+            std::string l = key;
+            l += " =";
+            for (int i = 0; i < kMaxSteps; ++i) { l += " "; l += tokenAt(i); }
+            return l + "\n";
+         };
+         auto all = [](const char *t) { return [t](int) { return t; }; };
+         std::string text = "# preset\nformat = 1\nname = Switch\n";
+         text += row("seq_pitch", all("C")) + row("seq_octave", all(".")) +
+                 row("seq_slide", all(".")) + row("seq_accent", all(".")) +
+                 row("seq_vibrato", all("."));
+         text += row("seq2_pitch", [](int i) { return i < 16 ? climb[i] : "."; }) +
+                 row("seq2_octave", all(".")) + row("seq2_slide", all(".")) +
+                 row("seq2_accent", all(".")) + row("seq2_vibrato", all("."));
+         std::string werr;
+         check(writePresetFile(path, text, werr) &&
+                  switchLoad->from_location(plugin, CLAP_PRESET_DISCOVERY_LOCATION_FILE,
+                                            path.c_str(), ""),
+               "the pattern-switch test bank loads");
+         std::error_code rmec;
+         std::filesystem::remove(path, rmec);
+
          const double perStep = 60.0 / 130.0 / 4.0 * sampleRate;
          auto onsIn = [&](double fromStep, double toStep) {
             std::vector<std::pair<uint32_t, int>> out;
@@ -2277,8 +2328,10 @@ int runSelfTest(const clap_plugin_entry_t *entry, double sampleRate) {
                   out.emplace_back(ev.header.time, static_cast<int>(ev.key));
             return out;
          };
-         auto run = [&](int startPattern, const std::vector<SeqEvent> &schedule) {
+         auto run = [&](int startPattern, const std::vector<SeqEvent> &schedule,
+                        int trigger = kTriggerAtEnd) {
             gParamOverrides.clear();
+            gParamOverrides.emplace_back(kParamPatternTrigger, static_cast<double>(trigger));
             gParamOverrides.emplace_back(kParamMode, static_cast<double>(kModeSequencer));
             gParamOverrides.emplace_back(kParamSeqRate, static_cast<double>(kRate16));
             gParamOverrides.emplace_back(kParamSeqSteps, 16.0);
@@ -2301,11 +2354,69 @@ int runSelfTest(const clap_plugin_entry_t *entry, double sampleRate) {
          check(onsIn(4.5, 16.0) == stay, "a newly selected pattern lets the playing one finish");
          check(onsIn(16.0, 32.0) == next, "and takes over on the next pattern's first step");
 
-         EventList restore;
-         restore.params.push_back(makeParamValue(kParamMode, 0.0));
-         restore.params.push_back(makeParamValue(kParamPattern, 1.0));
-         restore.build();
-         runOneBlock(plugin, restore);
+         // Instant: the rest of the bar is pattern 2 from step 6 on, exactly as
+         // pattern 2 would have played it.
+         run(2, {});
+         const auto p2tail = onsIn(5.0, 16.0);
+         run(1, {change}, kTriggerInstant);
+         check(!p2tail.empty() && onsIn(5.0, 16.0) == p2tail,
+               "Instant switches on the next step and keeps the place in the bar");
+
+         // Restart: pattern 2 from its first step, starting on step 6. The
+         // onsets are pattern 2's own, five steps later, give or take the
+         // sample the shift rounds to.
+         run(2, {});
+         auto p2from0 = onsIn(0.0, 16.0);
+         run(1, {change}, kTriggerRestart);
+         const auto shifted = onsIn(5.0, 21.0);
+         bool same = !p2from0.empty() && shifted.size() == p2from0.size();
+         for (size_t i = 0; same && i < shifted.size(); ++i)
+            same = shifted[i].second == p2from0[i].second &&
+                   std::abs(static_cast<double>(shifted[i].first) -
+                            (p2from0[i].first + 5.0 * perStep)) <= 1.0;
+         check(same, "Restart switches on the next step and plays the new pattern from its start");
+
+         // Chain Repeat: a chain of patterns 1 and 2 with each played twice is
+         // 1, 1, 2, 2. Pattern 1 is all C (key 36) and pattern 2 starts on C#.
+         auto chainRun = [&](double repeat) {
+            gParamOverrides.clear();
+            gParamOverrides.emplace_back(kParamMode, static_cast<double>(kModeSequencer));
+            gParamOverrides.emplace_back(kParamSeqRate, static_cast<double>(kRate16));
+            gParamOverrides.emplace_back(kParamSeqSteps, 16.0);
+            gParamOverrides.emplace_back(kParamChainMode, static_cast<double>(kChainNext));
+            gParamOverrides.emplace_back(kParamChainLength, 2.0);
+            gParamOverrides.emplace_back(kParamChainRepeat, repeat);
+            gParamOverrides.emplace_back(kParamPattern, 1.0);
+            plugin->reset(plugin);
+            renderSequence(plugin, sampleRate, 512, 64.0 * perStep / sampleRate, 0.0, {}, true,
+                           130.0);
+            gParamOverrides.clear();
+         };
+         auto firstKey = [&](double bar) {
+            const auto ons = onsIn(bar * 16.0, bar * 16.0 + 16.0);
+            return ons.empty() ? -1 : ons.front().second;
+         };
+         chainRun(1.0);
+         check(firstKey(0) == 36 && firstKey(1) == 37 && firstKey(2) == 36,
+               "a chain with Repeat at 1 moves on every bar");
+         chainRun(2.0);
+         check(firstKey(0) == 36 && firstKey(1) == 36 && firstKey(2) == 37 && firstKey(3) == 37,
+               "Repeat plays each pattern in the chain that many times");
+
+         struct ReadCtx {
+            const std::string *data;
+            size_t pos;
+         } rc{&saved, 0};
+         clap_istream_t sis{};
+         sis.ctx = &rc;
+         sis.read = [](const clap_istream_t *st, void *buf, uint64_t size) -> int64_t {
+            auto *c = static_cast<ReadCtx *>(st->ctx);
+            const size_t n = std::min<size_t>(size, c->data->size() - c->pos);
+            std::memcpy(buf, c->data->data() + c->pos, n);
+            c->pos += n;
+            return static_cast<int64_t>(n);
+         };
+         check(state->load(plugin, &sis), "and the state from before it comes back");
          plugin->reset(plugin);
       }
 

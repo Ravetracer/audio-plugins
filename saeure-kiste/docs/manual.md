@@ -8,7 +8,7 @@ subtitle: CLAP and VST3 instrument for Linux and Windows
 
 *A monophonic acid bass synthesiser. Linux and Windows, CLAP and VST3.*
 
-Version 0.13.0
+Version 0.14.0
 
 ---
 
@@ -605,21 +605,38 @@ COPY first if there is any doubt.
 and First ignore it. A pattern selected from outside the chain is where the
 chain starts, and after that it runs inside it.
 
+**REPEAT** is how many times each pattern plays before the chain moves on, from
+1 to 256. At 1 every pattern plays once; at 4, a chain of four patterns is
+sixteen bars long. Stay ignores it, and First plays the selected pattern that
+many times before it settles on pattern 1.
+
+While a chain is running, the grid follows it: the pattern on screen, the
+bank's cursor and the playhead are always the pattern that is playing, and an
+edit, GEN, PREV, NEXT or a MIDI drag acts on that pattern.
+
 Which pattern plays is worked out from the host's beat position — not counted up
 as the sequencer goes — for the same reason the steps are. A loop, a seek or a
 scrub therefore lands on exactly the pattern it should, Random included: the same
 bar of the song always picks the same pattern, however it was reached.
 
-**Changing pattern while it plays.** A pattern selected while the sequencer is
-running does not cut in. The one playing runs to its last step, and the new one
-starts on its first — so a change can be pressed anywhere in the bar and still
-land on the beat. Until it takes over, its number flashes in the bank and the
+**Changing pattern while it plays.** **TRIGGER**, under LENGTH, says when a
+pattern selected while the sequencer is running takes over:
+
+| | |
+|---|---|
+| **At End** | the default. The one playing runs to its last step, and the new one starts on its first — so a change can be pressed anywhere in the bar and still land on the beat. |
+| **Instant** | the new pattern takes over on the next step and carries on from the same place in it, for cutting between patterns in the middle of a bar. |
+| **Restart** | the new pattern takes over on the next step as well, but plays from its first step. |
+
+Until it takes over, the new pattern's number flashes in the bank and the
 PATTERN title over the grid flashes with it. With the sequencer stopped, a
 selection takes effect at once. The same goes for PREV, NEXT, the mouse wheel,
-a mapped key and host automation: automation placed on a pattern boundary lands
-exactly there, and automation placed inside a pattern waits for its end.
+a mapped key and host automation: in At End, automation placed on a pattern
+boundary lands exactly there, and automation placed inside a pattern waits for
+its end. After a Restart the pattern runs shifted against the bar until the
+transport stops or jumps.
 
-The selected pattern, the chain mode and the chain length are ordinary
+The selected pattern, the chain mode, length and repeat, and the trigger are ordinary
 parameters, so a host can automate a pattern change like any other knob. The
 sixteen steps inside a pattern are not, and deliberately so — eighty values per
 pattern would make a mess of any host's parameter list. The consequence is that a

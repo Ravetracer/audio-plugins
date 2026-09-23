@@ -242,12 +242,14 @@ struct WindowSpec {
    int patternSteps;   // the longest pattern the plugin has, normally kMaxSteps
    int patternCount;   // how many patterns the bank grid offers, normally kMaxPatterns
 
-   // The three bank parameters. They are ordinary parameters -- automatable,
+   // The five bank parameters. They are ordinary parameters -- automatable,
    // saved in presets -- but they are drawn beside the grid rather than on a
    // panel, because that is where they are used.
    uint32_t patternParam;
    uint32_t chainModeParam;
    uint32_t chainLengthParam;
+   uint32_t repeatParam;
+   uint32_t triggerParam;
 
    // The collapsible section. Rows from `advancedRow` on are drawn below the
    // preset bar and only while the section is open; the window is `windowH`
