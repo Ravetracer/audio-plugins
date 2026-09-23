@@ -17,7 +17,7 @@
 #
 # **Everything is captured at scale 1 on purpose.** The editor can be asked for
 # more -- `guihost --scale 1.5` -- and the result is sharper in print, but the
-# expanded window is 987 pixels tall at scale 1 and a window manager will not
+# expanded window is 1011 pixels tall at scale 1 and a window manager will not
 # hand out anything past the usable height of the screen. At 1.5 the bottom row
 # of the collapsible half is simply cut off, which is exactly the half that
 # needs photographing. One scale for every image beats a sharp one for some of
@@ -51,21 +51,22 @@ export XDG_CONFIG_HOME="$clean_config"
 # ----------------------------------------------------------------- the layout
 #
 # From gui.cpp: kMargin 16, kGap 8, kCellW 84, kPanelPad 8, kPanelTitleH 24,
-# kCellH 96, kHeaderH 66, kBarH 32, kSeqPaneHeight 291, kContentW 1408. A
+# kCellH 96, kHeaderH 66, kBarH 32, kSeqPaneHeight 315, kContentW 1408. A
 # panel is cols*84 + 16 wide -- every one of them, including the last on a
 # row: the window stopped stretching that one out to the right margin in
 # 0.12.0, so a row that does not fill the width ends in background.
-WIN_W=1440; WIN_H=715; WIN_H_OPEN=987
+WIN_W=1440; WIN_H=739; WIN_H_OPEN=1011
 ROW0_Y=74; ROW1_Y=210; PANEL_H=128
-SEQ_Y=346; SEQ_H=291; BANK_X=1192; BANK_W=232; SEQ_W=1168
-BAR_Y=645; ADV_ROW2_Y=685; ADV_ROW3_Y=821
-RESET_X=661; RESET_Y=663             # the RESET button, right of ADVANCED
+SEQ_Y=346; SEQ_H=315; BANK_X=1192; BANK_W=232; SEQ_W=1168
+BAR_Y=669; ADV_ROW2_Y=709; ADV_ROW3_Y=845
+RESET_X=661; RESET_Y=687             # the RESET button, right of ADVANCED
 
 # Where the things this script clicks are, so a coordinate appears once.
 MODE_CHIP_X=98; MODE_CHIP_Y=261      # the SEQUENCER panel's Mode chip, right arrow
-ADVANCED_X=570; ADVANCED_Y=663       # the ADVANCED button on the preset bar
-MAP_X=826; PREV_X=740; NEXT_X=782; ROW_Y=352
-PRESET_NAME_X=258; PRESET_NAME_Y=663
+ADVANCED_X=570; ADVANCED_Y=687       # the ADVANCED button on the preset bar
+MAP_X=960; ROW_Y=352                 # MAP, in the grid's title row
+PREV_X=1253; NEXT_X=1363; NAV_Y=549  # PREV and NEXT, under the bank
+PRESET_NAME_X=258; PRESET_NAME_Y=687
 
 host_pid=""
 host_started=0
@@ -157,14 +158,14 @@ grab preset-bar        16       $BAR_Y   1408   40
 # The long note. Drag along one row of the piano roll and the window writes the
 # note on every step with a slide out of all but the last, and draws the run as
 # one bar -- which is the thing the manual has to show rather than describe.
-xdotool mousemove $((WX + 299)) $((WY + 440)) mousedown 1
+xdotool mousemove $((WX + 299)) $((WY + 445)) mousedown 1
 for x in 320 360 400 450 500 560 626; do
-   xdotool mousemove $((WX + x)) $((WY + 440)); sleep 0.05
+   xdotool mousemove $((WX + x)) $((WY + 445)); sleep 0.05
 done
 xdotool mouseup 1; sleep 0.5
 grab grid-long-note    16       $SEQ_Y   $SEQ_W $SEQ_H
 # And the same run split in two by taking one slide out of the middle.
-click 429 577 0.5
+click 429 601 0.5
 grab grid-note-split   16       $SEQ_Y   $SEQ_W $SEQ_H
 
 stop_host
@@ -182,14 +183,13 @@ grab panel-sequencer-live 16 $ROW1_Y 352 $PANEL_H
 click $MAP_X $ROW_Y 0.4                      # the bank becomes the pad layout
 
 wait_until 17; click 1319 379 0.3            # aim at pattern 5; note 48 at 20
-wait_until 25; click $PREV_X $ROW_Y 0.3      # aim at PREV;      note 50 at 28
-wait_until 33; click $NEXT_X $ROW_Y 0.3      # aim at NEXT;      note 52 at 36
+wait_until 25; click $PREV_X $NAV_Y 0.3      # aim at PREV;      note 50 at 28
+wait_until 33; click $NEXT_X $NAV_Y 0.3      # aim at NEXT;      note 52 at 36
 wait_until 38
 
 grab live-map          $BANK_X $SEQ_Y $BANK_W $SEQ_H
-grab live-row          600      $SEQ_Y   600  26
+grab live-row          576      $SEQ_Y   604  26
 click $MAP_X $ROW_Y 0.4                      # back to the ordinary bank
-grab live-row-plain    600      $SEQ_Y   600  26
 
 # What was learned, checked rather than assumed: three pads, and the one on
 # pattern 5 is the one this is hardest to get right.

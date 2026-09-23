@@ -5,6 +5,8 @@
 #include "plugincore/dsp/rng.h"
 
 #include <cctype>
+#include <climits>
+#include <cstdlib>
 #include <cstdio>
 #include <cstring>
 #include <vector>
@@ -251,7 +253,7 @@ void generatePattern(const GenSettings &settings, uint16_t *out) {
       out[i] = rest;
 }
 
-std::string formatPattern(const uint16_t *steps) {
+std::string formatPattern(const PatternData &bank) {
    // Column-aligned so the five lines read as a grid in a text editor, which is
    // the only reason to write a pattern as text rather than as a number.
    auto row = [](const std::string &key, int which, const uint16_t *pat, int columns) {
@@ -292,13 +294,27 @@ std::string formatPattern(const uint16_t *steps) {
    static const char *const kFields[5] = {"pitch", "octave", "slide", "accent", "vibrato"};
    static const int kWhich[5] = {0, 1, 2 + kLaneSlide, 2 + kLaneAccent, 2 + kLaneVibrato};
 
+   const char *const *chainNames = paramTable()[kParamChainMode].enumNames;
+   auto chainLines = [&](const std::string &stem, int p) {
+      std::string key = stem + "chain";
+      while (key.size() < 13)
+         key += ' ';
+      std::string line = key + "= " + chainNames[bank.chainMode[p]] + "\n";
+      key = stem + "repeat";
+      while (key.size() < 13)
+         key += ' ';
+      return line + key + "= " + std::to_string(bank.chainRepeat[p]) + "\n";
+   };
+
    std::string out = "\n# Sequence\n";
    for (int p = 0; p < kMaxPatterns; ++p) {
-      const uint16_t *pat = steps + p * kMaxSteps;
+      const uint16_t *pat = bank.pattern(p);
+      const bool chained = bank.chainMode[p] != kChainStay || bank.chainRepeat[p] != 1;
       // Pattern 1 is always written: a preset with no sequence at all would
       // silently keep whatever the previous one left behind. The other
-      // sixty-three earn their lines by having something in them.
-      if (p > 0 && patternEmpty(pat))
+      // sixty-three earn their lines by having something in them -- notes, or
+      // a chain that passes through an empty bar on purpose.
+      if (p > 0 && patternEmpty(pat) && !chained)
          continue;
       char stem[16];
       if (p == 0)
@@ -317,8 +333,11 @@ std::string formatPattern(const uint16_t *steps) {
       int columns = patternUsedLength(pat);
       if (columns < kDefaultSteps)
          columns = kDefaultSteps;
-      for (int f = 0; f < 5; ++f)
-         out += row(std::string(stem) + kFields[f], kWhich[f], pat, columns);
+      if (p == 0 || !patternEmpty(pat))
+         for (int f = 0; f < 5; ++f)
+            out += row(std::string(stem) + kFields[f], kWhich[f], pat, columns);
+      if (p == 0 || chained)
+         out += chainLines(stem, p);
    }
    return out;
 }
@@ -343,7 +362,11 @@ bool parsePatternLine(const std::string &key, const std::string &value, PatternD
    const std::string field = key.substr(i + 1);
 
    int which = -1;
-   if (field == "pitch")
+   if (field == "chain")
+      which = 5;
+   else if (field == "repeat")
+      which = 6;
+   else if (field == "pitch")
       which = 0;
    else if (field == "octave")
       which = 1;
@@ -361,9 +384,27 @@ bool parsePatternLine(const std::string &key, const std::string &value, PatternD
    // three and does not inherit the other sixty-one from whatever was loaded
    // before it.
    if (!out.present) {
-      for (int p = 0; p < kMaxPatterns; ++p)
+      for (int p = 0; p < kMaxPatterns; ++p) {
          clearPattern(out.pattern(p));
+         out.chainMode[p] = kChainStay;
+         out.chainRepeat[p] = 1;
+      }
       out.present = true;
+   }
+
+   if (which == 5) {
+      const ParamDesc &d = paramTable()[kParamChainMode];
+      for (uint32_t m = 0; m < d.enumCount; ++m)
+         if (strcasecmp(value.c_str(), d.enumNames[m]) == 0)
+            out.chainMode[pattern] = static_cast<int>(m);
+      out.chainPresent = true;
+      return true;
+   }
+   if (which == 6) {
+      const int n = std::atoi(value.c_str());
+      out.chainRepeat[pattern] = n < 1 ? 1 : (n > kMaxChainRepeat ? kMaxChainRepeat : n);
+      out.chainPresent = true;
+      return true;
    }
 
    uint16_t *pat = out.pattern(pattern);
@@ -384,6 +425,47 @@ bool parsePatternLine(const std::string &key, const std::string &value, PatternD
       pat[n] = s.pack();
    }
    return true;
+}
+
+namespace {
+
+// A step's pitch in semitones from the lowest the grid can show, and back.
+constexpr int kLowestPitch = -12 * kMaxOctave;
+constexpr int kHighestPitch = 12 * kMaxOctave + 11;
+constexpr int8_t kRestPitch = INT8_MIN;
+
+int8_t pitchOf(const Step &s) {
+   return s.note < 0 ? kRestPitch : static_cast<int8_t>(s.note + 12 * s.octave);
+}
+
+} // namespace
+
+void transposePattern(uint16_t *steps, int semitones, TransposeMemory &memory) {
+   Step current[kMaxSteps];
+   bool stale = !memory.valid;
+   for (int i = 0; i < kMaxSteps; ++i) {
+      current[i] = Step::unpack(steps[i]);
+      stale = stale || pitchOf(current[i]) != memory.written[i];
+   }
+   if (stale) {
+      for (int i = 0; i < kMaxSteps; ++i)
+         memory.base[i] = pitchOf(current[i]);
+      memory.offset = 0;
+      memory.valid = true;
+   }
+   memory.offset += semitones;
+   for (int i = 0; i < kMaxSteps; ++i) {
+      Step &s = current[i];
+      if (memory.base[i] != kRestPitch) {
+         int p = memory.base[i] + memory.offset;
+         p = p < kLowestPitch ? kLowestPitch : (p > kHighestPitch ? kHighestPitch : p);
+         // Floor division, so a pitch below C lands in the octave below.
+         s.octave = (p - kLowestPitch) / 12 - kMaxOctave;
+         s.note = p - 12 * s.octave;
+         steps[i] = s.pack();
+      }
+      memory.written[i] = pitchOf(s);
+   }
 }
 
 uint32_t nextGeneratorSeed(uint32_t current, uint32_t salt, uint32_t maxSeed) {

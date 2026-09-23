@@ -259,12 +259,18 @@ tool names and an environment variable from the folder name, and
   bank makes it five thousand. The consequence is that pattern edits are not
   automatable and the host's undo does not see them — a hardware sequencer offers
   the same deal. Do not "fix" this by moving them into the parameter table.
-  *Which* pattern is selected, the chain mode and the chain length are
-  parameters, because those are the things an arrangement automates.
+  *Which* pattern is selected and the chain length are parameters, because
+  those are the things an arrangement automates. Each pattern's chain mode and
+  repeat count are not -- they live in the bank beside its steps (0.15.0).
+  `chain_mode` and `chain_repeat` survive as hidden legacy parameters: the
+  window still draws the CHAIN and REPEAT rows through their ids and the
+  plugin's GuiDelegate redirects those to the pattern on screen.
 - **The chain is derived from the beat position, never counted.**
-  `chainPatternAt(mode, selected, length, cycle)` in `params.cpp` takes the
-  cycle — how many times round the pattern the host's timeline is — and returns
-  the pattern index, Random included. This is the same rule as the steps, and for
+  `chainPatternAt(walk, modes, repeats, start, length, cycle)` in `params.cpp`
+  walks the per-pattern chains to the cycle — how many times round the pattern
+  the host's timeline is — and returns the pattern index, Random included. The
+  `ChainWalk` it carries is a cache, not a counter: a backward seek walks again
+  from the top. This is the same rule as the steps, and for
   the same reason: a counter bumped at the end of each pattern comes apart the
   first time somebody loops a bar.
 - **A preset load starts from the defaults.** `applyPreset()` resets every

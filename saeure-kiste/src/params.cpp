@@ -323,16 +323,15 @@ const ParamDesc kParams[kNumParams] = {
         "starts from. The machine had far fewer and a mode switch to reach them; this "
         "is the same idea with the switch replaced by a grid you can click."),
    ENUM(kParamChainMode, "chain_mode", "Chain", "Sequencer", 0.0, kChainNames,
-        "What happens when a pattern has played through. Stay repeats it, which is the "
-        "hardware's behaviour and the default. Next steps to the following pattern and "
-        "wraps round at Chain Length, so a chain of four patterns is a sixty-four step "
-        "line. First plays the selected pattern once and then stays on pattern 1. "
-        "Random picks one from inside the chain each time. Every one of them is worked "
-        "out from the host's beat position rather than counted up, so looping and "
-        "scrubbing land on the pattern they should."),
+        "What happens when the pattern on screen has played through. Every pattern has "
+        "its own. Stay repeats it, which is the hardware's behaviour and the default. "
+        "Next steps to the following pattern and wraps round at Chain Length. First goes "
+        "back to pattern 1. Random picks one from inside the chain. The chain is worked "
+        "out from the host's beat position, so looping and scrubbing land on the pattern "
+        "they should."),
    STEP(kParamChainLength, "chain_length", "Chain Length", "Sequencer", 1.0, 64.0, 4.0, "",
-        "How many patterns the chain covers, counting from pattern 1. Only Next and "
-        "Random use it; Stay and First ignore it."),
+        "How many patterns the chain covers, counting from pattern 1: where Next wraps "
+        "round and what Random picks from. One setting for the whole bank."),
 
    // -------------------------------------------------------- the Devil Fish
    //
@@ -519,9 +518,9 @@ const ParamDesc kParams[kNumParams] = {
         "place in the new pattern, for cutting between patterns mid-bar. Restart "
         "switches on the next step too, but plays the new pattern from its first step."),
    STEP(kParamChainRepeat, "chain_repeat", "Chain Repeat", "Sequencer", 1.0, 256.0, 1.0, "",
-        "How many times each pattern plays before the chain moves on. At 1 every pattern "
-        "plays once; at 4 a chain of four patterns is sixteen bars long. Stay ignores it; "
-        "First plays the selected pattern this many times before it settles on pattern 1."),
+        "How many times the pattern on screen plays before its chain moves on. Every "
+        "pattern has its own, so a chain can play one pattern four times and the next "
+        "once. Stay ignores it."),
 };
 
 #undef LIN
@@ -581,13 +580,10 @@ double stepsPerBeat(int rate) {
    }
 }
 
-// Which pattern the `cycle`-th time round the chain plays. See params.h for why
-// this is a function of the cycle rather than a counter the sequencer bumps.
-int chainPatternAt(int mode, int start, int chainLength, long cycle) {
-   const int span = chainLength < 1 ? 1 : (chainLength > 64 ? 64 : chainLength);
-   const int from = start < 0 ? 0 : (start > 63 ? 63 : start);
-   if (cycle <= 0 || mode == kChainStay)
-      return from;
+namespace {
+
+// Where a pattern in `mode` hands over to on the `cycle`-th time round.
+int chainNext(int mode, int from, int span, long cycle) {
    switch (mode) {
    case kChainFirst:
       return 0;
@@ -601,13 +597,37 @@ int chainPatternAt(int mode, int start, int chainLength, long cycle) {
       return static_cast<int>(x % static_cast<uint32_t>(span));
    }
    case kChainNext:
-   default: {
-      // A pattern selected from outside the chain is where the chain starts;
-      // after that it runs inside it.
-      const int base = from < span ? from : 0;
-      return static_cast<int>((base + cycle) % span);
+   default:
+      // A pattern outside the chain feeds into its first pattern.
+      return from + 1 < span ? from + 1 : 0;
    }
+}
+
+} // namespace
+
+int chainPatternAt(ChainWalk &walk, const int *modes, const int *repeats, int start,
+                   int chainLength, long cycle) {
+   const int span = chainLength < 1 ? 1 : (chainLength > 64 ? 64 : chainLength);
+   const int from = start < 0 ? 0 : (start > 63 ? 63 : start);
+   if (walk.start != from || cycle < walk.cycle)
+      walk = ChainWalk{from, 0, from, 1};
+   while (walk.cycle < cycle) {
+      const int mode = modes[walk.pattern];
+      if (mode == kChainStay) {
+         // Nothing leaves a Stay, so there is nothing to walk through.
+         walk.cycle = cycle;
+         break;
+      }
+      ++walk.cycle;
+      const int rep = repeats[walk.pattern] < 1 ? 1 : repeats[walk.pattern];
+      if (walk.plays >= rep) {
+         walk.pattern = chainNext(mode, walk.pattern, span, walk.cycle);
+         walk.plays = 1;
+      } else {
+         ++walk.plays;
+      }
    }
+   return cycle <= 0 ? from : walk.pattern;
 }
 
 int scaleNotes(int scale, int *out) {

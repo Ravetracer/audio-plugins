@@ -113,7 +113,7 @@ bool parsePresetFile(const std::string &path, PresetData &out, PatternData *patt
 std::string formatPreset(const PresetData &preset, const PatternData *pattern) {
    std::string out = plugincore::formatPreset(presetContext(), preset);
    if (pattern)
-      out += formatPattern(pattern->steps);
+      out += formatPattern(*pattern);
    return out;
 }
 

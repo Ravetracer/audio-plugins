@@ -248,9 +248,12 @@ cell width, for a pattern longer than sixteen, with the rest scrolled to:
   right button centres a step. Up is drawn in the accent green and down in
   amber, at half the box for one octave and most of it for two.
 - **slide**, **accent** and **vibrato** lanes below. Click or drag.
-- **CLEAR**, two **shift** buttons that walk the pattern sideways under the bar,
-  the **seed** with its - and + buttons, **GEN**, and **MIDI**, which drags the
-  pattern into the host. The seed runs **0 to 4,294,967,295** -- wide enough to
+- above it, in sections: **OCT**; **TRANSP** - and +, which move the whole
+  pattern a semitone and keep its shape even where the grid's top or bottom
+  flattens notes on the way; two **shift** buttons that walk the pattern
+  sideways under the bar; **MIDI**, which drags the pattern into the host;
+  **MAP**; and the **seed** with its - and + buttons and **GEN**.
+  The seed runs **0 to 4,294,967,295** -- wide enough to
   take a Unix timestamp, so seeding from the clock gives a line you have never
   heard. Click the reading to type one.
 - a **scrollbar** under the lanes, for a pattern longer than the grid draws. The
@@ -286,7 +289,7 @@ where what the pads should do is change pattern. In Live mode:
   and it is an ordinary automatable parameter. Click the reading to zero it.
 
 **To build the map**, press `MAP`. The bank becomes the pad layout; click a
-pattern, or the `PREV` or `NEXT` button, then play the note you want to reach
+pattern, or the `PREV` or `NEXT` button under the bank, then play the note you want to reach
 it. The cell shows the note from then on. Right-click a cell to unbind it,
 right-click `MAP` to clear the whole map. One note does one thing: learning a
 note onto a new target takes it off whatever it did before.
@@ -304,28 +307,30 @@ through the bank.
 
 **COPY** and **PASTE** in the bank's title row turn a pattern into a variation of
 another one: copy, click an empty slot, paste, change the two steps you meant to
-change. **DEL**, beside them, empties the selected slot -- the same edit CLEAR
-makes on the grid, put where the patterns are. None of the three is undoable,
+change. **DEL**, beside them, empties the selected slot. **PREV** and **NEXT**, under
+the cells, step through the bank. None of the three is undoable,
 which is the deal a hardware sequencer offers.
 
-Under the bank are the two controls that say what happens when a pattern has
-played through:
+Under the bank: **Chain**, **Repeat**, **Length** and **Trigger**. Chain and
+Repeat belong to each pattern -- the rows show the pattern on screen -- so a
+chain is a route through the bank: pattern 1 four times, pattern 2 once, and so
+on.
 
-| Chain | After each time round |
+| Chain | After the pattern has played Repeat times |
 |---|---|
-| **Stay** | repeat the selected pattern. The hardware's behaviour, and the default. |
-| **Next** | step to the following pattern, wrapping round at **Length**. Four patterns make a sixty-four step line. |
-| **First** | play the selected pattern once, then stay on pattern 1. |
-| **Random** | pick one from inside the chain each time round. |
+| **Stay** | play it again. The hardware's behaviour, and the default. |
+| **Next** | go on to the following pattern, wrapping round at **Length**. |
+| **First** | go back to pattern 1. |
+| **Random** | go to one picked from inside the chain. |
 
-**Length** is how many patterns the chain covers, counting from pattern 1. Stay
-and First ignore it.
+**Repeat** is 1 to 256; Stay ignores it. **Length** is how many patterns the
+chain covers, counting from pattern 1, and is one setting for the whole bank.
+**Trigger** says when a pattern picked while the sequencer runs takes over.
 
-All three -- the selected pattern, the chain mode and its length -- are ordinary
-parameters, so a host can automate a pattern change like any other knob, and all
-of it is saved in a preset. Which pattern plays is worked out from the host's
-beat position rather than counted up as the sequencer goes, so a loop, a seek or
-a scrub lands on exactly the pattern it should, Random included.
+The selected pattern, Length and Trigger are ordinary parameters, so a host can
+automate a pattern change like any other knob. Which pattern plays is worked out
+from the host's beat position rather than counted up as the sequencer goes, so a
+loop, a seek or a scrub lands on exactly the pattern it should, Random included.
 
 The whole bank travels in the preset file and in the plugin's state. Only the
 patterns with something in them are written out.

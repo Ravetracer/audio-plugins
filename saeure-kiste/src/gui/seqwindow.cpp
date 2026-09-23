@@ -31,6 +31,7 @@
 #include <cstdio>
 #include <cstring>
 #include <vector>
+#include <string>
 
 #include <cairo/cairo.h>
 
@@ -475,7 +476,9 @@ private:
       // The step grid and, beside it, the bank of sixty-four patterns.
       mSeqRect = {0, 0, 0, 0};
       mBankRect = {0, 0, 0, 0};
-      mSeqClearRect = {0, 0, 0, 0};
+      mSeqXpDownRect = {0, 0, 0, 0};
+      mSeqXpUpRect = {0, 0, 0, 0};
+      mSeqXpLabelRect = {0, 0, 0, 0};
       mSeqGenRect = {0, 0, 0, 0};
       mSeqSeedDownRect = {0, 0, 0, 0};
       mSeqSeedUpRect = {0, 0, 0, 0};
@@ -484,8 +487,6 @@ private:
       mSeqRightRect = {0, 0, 0, 0};
       mSeqMidiRect = {0, 0, 0, 0};
       mSeqMapRect = {0, 0, 0, 0};
-      mSeqPrevPatRect = {0, 0, 0, 0};
-      mSeqNextPatRect = {0, 0, 0, 0};
       mSeqOctDownRect = {0, 0, 0, 0};
       mSeqOctUpRect = {0, 0, 0, 0};
       mSeqOctLabelRect = {0, 0, 0, 0};
@@ -501,42 +502,43 @@ private:
             mBankRect.w = kBankW;
             mBankRect.h = mSeqRect.h;
          }
-         // Right to left: GEN, + , the seed, -, then the two shifts and CLEAR.
+         // The title row, right to left, in sections: the generator, MAP, the
+         // MIDI drag, the two shifts, the transpose and the pattern octave. The
+         // three that move the pattern come first when read from the left.
+         // Buttons in a section sit kBtnGap apart, sections kSectionGap apart
+         // with a divider line in the middle of the gap.
+         constexpr double kBtnGap = 4.0;
+         constexpr double kSectionGap = 20.0;
          const double bh = 14.0;
          const double by = y + 4.0;
-         double bx = mSeqRect.x + mSeqRect.w - kSeqPad - 38.0;
-         mSeqGenRect = {bx, by, 38.0, bh};
-         bx -= 20.0;
-         mSeqSeedUpRect = {bx, by, 18.0, bh};
+         double bx = mSeqRect.x + mSeqRect.w - kSeqPad;
+         int divider = 0;
+         auto place = [&](Rect &r, double w, bool newSection = false) {
+            if (newSection) {
+               mSeqDividerX[divider++] = bx - kSectionGap * 0.5;
+               bx -= kSectionGap;
+            } else if (bx < mSeqRect.x + mSeqRect.w - kSeqPad) {
+               bx -= kBtnGap;
+            }
+            bx -= w;
+            r = {bx, by, w, bh};
+         };
+         place(mSeqGenRect, 38.0);
+         place(mSeqSeedUpRect, 18.0);
          // Wide enough for the whole of a 32-bit seed. Ten digits is what a
          // Unix timestamp takes and the range exists so that one can be used.
-         bx -= 90.0;
-         mSeqSeedLabelRect = {bx, by, 88.0, bh};
-         bx -= 20.0;
-         mSeqSeedDownRect = {bx, by, 18.0, bh};
-         bx -= 30.0;
-         mSeqRightRect = {bx, by, 22.0, bh};
-         bx -= 24.0;
-         mSeqLeftRect = {bx, by, 22.0, bh};
-         bx -= 54.0;
-         mSeqClearRect = {bx, by, 46.0, bh};
-         bx -= 48.0;
-         mSeqMidiRect = {bx, by, 42.0, bh};
-         // Live mode's group: the map switch, the two pattern steps, and the
-         // pattern's own octave. Left of everything that edits the pattern,
-         // because none of these does -- they are for playing it.
-         bx -= 50.0;
-         mSeqMapRect = {bx, by, 44.0, bh};
-         bx -= 44.0;
-         mSeqNextPatRect = {bx, by, 38.0, bh};
-         bx -= 42.0;
-         mSeqPrevPatRect = {bx, by, 38.0, bh};
-         bx -= 26.0;
-         mSeqOctUpRect = {bx, by, 18.0, bh};
-         bx -= 58.0;
-         mSeqOctLabelRect = {bx, by, 56.0, bh};
-         bx -= 20.0;
-         mSeqOctDownRect = {bx, by, 18.0, bh};
+         place(mSeqSeedLabelRect, 88.0);
+         place(mSeqSeedDownRect, 18.0);
+         place(mSeqMapRect, 44.0, true);
+         place(mSeqMidiRect, 42.0, true);
+         place(mSeqRightRect, 22.0, true);
+         place(mSeqLeftRect, 22.0);
+         place(mSeqXpUpRect, 18.0, true);
+         place(mSeqXpLabelRect, 44.0);
+         place(mSeqXpDownRect, 18.0);
+         place(mSeqOctUpRect, 18.0, true);
+         place(mSeqOctLabelRect, 56.0);
+         place(mSeqOctDownRect, 18.0);
          y += static_cast<int>(mSeqRect.h) + kGap;
       }
 
@@ -1462,8 +1464,41 @@ private:
                     "control. Click a menu to pick from the list. Drag MIDI into the host to "
                     "take the pattern with you.";
 
+      // Wrapped at the window's width. The last line sits where a one-line
+      // message always has, and a longer one grows upward over whatever is
+      // above it, on the window's own background, rather than making the
+      // window taller for the few tips that need it.
+      std::vector<std::string> lines;
+      std::string line;
+      for (const char *p = msg; *p;) {
+         const char *end = p;
+         while (*end && *end != ' ')
+            ++end;
+         const std::string word(p, end);
+         const std::string trial = line.empty() ? word : line + " " + word;
+         if (!line.empty() && textWidth(cr, trial.c_str(), 10, false) > mSpec.contentW) {
+            lines.push_back(line);
+            line = word;
+         } else {
+            line = trial;
+         }
+         p = *end ? end + 1 : end;
+      }
+      if (!line.empty())
+         lines.push_back(line);
+
+      constexpr double kLineH = 13.0;
+      const double last = mHelpY + kHelpH - 8;
+      const double first = last - kLineH * static_cast<double>(lines.size() - 1);
+      if (lines.size() > 1) {
+         setColor(cr, mSpec.theme.bgBottom);
+         cairo_rectangle(cr, 0, first - 14.0, kMargin * 2 + mSpec.contentW, last - first + 22.0);
+         cairo_fill(cr);
+      }
       setColor(cr, mSpec.theme.textMute);
-      drawText(cr, kMargin, mHelpY + kHelpH - 8, msg, 10, false, Align::Left);
+      for (size_t i = 0; i < lines.size(); ++i)
+         drawText(cr, kMargin, first + kLineH * static_cast<double>(i), lines[i].c_str(), 10,
+                  false, Align::Left);
    }
 
    // ---------------------------------------------------------------- browser
@@ -2456,7 +2491,7 @@ private:
    // warning light.
    static constexpr Rgb kOctaveDown = {0.961, 0.549, 0.129};
    static constexpr double kSeqOctBoxW = 22.0;
-   static constexpr double kSeqRowH = 13.0;  // one semitone
+   static constexpr double kSeqRowH = 15.0;  // one semitone
    static constexpr double kSeqLaneH = 16.0; // one flag lane
    static constexpr double kSeqLabelW = 46.0;
    static constexpr double kSeqPad = 8.0;
@@ -2464,6 +2499,8 @@ private:
    // The scrollbar strip under the lanes, for a pattern longer than the grid
    // draws. Always reserved, drawn only when there is something to scroll.
    static constexpr double kSeqScrollH = 12.0;
+   // One between each pair of sections in the title row.
+   static constexpr int kSeqDividers = 5;
 
    // How many columns the grid draws. Sixteen for a pattern of sixteen or
    // fewer -- which is every pattern this instrument had before Steps reached
@@ -2664,8 +2701,22 @@ private:
       return -1;
    }
 
+   // PREV and NEXT, in a row of their own right under the cells they step
+   // through. They work in every mode; in MAP they learn their notes.
+   double bankNavY() const { return bankGridY() + bankRows() * kBankCellH + 4.0; }
+   Rect bankPrevRect() const {
+      if (!hasBank())
+         return {0, 0, 0, 0};
+      const double w = (mBankRect.w - 2.0 * kSeqPad - 4.0) * 0.5;
+      return {mBankRect.x + kSeqPad, bankNavY(), w, kBankCtlH};
+   }
+   Rect bankNextRect() const {
+      const Rect p = bankPrevRect();
+      return hasBank() ? Rect{p.x + p.w + 4.0, p.y, p.w, p.h} : p;
+   }
+
    double bankCtlY(int row) const {
-      return bankGridY() + bankRows() * kBankCellH + kBankRowGap + row * (kBankCtlH + kBankCtlGap);
+      return bankNavY() + kBankCtlH + kBankRowGap + row * (kBankCtlH + kBankCtlGap);
    }
 
    // DEL, COPY and PASTE sit in the bank's title row, beside the word
@@ -2689,8 +2740,8 @@ private:
    }
 
    uint32_t bankCtlParam(int row) const {
-      const uint32_t ids[kBankCtlRows] = {mSpec.chainModeParam, mSpec.chainLengthParam,
-                                          mSpec.repeatParam, mSpec.triggerParam};
+      const uint32_t ids[kBankCtlRows] = {mSpec.chainModeParam, mSpec.repeatParam,
+                                          mSpec.chainLengthParam, mSpec.triggerParam};
       return ids[row];
    }
 
@@ -2765,9 +2816,13 @@ private:
       // seed is shown between its two buttons, because a pattern you like is a
       // number worth writing down.
       drawSeqButton(cr, mSeqMidiRect, "MIDI");
-      drawSeqButton(cr, mSeqClearRect, "CLEAR");
       drawSeqButton(cr, mSeqLeftRect, "<");
       drawSeqButton(cr, mSeqRightRect, ">");
+      drawSeqButton(cr, mSeqXpDownRect, "-");
+      drawSeqButton(cr, mSeqXpUpRect, "+");
+      setColor(cr, t.textDim);
+      drawText(cr, mSeqXpLabelRect.x + mSeqXpLabelRect.w * 0.5,
+               mSeqXpLabelRect.y + mSeqXpLabelRect.h - 4.0, "TRANSP", 8.0, false, Align::Center);
       drawSeqButton(cr, mSeqSeedDownRect, "-");
       drawSeqButton(cr, mSeqSeedUpRect, "+");
       drawSeqButton(cr, mSeqGenRect, "GEN");
@@ -2799,8 +2854,13 @@ private:
                   mSeqOctLabelRect.y + mSeqOctLabelRect.h - 4.0, label, 8.0, oct != 0,
                   Align::Center);
       }
-      drawStepButton(cr, mSeqPrevPatRect, "PREV", kNotePrevPattern);
-      drawStepButton(cr, mSeqNextPatRect, "NEXT", kNoteNextPattern);
+      setColor(cr, t.panelEdge);
+      cairo_set_line_width(cr, 1.0);
+      for (double dx : mSeqDividerX) {
+         cairo_move_to(cr, std::floor(dx) + 0.5, mSeqRect.y + 5.0);
+         cairo_line_to(cr, std::floor(dx) + 0.5, mSeqRect.y + 17.0);
+      }
+      cairo_stroke(cr);
       {
          const bool armed = mMapMode;
          roundedRect(cr, mSeqMapRect.x, mSeqMapRect.y, mSeqMapRect.w, mSeqMapRect.h, 3);
@@ -3090,8 +3150,10 @@ private:
       drawSeqButton(cr, bankDeleteRect(), "DEL", !mSpec.pattern->seqPatternEmpty(selected));
       drawSeqButton(cr, bankCopyRect(), "COPY");
       drawSeqButton(cr, bankPasteRect(), "PASTE", mPatternClipHeld);
+      drawStepButton(cr, bankPrevRect(), "PREV", kNotePrevPattern);
+      drawStepButton(cr, bankNextRect(), "NEXT", kNoteNextPattern);
 
-      static const char *const labels[kBankCtlRows] = {"CHAIN", "LENGTH", "REPEAT", "TRIGGER"};
+      static const char *const labels[kBankCtlRows] = {"CHAIN", "REPEAT", "LENGTH", "TRIGGER"};
       for (int row = 0; row < kBankCtlRows; ++row)
          drawBankControl(cr, row, bankCtlParam(row), labels[row]);
    }
@@ -3240,21 +3302,8 @@ private:
       mDirty = true;
    }
 
-   // The three buttons that change a whole pattern at once. None of them is
-   // undoable, which is the same deal a hardware sequencer offers.
-   //
-   // CLEAR empties the whole pattern rather than the part of it on screen. It
-   // used to clear exactly the columns it drew, which was the same thing when
-   // a pattern was sixteen steps and the grid drew sixteen; with a pattern
-   // that scrolls it would leave whatever is off screen behind, and a CLEAR
-   // that does not clear is worse than no button at all.
-   void seqClear() {
-      const int pat = editPattern();
-      for (int c = 0; c < kMaxSteps; ++c)
-         mSpec.pattern->seqSetStep(pat, c, Step());
-      mDirty = true;
-   }
-
+   // The two shifts walk the whole pattern a step sideways under the bar.
+   // Not undoable, which is the same deal a hardware sequencer offers.
    void seqShift(int by) {
       const int len = mSpec.pattern->seqLength();
       if (len <= 1)
@@ -3277,6 +3326,14 @@ private:
       if (!hasBank() || !mBankRect.contains(x, y))
          return false;
 
+      if (bankPrevRect().contains(x, y)) {
+         mapTargetOrStep(kNotePrevPattern, -1, button);
+         return true;
+      }
+      if (bankNextRect().contains(x, y)) {
+         mapTargetOrStep(kNoteNextPattern, +1, button);
+         return true;
+      }
       if (button == kButtonLeft && bankDeleteRect().contains(x, y)) {
          patternDelete();
          return true;
@@ -3372,8 +3429,9 @@ private:
             dragPatternAsMidi();
          return true;
       }
-      if (mSeqClearRect.contains(x, y)) {
-         seqClear();
+      if (mSeqXpDownRect.contains(x, y) || mSeqXpUpRect.contains(x, y)) {
+         mSpec.pattern->seqTranspose(editPattern(), mSeqXpUpRect.contains(x, y) ? 1 : -1);
+         mDirty = true;
          return true;
       }
       if (mSeqGenRect.contains(x, y)) {
@@ -3419,14 +3477,6 @@ private:
       if (mSeqOctLabelRect.contains(x, y)) {
          mSpec.pattern->seqSetPatternOctave(0); // the label is the reset
          mDirty = true;
-         return true;
-      }
-      if (mSeqPrevPatRect.contains(x, y)) {
-         mapTargetOrStep(kNotePrevPattern, -1, button);
-         return true;
-      }
-      if (mSeqNextPatRect.contains(x, y)) {
-         mapTargetOrStep(kNoteNextPattern, +1, button);
          return true;
       }
       if (mSeqMapRect.contains(x, y)) {
@@ -4417,7 +4467,11 @@ private:
    uint16_t mPatternClip[kMaxSteps] = {0};
    bool mPatternClipHeld = false;
 
-   Rect mSeqClearRect{0, 0, 0, 0};
+   // Where the title row's section dividers are drawn.
+   double mSeqDividerX[kSeqDividers] = {0};
+   Rect mSeqXpDownRect{0, 0, 0, 0};
+   Rect mSeqXpUpRect{0, 0, 0, 0};
+   Rect mSeqXpLabelRect{0, 0, 0, 0};
    Rect mSeqMidiRect{0, 0, 0, 0};
    Rect mSeqGenRect{0, 0, 0, 0};
    Rect mSeqSeedDownRect{0, 0, 0, 0};
@@ -4426,8 +4480,6 @@ private:
    Rect mSeqLeftRect{0, 0, 0, 0};
    Rect mSeqRightRect{0, 0, 0, 0};
    Rect mSeqMapRect{0, 0, 0, 0};
-   Rect mSeqPrevPatRect{0, 0, 0, 0};
-   Rect mSeqNextPatRect{0, 0, 0, 0};
    Rect mSeqOctDownRect{0, 0, 0, 0};
    Rect mSeqOctUpRect{0, 0, 0, 0};
    Rect mSeqOctLabelRect{0, 0, 0, 0};

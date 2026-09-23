@@ -1979,7 +1979,7 @@ int runSelfTest(const clap_plugin_entry_t *entry, double sampleRate) {
             generatePattern(gs, bank.pattern(written[w]));
          }
 
-         const std::string text = formatPattern(bank.steps);
+         const std::string text = formatPattern(bank);
          PatternData back;
          std::istringstream in(text);
          std::string line;
@@ -2004,9 +2004,10 @@ int runSelfTest(const clap_plugin_entry_t *entry, double sampleRate) {
          for (size_t i = 0; i < text.size(); ++i)
             if (text[i] == '\n')
                ++lines;
-         // Three patterns of five lines, three headers, the section heading and
-         // the blank line before it. An empty pattern must not cost a line.
-         check(lines <= 3 * 5 + 3 + 2, "an empty pattern is not written out");
+         // Three patterns of five lines, pattern 1's two chain lines, three
+         // headers, the section heading and the blank line before it. An empty
+         // pattern must not cost a line.
+         check(lines <= 3 * 5 + 2 + 3 + 2, "an empty pattern is not written out");
 
          // --- the octave, which reaches two either way as of 0.3.0.
          {
@@ -2030,7 +2031,7 @@ int runSelfTest(const clap_plugin_entry_t *entry, double sampleRate) {
             check(packHeld, "a step survives packing at every octave from -2 to +2");
 
             // And through the preset text, which writes the octave as a token.
-            const std::string wideText = formatPattern(wide.steps);
+            const std::string wideText = formatPattern(wide);
             PatternData wideBack;
             std::istringstream win(wideText);
             std::string wline;
@@ -2062,24 +2063,103 @@ int runSelfTest(const clap_plugin_entry_t *entry, double sampleRate) {
          }
 
          // Stay never moves; Next walks the chain and wraps at its length;
-         // First comes home after one pattern; Random stays inside the chain.
-         check(chainPatternAt(kChainStay, 3, 8, 7) == 3, "Stay repeats the selected pattern");
-         check(chainPatternAt(kChainNext, 0, 4, 1) == 1, "Next steps to the following pattern");
-         check(chainPatternAt(kChainNext, 0, 4, 4) == 0, "Next wraps round at Chain Length");
-         check(chainPatternAt(kChainNext, 2, 4, 3) == 1, "Next starts from the selected pattern");
-         check(chainPatternAt(kChainNext, 9, 4, 1) == 1,
-               "a pattern outside the chain still feeds into it");
-         check(chainPatternAt(kChainFirst, 5, 8, 1) == 0, "First comes back to pattern 1");
-         check(chainPatternAt(kChainFirst, 5, 8, 0) == 5, "First plays the selected one first");
+         // First comes home; Random stays inside the chain; and each pattern's
+         // repeat count is its own.
+         int modes[kMaxPatterns], reps[kMaxPatterns];
+         auto setAll = [&](int mode, int rep) {
+            for (int i = 0; i < kMaxPatterns; ++i) {
+               modes[i] = mode;
+               reps[i] = rep;
+            }
+         };
+         auto at = [&](int start, int len, long cycle) {
+            ChainWalk w;
+            return chainPatternAt(w, modes, reps, start, len, cycle);
+         };
+         setAll(kChainStay, 1);
+         check(at(3, 8, 7) == 3, "Stay repeats the selected pattern");
+         setAll(kChainNext, 1);
+         check(at(0, 4, 1) == 1, "Next steps to the following pattern");
+         check(at(0, 4, 4) == 0, "Next wraps round at Chain Length");
+         check(at(2, 4, 3) == 1, "Next starts from the selected pattern");
+         check(at(9, 4, 1) == 0, "a pattern outside the chain feeds into its start");
+         setAll(kChainFirst, 1);
+         check(at(5, 8, 1) == 0, "First comes back to pattern 1");
+         check(at(5, 8, 0) == 5, "First plays the selected one first");
+         // 0 x2 -> 1 x1 -> 2 x3 (Stay) : 0 0 1 2 2 2 2 ...
+         setAll(kChainStay, 1);
+         modes[0] = kChainNext;
+         reps[0] = 2;
+         modes[1] = kChainNext;
+         modes[2] = kChainStay;
+         reps[2] = 3;
+         {
+            const int want[8] = {0, 0, 1, 2, 2, 2, 2, 2};
+            bool fresh = true, walked = true;
+            ChainWalk w;
+            for (long c = 0; c < 8; ++c) {
+               fresh = fresh && at(0, 4, c) == want[c];
+               walked = walked && chainPatternAt(w, modes, reps, 0, 4, c) == want[c];
+            }
+            check(fresh, "each pattern plays its own repeat count, and Stay ends the chain");
+            check(walked, "a walk carried forward gives what a fresh walk does");
+            // Backwards is a fresh walk, so a loop lands where it should.
+            check(chainPatternAt(w, modes, reps, 0, 4, 2) == 1, "a walk seeked backwards restarts");
+         }
+         setAll(kChainRandom, 1);
          bool randomInChain = true;
          for (long cycle = 1; cycle < 200; ++cycle) {
-            const int got = chainPatternAt(kChainRandom, 0, 5, cycle);
+            const int got = at(0, 5, cycle);
             if (got < 0 || got >= 5)
                randomInChain = false;
-            if (got != chainPatternAt(kChainRandom, 0, 5, cycle))
+            if (got != at(0, 5, cycle))
                randomInChain = false;
          }
          check(randomInChain, "Random stays inside the chain and repeats for a given cycle");
+
+         // Transpose keeps a pattern's shape across the edges of the grid: A#
+         // and B at the top octave, pushed up three times, both sit on B, and
+         // three presses back down put them where they were.
+         {
+            uint16_t steps[kMaxSteps];
+            clearPattern(steps);
+            Step top;
+            top.octave = kMaxOctave;
+            top.note = 10;
+            top.accent = true;
+            steps[0] = top.pack();
+            top.note = 11;
+            top.accent = false;
+            steps[1] = top.pack();
+            Step low;
+            low.note = 0;
+            low.octave = 0;
+            steps[2] = low.pack();
+            uint16_t original[kMaxSteps];
+            std::memcpy(original, steps, sizeof(steps));
+            TransposeMemory mem;
+            for (int i = 0; i < 3; ++i)
+               transposePattern(steps, 1, mem);
+            check(Step::unpack(steps[0]).note == 11 && Step::unpack(steps[0]).octave == kMaxOctave &&
+                     Step::unpack(steps[1]).note == 11,
+                  "a transpose into the top of the grid stops there");
+            check(Step::unpack(steps[2]).note == 3 && Step::unpack(steps[0]).accent,
+                  "the rest of the pattern moves and the flags stay");
+            for (int i = 0; i < 3; ++i)
+               transposePattern(steps, -1, mem);
+            check(std::memcmp(steps, original, sizeof(steps)) == 0,
+                  "transposing back restores the shape the edge flattened");
+            transposePattern(steps, -1, mem);
+            check(Step::unpack(steps[2]).note == 11 && Step::unpack(steps[2]).octave == -1,
+                  "a note below C wraps into the octave below");
+            // An edit in between starts the memory again from what is there.
+            Step edited = Step::unpack(steps[2]);
+            edited.note = 5;
+            steps[2] = edited.pack();
+            transposePattern(steps, 1, mem);
+            check(Step::unpack(steps[2]).note == 6 && Step::unpack(steps[2]).octave == -1,
+                  "an edit restarts the memory from the edited pattern");
+         }
       }
 
       // The musical rules.
@@ -2135,7 +2215,10 @@ int runSelfTest(const clap_plugin_entry_t *entry, double sampleRate) {
             return static_cast<int64_t>(size);
          };
          check(st && st->save(plugin, &os), "state save, for the pattern map");
-         check(blob.size() > 128, "the blob is long enough to hold a map");
+         // The map is the 128 bytes before the chains, which are the last thing
+         // in the blob: a mode byte and a 16-bit repeat per pattern.
+         const size_t mapAt = static_cast<size_t>(kMaxPatterns) * 3 + 128;
+         check(blob.size() > mapAt, "the blob is long enough to hold a map");
          // Kept so the plugin can be put back exactly as it was found. A map
          // left behind here would reach the checks further down, where every
          // parameter is driven to its maximum -- and Mode's maximum is Live,
@@ -2144,7 +2227,7 @@ int runSelfTest(const clap_plugin_entry_t *entry, double sampleRate) {
 
          // Four pads: one for pattern 4, one for pattern 1, and one each way.
          auto bind = [&](int note, int action) {
-            blob[blob.size() - 128 + static_cast<size_t>(note)] = static_cast<char>(action);
+            blob[blob.size() - mapAt + static_cast<size_t>(note)] = static_cast<char>(action);
          };
          bind(60, 3); // pattern 4, zero based
          bind(61, 0); // pattern 1
@@ -2190,8 +2273,8 @@ int runSelfTest(const clap_plugin_entry_t *entry, double sampleRate) {
          st->save(plugin, &os2);
          bool mapHeld = true;
          for (int note = 60; note <= 63; ++note)
-            if (again[again.size() - 128 + static_cast<size_t>(note)] !=
-                blob[blob.size() - 128 + static_cast<size_t>(note)])
+            if (again[again.size() - mapAt + static_cast<size_t>(note)] !=
+                blob[blob.size() - mapAt + static_cast<size_t>(note)])
                mapHeld = false;
          check(mapHeld, "the pattern map is saved again as it was loaded");
 
@@ -2204,7 +2287,7 @@ int runSelfTest(const clap_plugin_entry_t *entry, double sampleRate) {
          is3.ctx = &back;
          st->load(plugin, &is3);
          check(saeurekiste::kNoteNone ==
-                  static_cast<int8_t>(pristine[pristine.size() - 128 + 60]),
+                  static_cast<int8_t>(pristine[pristine.size() - mapAt + 60]),
                "the plugin starts with nothing mapped");
       }
 
@@ -2402,6 +2485,62 @@ int runSelfTest(const clap_plugin_entry_t *entry, double sampleRate) {
          chainRun(2.0);
          check(firstKey(0) == 36 && firstKey(1) == 36 && firstKey(2) == 37 && firstKey(3) == 37,
                "Repeat plays each pattern in the chain that many times");
+
+         // Per-pattern chains: pattern 1 plays three times and hands on,
+         // pattern 2 plays once and hands back -- 1, 1, 1, 2, 1. Set through
+         // the preset lines, which is the only place they are written down.
+         std::string chained = text + "chain_length = 2\n"
+                               "seq_chain = Next\nseq_repeat = 3\n"
+                               "seq2_chain = Next\nseq2_repeat = 1\n";
+         check(writePresetFile(path, chained, werr) &&
+                  switchLoad->from_location(plugin, CLAP_PRESET_DISCOVERY_LOCATION_FILE,
+                                            path.c_str(), ""),
+               "a bank with per-pattern chains loads");
+         std::filesystem::remove(path, rmec);
+         auto perPatternRun = [&]() {
+            gParamOverrides.clear();
+            gParamOverrides.emplace_back(kParamMode, static_cast<double>(kModeSequencer));
+            gParamOverrides.emplace_back(kParamSeqRate, static_cast<double>(kRate16));
+            gParamOverrides.emplace_back(kParamSeqSteps, 16.0);
+            gParamOverrides.emplace_back(kParamPattern, 1.0);
+            plugin->reset(plugin);
+            renderSequence(plugin, sampleRate, 512, 96.0 * perStep / sampleRate, 0.0, {}, true,
+                           130.0);
+            gParamOverrides.clear();
+         };
+         auto perPatternPlays = [&]() {
+            return firstKey(0) == 36 && firstKey(1) == 36 && firstKey(2) == 36 &&
+                   firstKey(3) == 37 && firstKey(4) == 36 && firstKey(5) == 36;
+         };
+         perPatternRun();
+         check(perPatternPlays(), "each pattern plays its own repeat count and chain");
+
+         // And they travel in the state: saved, overwritten by a global chain,
+         // loaded back.
+         std::string chainState;
+         clap_ostream_t cos{};
+         cos.ctx = &chainState;
+         cos.write = sos.write;
+         state->save(plugin, &cos);
+         chainRun(1.0);
+         check(firstKey(1) == 37 && firstKey(2) == 36,
+               "the legacy Chain parameter still sets every pattern");
+         struct ChainReadCtx {
+            const std::string *data;
+            size_t pos;
+         } crc{&chainState, 0};
+         clap_istream_t cis{};
+         cis.ctx = &crc;
+         cis.read = [](const clap_istream_t *st, void *buf, uint64_t size) -> int64_t {
+            auto *c = static_cast<ChainReadCtx *>(st->ctx);
+            const size_t n = std::min<size_t>(size, c->data->size() - c->pos);
+            std::memcpy(buf, c->data->data() + c->pos, n);
+            c->pos += n;
+            return static_cast<int64_t>(n);
+         };
+         check(state->load(plugin, &cis), "a state with per-pattern chains loads");
+         perPatternRun();
+         check(perPatternPlays(), "per-pattern chains survive the state round trip");
 
          struct ReadCtx {
             const std::string *data;
@@ -4232,14 +4371,14 @@ int runSelfTest(const clap_plugin_entry_t *entry, double sampleRate) {
       std::memcpy(shortData.pattern(0), shortPat, sizeof(shortPat));
       for (int p = 1; p < kMaxPatterns; ++p)
          clearPattern(shortData.pattern(p));
-      check(columnsOf(formatPattern(shortData.steps), "seq_pitch") == 16,
+      check(columnsOf(formatPattern(shortData), "seq_pitch") == 16,
             "a sixteen-step pattern is still written in sixteen columns");
 
       PatternData longData;
       std::memcpy(longData.pattern(0), longPat, sizeof(longPat));
       for (int p = 1; p < kMaxPatterns; ++p)
          clearPattern(longData.pattern(p));
-      const std::string longText = formatPattern(longData.steps);
+      const std::string longText = formatPattern(longData);
       check(columnsOf(longText, "seq_pitch") == patternUsedLength(longPat),
             "a long pattern is written in as many columns as it uses");
 

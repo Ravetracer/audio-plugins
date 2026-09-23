@@ -122,7 +122,7 @@ constexpr double kArcSweep = 1.5 * 3.14159265358979323846;
 // it, so anything longer is scrolled to; the strip is reserved whether or not
 // there is anything to scroll, because a grid that changed height when Steps
 // crossed sixteen would move every panel under it.
-constexpr int kSeqPaneHeight = 291;
+constexpr int kSeqPaneHeight = 315;
 
 // Compile-time layout checks a plugin can run over its own panel table. Kept
 // here so every plugin gets the same ones; kept constexpr so a layout mistake

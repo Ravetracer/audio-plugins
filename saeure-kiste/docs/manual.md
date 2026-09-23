@@ -8,7 +8,7 @@ subtitle: CLAP and VST3 instrument for Linux and Windows
 
 *A monophonic acid bass synthesiser. Linux and Windows, CLAP and VST3.*
 
-Version 0.14.0
+Version 0.15.0
 
 ---
 
@@ -490,11 +490,26 @@ above.
 - **SLIDE**, **ACCENT** and **VIB** below. Click or drag.
 - Steps past the pattern's length are greyed; the playing step is lit.
 
-**CLEAR** empties it, all 128 steps of it and not only the part on screen. The
-two **arrow** buttons walk the whole pattern one step sideways under the bar,
-which is the quickest way to find out that a line you liked was starting in the
-wrong place. **MIDI** drags the pattern out of the
-plugin — see *Taking the pattern with you* below. The rest is the generator.
+The row above the grid is in sections, and the three that move the pattern
+come first: **OCT** (see *Moving the whole pattern* below), **TRANSP**, and the
+two **arrows**. Then **MIDI**, **MAP** and the generator.
+
+The two **arrow** buttons walk the whole pattern one step sideways under the
+bar, which is the quickest way to find out that a line you liked was starting in
+the wrong place. To empty a pattern, use **DEL** in the bank.
+
+**TRANSP −** and **+** move the whole pattern a semitone down or up, all 128
+steps of it. A note that runs past B moves to C with its octave raised, and one
+that runs below C moves to B with its octave lowered, so the line keeps its
+shape across the grid's rows. At the very top or bottom — two octaves up from B,
+two down from C — a note stops and waits there, and the pattern remembers where
+it would have been: transpose back the same number of times and every note is
+where it started, including the ones that were flattened against the edge.
+Editing a note starts that memory again from what is on the grid; the flags do
+not count, so an accent can be toggled in between.
+
+**MIDI** drags the pattern out of the plugin — see *Taking the pattern with you*
+below. The rest is the generator.
 
 All of it applies to whichever pattern the bank has selected — which is not
 necessarily the one sounding, because a running chain moves on without the
@@ -527,12 +542,12 @@ you want the pads to do is change pattern. In Live mode:
 into the pad layout and says so. Then, for each pad:
 
 1. Click what you want it to do — a pattern in the bank, or the **PREV** or
-   **NEXT** button.
+   **NEXT** button under it.
 2. Play the note you want to do it. That is the whole of the learning.
 
-![MAP lit, the bank turned into the pad layout, and the row that does it: the pattern octave, PREV and NEXT, and MAP itself. PREV and NEXT show the notes they answer to.](images/live-row.png)
+![MAP lit, in the row above the grid.](images/live-row.png)
 
-![The bank as a pad layout. Pattern 5 is reached by C3; the header says PATTERN MAP rather than PATTERNS so it cannot be mistaken for the ordinary bank.](images/live-map.png)
+![The bank as a pad layout. Pattern 5 is reached by C3, and PREV and NEXT show the notes they answer to; the header says PATTERN MAP rather than PATTERNS so it cannot be mistaken for the ordinary bank.](images/live-map.png)
 
 The cell or button then shows the note that reaches it. **Right-click** one to
 unbind it, and right-click **MAP** to clear the whole map at once. Press MAP
@@ -548,8 +563,6 @@ Two things worth knowing:
   belongs to your rig rather than to a sound, and browsing presets in the
   middle of a set must not silently remap the controller. Nothing in a preset
   file mentions it.
-
-![Out of map mode the same two buttons are just PREV and NEXT, and step the bank when clicked.](images/live-row-plain.png)
 
 PREV and NEXT are ordinary buttons the rest of the time, and step the bank when
 clicked — the same call the pads make, so the two cannot drift apart.
@@ -586,38 +599,44 @@ PASTE stays greyed until something has been copied, and DEL until there is
 something to delete. The clipboard is the editor's — it lasts as long as the
 window is open, and it is not in the preset, the state or the parameter list.
 
-**DEL empties the selected pattern**, which is the same edit CLEAR makes on the
-grid, put where the patterns are: emptying a slot you are not editing is
-something you do while looking at the bank. Like everything else here it is not
+**DEL empties the selected pattern**, all 128 steps of it and not only the part
+on screen. Like everything else here it is not
 undoable, which is the deal a hardware sequencer offers — and the reason to
 COPY first if there is any doubt.
 
-**CHAIN** is what happens when a pattern has played through.
+**Every pattern has its own CHAIN and REPEAT.** The two rows under the bank
+show and set them for the pattern on screen, so a chain is a route through the
+bank: pattern 1 four times, pattern 2 once, pattern 3 twice and back to the
+start, with each pattern saying where it goes next.
 
-| Chain | After each time round |
+**CHAIN** is what happens when the pattern has played through.
+
+| Chain | After it has played REPEAT times |
 |---|---|
-| **Stay** | repeat the selected pattern. The hardware's behaviour, and the default. |
-| **Next** | step to the following pattern, wrapping round at **Length**. Four patterns make a sixty-four step line. |
-| **First** | play the selected pattern once, then stay on pattern 1. |
-| **Random** | pick one from inside the chain each time round. |
+| **Stay** | play it again, for ever. The hardware's behaviour, and the default. |
+| **Next** | go on to the following pattern, wrapping round to pattern 1 at **Length**. |
+| **First** | go back to pattern 1. |
+| **Random** | go to a pattern picked from inside the chain. |
 
-**LENGTH** is how many patterns the chain covers, counting from pattern 1. Stay
-and First ignore it. A pattern selected from outside the chain is where the
-chain starts, and after that it runs inside it.
+**REPEAT** is how many times the pattern plays before its chain moves on, from 1
+to 256. Stay ignores it.
 
-**REPEAT** is how many times each pattern plays before the chain moves on, from
-1 to 256. At 1 every pattern plays once; at 4, a chain of four patterns is
-sixteen bars long. Stay ignores it, and First plays the selected pattern that
-many times before it settles on pattern 1.
+**LENGTH** is how many patterns the chain covers, counting from pattern 1: where
+Next wraps round and what Random picks from. Unlike the two above it is one
+setting for the whole bank. A pattern outside the chain that is set to Next hands
+on to pattern 1.
 
 While a chain is running, the grid follows it: the pattern on screen, the
 bank's cursor and the playhead are always the pattern that is playing, and an
 edit, GEN, PREV, NEXT or a MIDI drag acts on that pattern.
 
-Which pattern plays is worked out from the host's beat position — not counted up
-as the sequencer goes — for the same reason the steps are. A loop, a seek or a
-scrub therefore lands on exactly the pattern it should, Random included: the same
-bar of the song always picks the same pattern, however it was reached.
+Which pattern plays is worked out from the host's beat position, walking the
+chain from the pattern selected when the sequencer started — for the same reason
+the steps are. A loop, a seek or a scrub therefore lands on exactly the pattern it
+should, Random included: the same bar of the song always picks the same pattern,
+however it was reached. A pattern picked while the chain runs is where the chain
+carries on from once it takes over. Changing a pattern's CHAIN or REPEAT while it
+plays changes what comes next, not the way it got there.
 
 **Changing pattern while it plays.** **TRIGGER**, under LENGTH, says when a
 pattern selected while the sequencer is running takes over:
@@ -636,9 +655,10 @@ boundary lands exactly there, and automation placed inside a pattern waits for
 its end. After a Restart the pattern runs shifted against the bar until the
 transport stops or jumps.
 
-The selected pattern, the chain mode, length and repeat, and the trigger are ordinary
-parameters, so a host can automate a pattern change like any other knob. The
-sixteen steps inside a pattern are not, and deliberately so — eighty values per
+The selected pattern, the chain length and the trigger are ordinary parameters,
+so a host can automate a pattern change like any other knob. Each pattern's
+chain and repeat belong to the pattern, like its steps. The steps inside a
+pattern are not parameters either, and deliberately so — eighty values per
 pattern would make a mess of any host's parameter list. The consequence is that a
 pattern edit is not automatable and the host's undo does not see it, which is the
 same deal a hardware sequencer offers.

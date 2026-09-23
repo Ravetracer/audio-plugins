@@ -169,6 +169,12 @@ enum ParamId : uint32_t {
    // persisted and may never move.
    kParamPatternTrigger,
    // How many times each pattern in a chain plays before the chain moves on.
+   //
+   // This and Chain Mode are legacy: both are per pattern now and live in the
+   // bank. The ids stay because they are persisted -- an old preset, blob or
+   // automation lane that sets one sets it for every pattern -- and the host is
+   // told they are hidden. The window still draws them, reading and writing the
+   // pattern on screen; see the plugin's GuiDelegate.
    kParamChainRepeat,
 
    kNumParams
@@ -202,15 +208,36 @@ enum MufflerKind { kMufflerOff = 0, kMufflerSoft, kMufflerHard, kNumMufflerKinds
 // acid_engine.cpp for what the other two do and where they come from.
 enum SweepSpeed { kSweepNormal = 0, kSweepFast, kSweepSlow, kNumSweepSpeeds };
 
-// What happens when a pattern has played through. The chain is patterns 1 to
-// Chain Length; Stay ignores it and repeats the selected pattern for ever.
+// What happens when a pattern has played through. Each pattern carries its own
+// -- see PatternData -- so a chain is a route through the bank rather than one
+// rule for all of it. Next wraps round at Chain Length, Random picks from
+// inside it, and Stay repeats the pattern for ever.
 enum ChainKind { kChainStay = 0, kChainNext, kChainFirst, kChainRandom, kNumChainModes };
 
-// Which pattern plays on the `cycle`-th time round, counting from the one the
-// Pattern parameter selects. Derived from the cycle rather than counted up, so
-// the sequencer stays a pure function of the host's beat position: a loop, a
-// seek or a scrub lands on exactly the pattern it should.
-int chainPatternAt(int mode, int start, int chainLength, long cycle);
+// The highest repeat count a pattern can carry.
+constexpr int kMaxChainRepeat = 256;
+
+// Where a chain is: which pattern plays on `cycle`, and how many cycles of it
+// have started, that one included. Carried from one call to the next so a
+// running chain only ever walks forward; see chainPatternAt().
+struct ChainWalk {
+   int start = -1; // the pattern the walk began from; -1 forces a fresh walk
+   long cycle = 0;
+   int pattern = 0;
+   long plays = 1;
+};
+
+// Which pattern plays on the `cycle`-th time round, counting from `start`,
+// given each pattern's chain mode and repeat count.
+//
+// Worked out by walking the chain from `start`, so it is still a function of
+// the host's beat position: a loop or a seek backwards walks again from the
+// top and lands on exactly the pattern it should. `walk` remembers where the
+// last call got to, so ordinary playback advances one cycle at a time -- and
+// an edit to a pattern's chain or repeat changes what comes next rather than
+// rewriting the history that led to the pattern playing now.
+int chainPatternAt(ChainWalk &walk, const int *modes, const int *repeats, int start,
+                   int chainLength, long cycle);
 
 // When a pattern selected while the sequencer runs takes over. At End lets the
 // playing pattern reach its last step, which is the machine. Instant switches

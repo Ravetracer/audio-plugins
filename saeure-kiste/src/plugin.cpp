@@ -86,7 +86,11 @@ constexpr uint32_t kStateMagic = 0x54534B53u; // 'SKST' little-endian
 // pattern and is read as the first sixteen steps of a 128-step pattern, the
 // rest rests, which is exactly the line it described. Nothing else about the
 // format moved, so a project saved by 0.4.0 opens with its bank intact.
-constexpr uint32_t kStateVersion = 3;
+//
+// Version 4 appends each pattern's chain mode and repeat count after the
+// pattern map. A blob without them has the old global Chain and Chain Repeat
+// parameters instead, which are copied into every pattern.
+constexpr uint32_t kStateVersion = 4;
 
 // How many steps per pattern a blob of a given version carries.
 constexpr int kStateStepsInVersion1 = 16;
@@ -120,6 +124,7 @@ public:
       // selects one, which is what Live mode does before anything is learned.
       for (int note = 0; note < 128; ++note)
          mNoteMap[note].store(static_cast<int8_t>(kNoteNone), std::memory_order_relaxed);
+      setChainForAll(kChainStay, 1);
       mPlugin.desc = &kDescriptor;
       mPlugin.plugin_data = this;
       mPlugin.init = [](const clap_plugin_t *p) { return self(p)->init(); };
@@ -283,6 +288,8 @@ private:
          info->flags |= CLAP_PARAM_IS_STEPPED;
       if (d.kind == ParamKind::Enum)
          info->flags |= CLAP_PARAM_IS_ENUM;
+      if (isLegacyChainParam(d.id))
+         info->flags |= CLAP_PARAM_IS_HIDDEN;
       info->min_value = d.min;
       info->max_value = d.max;
       info->default_value = d.def;
@@ -432,6 +439,14 @@ private:
          blob.append(reinterpret_cast<const char *>(&action), sizeof(action));
       }
 
+      // Version 4: each pattern's chain, a mode byte and a 16-bit repeat.
+      for (int pat = 0; pat < kMaxPatterns; ++pat) {
+         const uint8_t mode = static_cast<uint8_t>(plug->mChainMode[pat].load(std::memory_order_relaxed));
+         const uint16_t repeat = static_cast<uint16_t>(plug->mChainRepeat[pat].load(std::memory_order_relaxed));
+         blob.append(reinterpret_cast<const char *>(&mode), sizeof(mode));
+         blob.append(reinterpret_cast<const char *>(&repeat), sizeof(repeat));
+      }
+
       size_t written = 0;
       while (written < blob.size()) {
          const int64_t n =
@@ -513,6 +528,19 @@ private:
                static_cast<int8_t>(valid ? action : kNoteNone), std::memory_order_relaxed);
          }
 
+      // The chains, from version 4 on, all or nothing like the map. Older
+      // blobs had one global chain, and it now goes into every pattern.
+      uint8_t chains[kMaxPatterns * 3];
+      if (readExactly(stream, chains, sizeof(chains))) {
+         for (int pat = 0; pat < kMaxPatterns; ++pat) {
+            uint16_t repeat = 1;
+            std::memcpy(&repeat, chains + pat * 3 + 1, sizeof(repeat));
+            plug->setChain(pat, chains[pat * 3], repeat);
+         }
+      } else {
+         plug->setChainFromLegacy();
+      }
+
       plug->mParamsDirty.store(true, std::memory_order_release);
       plug->notifyParamValuesChanged();
       return true;
@@ -521,6 +549,13 @@ private:
    // -------------------------------------------------------------- preset load
 
    void applyPattern(const PatternData &pattern) {
+      // A preset older than per-pattern chains carries the global parameters
+      // instead, and applyPreset() has just loaded them.
+      if (pattern.chainPresent)
+         for (int p = 0; p < kMaxPatterns; ++p)
+            setChain(p, pattern.chainMode[p], pattern.chainRepeat[p]);
+      else
+         setChainFromLegacy();
       if (!pattern.present)
          return;
       for (int p = 0; p < kMaxPatterns; ++p)
@@ -830,16 +865,26 @@ private:
       // meant a player had to hit the bar line to the sample to stay in time.
       // Instant and Restart are for the player who wants exactly that.
       if (idx == 0 || base < 0 || trigger != kTriggerAtEnd) {
-         base = seqPattern();
+         const int taken = seqPattern();
+         // The chain is walked from where its first pattern took over: the top
+         // of the song when the sequencer starts, so a seek lands where it
+         // should, and the takeover itself when a pattern is picked while it
+         // runs, so the picked one is what plays next.
+         if (base < 0 || taken != base) {
+            mChainOrigin = base < 0 ? 0 : cycle;
+            mChainWalk = ChainWalk{};
+         }
+         base = taken;
          mActivePattern.store(base, std::memory_order_relaxed);
       }
-      // Chain Repeat plays each pattern that many cycles before moving on, so
-      // the chain counts passes rather than cycles. Floor division again.
-      const long repeat = static_cast<long>(realValue(kParamChainRepeat));
-      const long rep = repeat < 1 ? 1 : repeat;
-      const long pass = cycle >= 0 ? cycle / rep : -((-cycle + rep - 1) / rep);
-      const int pattern = chainPatternAt(static_cast<int>(realValue(kParamChainMode)), base,
-                                         static_cast<int>(realValue(kParamChainLength)), pass);
+      int modes[kMaxPatterns], repeats[kMaxPatterns];
+      for (int p = 0; p < kMaxPatterns; ++p) {
+         modes[p] = mChainMode[p].load(std::memory_order_relaxed);
+         repeats[p] = mChainRepeat[p].load(std::memory_order_relaxed);
+      }
+      const int pattern =
+         chainPatternAt(mChainWalk, modes, repeats, base,
+                        static_cast<int>(realValue(kParamChainLength)), cycle - mChainOrigin);
       mLastFired = onsetPos;
       mPlayhead.store(static_cast<int>(idx), std::memory_order_relaxed);
       mPlayingPattern.store(pattern, std::memory_order_relaxed);
@@ -1214,7 +1259,9 @@ private:
    // GEN, the MIDI drag and PREV/NEXT all act on what the player can see.
    int seqShownPattern() const override {
       const int playing = seqPlayingPattern();
-      const bool chained = static_cast<int>(realValue(kParamChainMode)) != kChainStay;
+      const int active = mActivePattern.load(std::memory_order_relaxed);
+      const int from = active >= 0 ? active : seqPattern();
+      const bool chained = mChainMode[from].load(std::memory_order_relaxed) != kChainStay;
       return chained && playing >= 0 ? playing : seqPattern();
    }
 
@@ -1320,6 +1367,49 @@ private:
       pushGuiEdit(kParamPattern, 0.0, EditKind::GestureBegin);
       pushGuiEdit(kParamPattern, v, EditKind::Value);
       pushGuiEdit(kParamPattern, 0.0, EditKind::GestureEnd);
+   }
+
+   void seqTranspose(int pattern, int semitones) override {
+      if (pattern < 0 || pattern >= kMaxPatterns)
+         return;
+      uint16_t steps[kMaxSteps];
+      for (int i = 0; i < kMaxSteps; ++i)
+         steps[i] = mPattern[pattern][i].load(std::memory_order_relaxed);
+      transposePattern(steps, semitones, mTransposeMemory[pattern]);
+      for (int i = 0; i < kMaxSteps; ++i)
+         mPattern[pattern][i].store(steps[i], std::memory_order_relaxed);
+      mPresetEdited = true;
+   }
+
+   // ------------------------------------------------------------- chains
+
+   static bool isLegacyChainParam(uint32_t id) {
+      return id == kParamChainMode || id == kParamChainRepeat;
+   }
+
+   void setChain(int pattern, int mode, int repeat) {
+      mChainMode[pattern].store(mode < 0 || mode >= kNumChainModes ? kChainStay : mode,
+                                std::memory_order_relaxed);
+      mChainRepeat[pattern].store(repeat < 1 ? 1 : (repeat > kMaxChainRepeat ? kMaxChainRepeat : repeat),
+                                  std::memory_order_relaxed);
+   }
+
+   void setChainForAll(int mode, int repeat) {
+      for (int p = 0; p < kMaxPatterns; ++p)
+         setChain(p, mode, repeat);
+   }
+
+   // What the global parameters said before chains were per pattern.
+   void setChainFromLegacy() {
+      setChainForAll(static_cast<int>(realValue(kParamChainMode)),
+                     static_cast<int>(realValue(kParamChainRepeat)));
+   }
+
+   // The pattern on screen's chain, as the value of the legacy parameter the
+   // window draws it with.
+   std::atomic<int> &chainSlot(uint32_t id) const {
+      const int p = seqShownPattern();
+      return id == kParamChainMode ? mChainMode[p] : mChainRepeat[p];
    }
 
    int seqPatternOctave() const override {
@@ -1451,9 +1541,14 @@ private:
          const ParamDesc *d = paramById(ev->param_id);
          if (!d)
             break;
-         mValues[ev->param_id].store(clampv(ev->value, d->min, d->max),
-                                     std::memory_order_relaxed);
+         const double value = clampv(ev->value, d->min, d->max);
+         const double before = mValues[ev->param_id].exchange(value, std::memory_order_relaxed);
          mParamsDirty.store(true, std::memory_order_relaxed);
+         // An old automation lane, or a render asking for a chain, sets every
+         // pattern -- but only when it moves, so a host that resends the value
+         // it already has does not flatten the per-pattern settings.
+         if (isLegacyChainParam(ev->param_id) && value != before)
+            setChainFromLegacy();
          if (ev->param_id == kParamMode)
             syncPlayMode();
          break;
@@ -1778,24 +1873,40 @@ private:
 
    // -------------------------------------------------------- GuiDelegate
 
+   // Chain and Chain Repeat are drawn as parameters but belong to the pattern
+   // on screen, so the window's reads and writes of them go there and the host
+   // hears nothing about it. See kParamChainRepeat.
    double guiParamValue(uint32_t id) const override {
+      if (isLegacyChainParam(id))
+         return chainSlot(id).load(std::memory_order_relaxed);
       return id < kNumParams ? mValues[id].load(std::memory_order_relaxed) : 0.0;
    }
 
-   void guiBeginEdit(uint32_t id) override { pushGuiEdit(id, 0.0, EditKind::GestureBegin); }
+   void guiBeginEdit(uint32_t id) override {
+      if (!isLegacyChainParam(id))
+         pushGuiEdit(id, 0.0, EditKind::GestureBegin);
+   }
 
    void guiSetParam(uint32_t id, double value) override {
       const ParamDesc *d = paramById(id);
       if (!d)
          return;
       const double clamped = clampv(value, d->min, d->max);
+      if (isLegacyChainParam(id)) {
+         chainSlot(id).store(static_cast<int>(std::floor(clamped + 0.5)), std::memory_order_relaxed);
+         mPresetEdited = true;
+         return;
+      }
       mValues[id].store(clamped, std::memory_order_relaxed);
       mParamsDirty.store(true, std::memory_order_release);
       mPresetEdited = true;
       pushGuiEdit(id, clamped, EditKind::Value);
    }
 
-   void guiEndEdit(uint32_t id) override { pushGuiEdit(id, 0.0, EditKind::GestureEnd); }
+   void guiEndEdit(uint32_t id) override {
+      if (!isLegacyChainParam(id))
+         pushGuiEdit(id, 0.0, EditKind::GestureEnd);
+   }
 
    void guiOutputPeaks(float &left, float &right) const override {
       left = mPeakL.load(std::memory_order_relaxed);
@@ -1900,6 +2011,11 @@ private:
       pattern.present = true;
       for (int i = 0; i < kMaxPatterns * kMaxSteps; ++i)
          pattern.steps[i] = mPattern[i / kMaxSteps][i % kMaxSteps].load(std::memory_order_relaxed);
+      pattern.chainPresent = true;
+      for (int p = 0; p < kMaxPatterns; ++p) {
+         pattern.chainMode[p] = mChainMode[p].load(std::memory_order_relaxed);
+         pattern.chainRepeat[p] = mChainRepeat[p].load(std::memory_order_relaxed);
+      }
 
       if (!writePresetFile(path, formatPreset(data, &pattern), error))
          return false;
@@ -2355,6 +2471,18 @@ private:
    // chain is counted from. Lags the Pattern parameter until the playing
    // pattern reaches its end; -1 when the sequencer is not running.
    std::atomic<int> mActivePattern{-1};
+   // Each pattern's chain mode and repeat count. Written by the window and by
+   // loads, read by the audio thread at every step. Mutable because the window
+   // reaches them through a const accessor that picks the slot.
+   mutable std::atomic<int> mChainMode[kMaxPatterns];
+   mutable std::atomic<int> mChainRepeat[kMaxPatterns];
+   // Where the running chain is and the cycle it was walked from. Audio thread
+   // only.
+   ChainWalk mChainWalk;
+   long mChainOrigin = 0;
+   // One per pattern, so transposing one and looking at another does not lose
+   // the first one's shape. Main thread only.
+   TransposeMemory mTransposeMemory[kMaxPatterns];
    // Where the pattern last restarted, in steps, when Trigger is Restart. The
    // step and the chain cycle are counted from here. Audio thread only.
    long mStepOffset = 0;

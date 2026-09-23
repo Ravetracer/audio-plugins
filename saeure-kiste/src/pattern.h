@@ -104,6 +104,20 @@ struct PatternData {
    uint16_t steps[kMaxPatterns * kMaxSteps] = {0};  // 16 kB, and it travels by
                                                     // reference everywhere
 
+   // What each pattern does when it has played through -- a ChainKind -- and
+   // how many times it plays first. Per pattern, so a chain can be a route
+   // through the bank. `chainPresent` says the text carried them at all: a
+   // preset older than this has one global Chain and Chain Repeat parameter
+   // instead, which the plugin copies into every pattern.
+   bool chainPresent = false;
+   int chainMode[kMaxPatterns] = {0};
+   int chainRepeat[kMaxPatterns];
+
+   PatternData() {
+      for (int &r : chainRepeat)
+         r = 1;
+   }
+
    uint16_t *pattern(int index) { return steps + index * kMaxSteps; }
    const uint16_t *pattern(int index) const { return steps + index * kMaxSteps; }
 };
@@ -211,7 +225,33 @@ void defaultPattern(uint16_t *steps);
 // preset written before the bank existed still loads and one written now still
 // opens in an older build. Patterns 2 upwards use seq2_pitch, seq3_pitch and so
 // on, and an empty pattern is left out rather than written as sixteen dots.
-std::string formatPattern(const uint16_t *steps);
+//
+// Each pattern's chain is written as seq_chain and seq_repeat beside its steps.
+// Pattern 1 always writes both, which is what tells a reader the preset has
+// per-pattern chains at all; the others only when they are not Stay and 1.
+std::string formatPattern(const PatternData &bank);
+
+// ------------------------------------------------------------------ transpose
+//
+// What lets a pattern be transposed into a wall and back out of it with its
+// shape intact. A step's pitch runs from C two octaves down to B two octaves
+// up; a transpose that would take a step past either end leaves it at the end,
+// and the memory holds the pitch it *would* have had, so transposing back puts
+// every step where it was rather than where the wall left it.
+//
+// The memory is only good while the pitches are the ones it wrote. Anything
+// else that moves a note -- an edit, GEN, a paste -- makes the next transpose
+// start again from what is there. Flags do not count; toggling an accent keeps
+// the memory.
+struct TransposeMemory {
+   bool valid = false;
+   int offset = 0;
+   int8_t base[kMaxSteps];    // each step's pitch when the memory began
+   int8_t written[kMaxSteps]; // each step's pitch as last transposed
+};
+
+// Moves every note in `steps` (kMaxSteps of them) by `semitones`.
+void transposePattern(uint16_t *steps, int semitones, TransposeMemory &memory);
 
 // How the window reaches the pattern.
 //
@@ -292,6 +332,10 @@ public:
    // Prev and next by mouse. The same call the mapped notes go through, so the
    // buttons and the pads cannot drift apart.
    virtual void seqStepPattern(int delta) = 0;
+
+   // Transposes a pattern by semitones, keeping its shape across the edges of
+   // the grid. See transposePattern().
+   virtual void seqTranspose(int pattern, int semitones) = 0;
 
    // The whole pattern's transpose, in octaves.
    virtual int seqPatternOctave() const = 0;

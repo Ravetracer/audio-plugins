@@ -107,10 +107,6 @@ preset, which exists for exactly this.
 - **No clear-all for the bank.** COPY and PASTE landed in 0.3.0 and DEL, which
   empties the selected slot, in 0.5.0; emptying the whole bank in one go still
   means DEL on each pattern, or loading Blank Slate.
-- **The chain has no per-pattern repeat count.** A pattern plays once before the
-  chain moves on. Playing one twice and the next one once is the arrangement
-  people reach for first, and it would want a number per slot rather than one
-  Chain Length for the lot.
 - **Pattern length is global.** Steps runs 1 to 128 as of 0.5.0, but it applies
   to every pattern in the bank, so a chain still cannot mix a sixteen-step
   pattern with a twelve-step one. Making it per pattern is the next step and
@@ -398,10 +394,12 @@ the 1/8 rate. It read 230 ms at both before the fix and 300 / 187 ms after it.
   unless it is converted. Preset files are written in real units and were never
   at risk.
 - **The chain is derived, not counted.** Which pattern plays is
-  `chainPatternAt(mode, selected, length, cycle)` where `cycle` comes from the
-  host's beat position, for exactly the reason the steps are re-read every block.
-  A counter bumped at the end of each pattern would be simpler and would come
-  apart the first time somebody looped a bar.
+  `chainPatternAt(walk, modes, repeats, start, length, cycle)`, a walk of the
+  per-pattern chains where `cycle` comes from the host's beat position, for
+  exactly the reason the steps are re-read every block. The walk is cached so
+  playback only moves forward, and restarts from the top on a backward seek. A
+  counter bumped at the end of each pattern would come apart the first time
+  somebody looped a bar.
 - **`install.sh` is self-contained** rather than calling
   `shared/tools/install-plugin.sh`, because that script derives a shell variable
   name from the folder and `saeure-kiste` is not an identifier. Renaming the

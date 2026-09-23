@@ -1,11 +1,56 @@
 # SäureKiste -- status
 
-Version 0.14.0. Linux and Windows, CLAP and VST3. 65 parameters, 30 presets,
-builds clean, self-test passes with no failures across 291 checks, and
+Version 0.15.0. Linux and Windows, CLAP and VST3. 65 parameters, 30 presets,
+builds clean, self-test passes with no failures across 304 checks, and
 `tools/check-instances.sh` passes with two editors open at once.
 
 Six of seven fixes were confirmed by backing the bug out and watching the suite
 fail; the seventh has no contract to assert. See `TODO.md` §3.
+
+0.15.0 makes CHAIN and REPEAT per pattern, adds a semitone transpose, and wraps
+the help line.
+
+**Per-pattern chains.** Each pattern carries its own chain mode and repeat
+count, in the bank rather than the parameter table: `mChainMode[]` and
+`mChainRepeat[]` in the plugin, `seqN_chain` / `seqN_repeat` lines in the
+preset (pattern 1 always writes both, which is how a reader knows the preset
+has them), and state version 4 appends them after the pattern map. The bank's
+CHAIN and REPEAT rows edit the pattern on screen: the window still draws them
+as the old `chain_mode` / `chain_repeat` parameters, and the plugin's
+GuiDelegate redirects those two ids to the shown pattern's slot without telling
+the host. The two parameters are kept for their ids and flagged
+`CLAP_PARAM_IS_HIDDEN`; an old preset or blob without per-pattern data copies
+them into every pattern, and so does a host event that *changes* one, so old
+automation and `render --param chain=...` still work. LENGTH stays global. The
+rows are now CHAIN, REPEAT, LENGTH, TRIGGER.
+
+`chainPatternAt()` walks the chain from the start pattern, carrying a
+`ChainWalk` from call to call: forward playback advances one cycle at a time,
+so editing a pattern's chain changes what comes next rather than the history,
+and a seek backwards walks again from the top, so it is still a function of the
+beat position. The walk starts from the song's top when the sequencer starts
+and from the takeover cycle when a pattern is picked while it runs -- which
+means a picked pattern now plays next under Next, where 0.14.0 offset the chain
+by it instead. Next from a pattern outside the chain now goes to pattern 1.
+
+**Transpose.** TRANSP - / + in the grid's title row moves every note of the
+shown pattern a semitone, octave switches included. `transposePattern()` in
+`pattern.cpp` clamps at C-2 and B+2 and keeps a per-pattern `TransposeMemory`
+of each step's unclamped pitch, so N presses up and N down restore a pattern
+that was flattened against an edge. The memory resets when any pitch changes
+by other means; flags do not reset it. Main thread only, not persisted.
+
+**Layout.** The grid's title row is in sections with a divider between each:
+OCT, TRANSP, the two shifts, MIDI, MAP, and the seed with GEN, right-aligned by
+`place()` in the layout. CLEAR is gone (DEL in the bank does the same). PREV and
+NEXT moved into the bank, in a row of their own under the cells. A semitone row
+is 15 px rather than 13, so the pane is 315 px and the window 24 px taller
+(739, 1011 open); `make-screenshots.sh` has the new coordinates.
+
+**Help line.** Long tips wrap at the window's width. The last line stays where
+a one-line message always was and extra lines grow upward on the background, so
+the window height did not change. The shared window has the same one-line help
+and has not been changed.
 
 0.14.0 adds TRIGGER, under CHAIN and LENGTH in the bank, for when a pattern
 selected while the sequencer runs takes over. At End is 0.13.0's behaviour and
@@ -619,13 +664,13 @@ conventions the plugin's own MIDI mode reads, so a recording played back into it
 sounds like what it came from. The X11 half of the drag is verified against a
 test drop target; the Windows half compiles and has never had a real drop.
 
-**A bank of sixty-four patterns**, with a chain: Stay repeats the selected one,
-Next runs the chain and wraps at its length, First comes home after one time
-round, Random picks inside it. Which pattern plays is a function of the host's
-beat position, not a counter the sequencer advances, so looping and scrubbing
-land on the right pattern for the same reason the steps do. The whole bank is in
-the preset file and in the state blob; the selected pattern, the chain mode and
-the chain length are parameters and so are automatable.
+**A bank of sixty-four patterns**, each with its own chain and repeat count:
+Stay repeats it, Next goes on and wraps at the chain's length, First goes back
+to pattern 1, Random picks inside the chain. Which pattern plays is a function
+of the host's beat position, not a counter the sequencer advances, so looping
+and scrubbing land on the right pattern for the same reason the steps do. The
+whole bank, chains included, is in the preset file and in the state blob; the
+selected pattern and the chain length are parameters and so are automatable.
 
 **The Devil Fish.** Robin Whittle's modification of the same machine, from his
 own manual: Overdrive into the filter, audio-rate Filter FM, the Muffler, Soft
