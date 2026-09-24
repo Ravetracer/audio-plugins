@@ -42,7 +42,8 @@ audio-plugins/
 ├── CLAP/              CLAP SDK checkouts       — GITIGNORED, see below
 ├── winbuild/          meson venv + Windows Cairo — GITIGNORED
 ├── dist/              release archives         — GITIGNORED
-└── saeure-kiste/     SaeureKiste — a TB-303 model
+├── saeure-kiste/     SaeureKiste — a TB-303 model
+└── rumpel-kiste/     RumpelKiste — a TR-909 model
 ```
 
 ## The plugins
@@ -50,6 +51,7 @@ audio-plugins/
 | # | Plugin | Folder | Status | Platforms | Formats | What it is |
 |---|--------|--------|--------|-----------|---------|------------|
 | 1 | **SäureKiste** | `saeure-kiste/` | 0.15.0 | Linux, Windows | CLAP, VST3 | a Roland TB-303 model, from the 1982 service notes, plus Robin Whittle's Devil Fish modification |
+| 2 | **RumpelKiste** | `rumpel-kiste/` | 0.1.0 | Linux, Windows | CLAP, VST3 | a Roland TR-909 model, from the 1984 service notes, with SäureKiste's sequencer and drive stage |
 
 Naming follows the plugin, not a pattern: the CMake project, the installed
 artifact and the display name are CamelCase (`SaeureKiste`), the folder is
@@ -452,6 +454,7 @@ window reads as one instrument rather than a grey chassis with a coloured knob.
 | Plugin | Accent | Character |
 |--------|--------|-----------|
 | SäureKiste | `#9BE31D` | acid green at hue 82, over a cool, almost neutral near-black graphite chassis rather than a tinted one -- the machine it models was a silver box with dark legends, and a warm chassis would be pretending otherwise |
+| RumpelKiste | `#FF6E1A` | signal orange at hue 22, the colour of the machine's step keys, over a graphite leaned a few degrees warm so it cannot be mistaken for SäureKiste's across a room |
 
 A new plugin picks its own accent and derives its greys from it. Do not reuse
 another plugin's theme.
@@ -465,7 +468,9 @@ and `guiEventCounter()` is an optional monotonic count of discrete events,
 defaulting to zero. The meter's wording comes from the spec's `voiceNoun` and
 `eventNoun`.
 
-**SäureKiste is the exception, and it is a fork.** `src/gui/seqwindow.*` is
+**SäureKiste is the exception, and it is a fork** -- and RumpelKiste forks
+SäureKiste's fork, replacing the piano roll with a drum grid and keeping the
+bank, the pattern map and the chain controls. `src/gui/seqwindow.*` is
 `shared/src/gui/window.cpp` copied, with the namespace changed and the step grid,
 the pattern bank and the collapsible panel section added — it is not a second
 window beside the shared one, it replaces it for that plugin. A step grid cannot

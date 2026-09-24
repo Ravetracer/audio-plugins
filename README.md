@@ -14,6 +14,7 @@ Vibe coded with Claude.
 | Plugin | Version | Platforms | Formats | What it is |
 |--------|---------|-----------|---------|------------|
 | **[SäureKiste](saeure-kiste/)** | 0.15.0 | Linux, Windows | CLAP, VST3 | a monophonic acid bass synthesiser modelled on the Roland TB-303's main board, from the February 1982 service notes, with Robin Whittle's Devil Fish modification |
+| **[RumpelKiste](rumpel-kiste/)** | 0.1.0 | Linux, Windows | CLAP, VST3 | a rhythm composer modelled on the Roland TR-909's voicing board, from the June 1984 service notes, with a 64-pattern step sequencer and a drive bus |
 
 ## Build
 
@@ -43,6 +44,7 @@ sudo apt install build-essential cmake ninja-build libx11-dev libcairo2-dev
 audio-plugins/
 ├── shared/            the PluginCore library every plugin is built on
 ├── saeure-kiste/     SaeureKiste
+├── rumpel-kiste/     RumpelKiste
 ├── release.sh         builds every plugin and packs the archives
 ├── setup-winbuild.sh  one-time Windows cross-build setup
 └── CLAP/              CLAP SDK checkouts — gitignored, fetched locally
@@ -72,4 +74,5 @@ independent copies now and will drift apart.
 MIT — see [LICENSE](LICENSE).
 
 SäureKiste is not affiliated with or endorsed by Roland Corporation. *TB-303*
-is their trademark and is used only to name what was modelled.
+is their trademark and is used only to name what was modelled. The same goes for
+RumpelKiste and *TR-909*.

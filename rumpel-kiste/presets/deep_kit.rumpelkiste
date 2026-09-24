@@ -1,0 +1,95 @@
+# RumpelKiste preset
+format = 1
+name = Deep Kit
+author = RumpelKiste
+description = A kit and nothing else: it changes the sound and leaves the patterns playing, so it can be tried under whatever groove is loaded. A low, long kick, a darker snare, deep toms and soft hats.
+
+# Bass Drum
+bd_tune = 0.75
+bd_level = 0.8
+bd_attack = 0.3
+bd_decay = 320
+
+# Snare Drum
+sd_tune = 0.2
+sd_level = 0.8
+sd_tone = 0.7
+sd_snappy = 0.35
+
+# Low Tom
+lt_tune = 0.1
+lt_level = 0.8
+lt_decay = 150
+
+# Mid Tom
+mt_tune = 0.25
+mt_level = 0.8
+mt_decay = 150
+
+# Hi Tom
+ht_tune = 0.4
+ht_level = 0.8
+ht_decay = 150
+
+# Rim / Clap
+rs_level = 0.7
+cp_level = 0.7
+
+# Hi-Hat
+hh_level = 0.7
+ch_decay = 33.2
+oh_decay = 400
+
+# Crash
+cr_level = 0.6
+cr_tune = 0.5
+
+# Ride
+rd_level = 0.6
+rd_tune = 0.5
+
+# Master
+accent = 0.7
+volume = -3.2
+accent_threshold = 100
+
+
+
+# Mods
+bd_pitch = 42
+bd_sweep = 3
+bd_shape = 0.5
+sd_pitch = 190
+tom_pitch = 90
+tom_sweep = 0.5
+tom_noise = 0.5
+rs_decay = 5
+cp_spread = 9
+hat_color = 0.3
+cym_color = 0.5
+dac_bits = 6
+local_accent = 0.6
+shuffle_unit = 8.33
+flam_unit = 4
+flam_grace = 0.6
+
+# Drive
+drive_mode = Off
+dist_type = Soft Clip
+drive = 0.35
+dist_bias = 0
+drive_tone = 8000
+dist_mix = 1
+
+# Drive Route
+route_bd = Dry
+route_sd = Dry
+route_lt = Dry
+route_mt = Dry
+route_ht = Dry
+route_rs = Dry
+route_cp = Dry
+route_ch = Dry
+route_oh = Dry
+route_cr = Dry
+route_rd = Dry

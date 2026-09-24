@@ -1,0 +1,121 @@
+# RumpelKiste preset
+format = 1
+name = Planet Funk
+author = RumpelKiste
+description = Electro at about 110 BPM: a broken kick with a long, low boom and its sweep held up, a bright snare on two and four with the clap under it, eighth-note hats and the toms running down at the end of the bar.
+
+# Bass Drum
+bd_tune = 0.85
+bd_level = 0.8
+bd_attack = 0.5
+bd_decay = 300
+
+# Snare Drum
+sd_tune = 0.6
+sd_level = 0.8
+sd_tone = 0.6
+sd_snappy = 0.7
+
+# Low Tom
+lt_tune = 0.35
+lt_level = 0.8
+lt_decay = 150
+
+# Mid Tom
+mt_tune = 0.45
+mt_level = 0.8
+mt_decay = 150
+
+# Hi Tom
+ht_tune = 0.6
+ht_level = 0.8
+ht_decay = 150
+
+# Rim / Clap
+rs_level = 0.7
+cp_level = 0.7
+
+# Hi-Hat
+hh_level = 0.7
+ch_decay = 18
+oh_decay = 332
+
+# Crash
+cr_level = 0.6
+cr_tune = 0.5
+
+# Ride
+rd_level = 0.6
+rd_tune = 0.5
+
+# Master
+accent = 0.7
+volume = -7.7
+accent_threshold = 100
+
+# Sequencer
+mode = Sequencer
+scale = 1/16
+steps = 16
+shuffle = 1
+flam = 3
+pattern = 1
+chain_mode = Stay
+chain_length = 4
+pattern_trigger = At End
+chain_repeat = 1
+
+# Generator
+gen_seed = 1
+gen_style = House
+gen_busy = 0.5
+gen_accent = 0.35
+
+# Mods
+bd_pitch = 45
+bd_sweep = 3
+bd_shape = 0.5
+sd_pitch = 190
+tom_pitch = 90
+tom_sweep = 0.5
+tom_noise = 0.5
+rs_decay = 5
+cp_spread = 9
+hat_color = 0.5
+cym_color = 0.5
+dac_bits = 6
+local_accent = 0.6
+shuffle_unit = 8.33
+flam_unit = 4
+flam_grace = 0.6
+
+# Drive
+drive_mode = Off
+dist_type = Soft Clip
+drive = 0.35
+dist_bias = 0
+drive_tone = 8000
+dist_mix = 1
+
+# Drive Route
+route_bd = Dry
+route_sd = Dry
+route_lt = Dry
+route_mt = Dry
+route_ht = Dry
+route_rs = Dry
+route_cp = Dry
+route_ch = Dry
+route_oh = Dry
+route_cr = Dry
+route_rd = Dry
+
+# Pattern bank
+p1_bd = x... ...x ..x. ....
+p1_sd = .... x... .... x...
+p1_cp = .... x... .... x...
+p1_ch = x.x. x.x. x.x. x.x.
+p1_ht = .... .... .... x...
+p1_mt = .... .... .... .x..
+p1_lt = .... .... .... ..xx
+p1_ac = x... x... ..x. x...

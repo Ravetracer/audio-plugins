@@ -1,0 +1,95 @@
+# RumpelKiste preset
+format = 1
+name = Dirty Kit
+author = RumpelKiste
+description = A kit and nothing else: kick, snare and clap through the Valve Stack on the drive bus, the hats and cymbals left clean on top. Load it under any pattern.
+
+# Bass Drum
+bd_tune = 0.5
+bd_level = 0.8
+bd_attack = 0.5
+bd_decay = 150
+
+# Snare Drum
+sd_tune = 0.5
+sd_level = 0.8
+sd_tone = 0.5
+sd_snappy = 0.5
+
+# Low Tom
+lt_tune = 0.5
+lt_level = 0.8
+lt_decay = 150
+
+# Mid Tom
+mt_tune = 0.5
+mt_level = 0.8
+mt_decay = 150
+
+# Hi Tom
+ht_tune = 0.5
+ht_level = 0.8
+ht_decay = 150
+
+# Rim / Clap
+rs_level = 0.7
+cp_level = 0.7
+
+# Hi-Hat
+hh_level = 0.7
+ch_decay = 33.2
+oh_decay = 332
+
+# Crash
+cr_level = 0.6
+cr_tune = 0.5
+
+# Ride
+rd_level = 0.6
+rd_tune = 0.5
+
+# Master
+accent = 0.7
+volume = -0.7
+accent_threshold = 100
+
+
+
+# Mods
+bd_pitch = 50
+bd_sweep = 3
+bd_shape = 0.5
+sd_pitch = 190
+tom_pitch = 90
+tom_sweep = 0.5
+tom_noise = 0.5
+rs_decay = 5
+cp_spread = 9
+hat_color = 0.5
+cym_color = 0.5
+dac_bits = 6
+local_accent = 0.6
+shuffle_unit = 8.33
+flam_unit = 4
+flam_grace = 0.6
+
+# Drive
+drive_mode = Selected
+dist_type = Valve Stack
+drive = 0.55
+dist_bias = 0
+drive_tone = 9000
+dist_mix = 0.85
+
+# Drive Route
+route_bd = Drive
+route_sd = Drive
+route_lt = Dry
+route_mt = Dry
+route_ht = Dry
+route_rs = Dry
+route_cp = Drive
+route_ch = Dry
+route_oh = Dry
+route_cr = Dry
+route_rd = Dry

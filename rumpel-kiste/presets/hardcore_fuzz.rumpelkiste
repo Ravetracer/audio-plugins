@@ -1,0 +1,122 @@
+# RumpelKiste preset
+format = 1
+name = Hardcore Fuzz
+author = RumpelKiste
+description = The kick alone through the drive bus -- Drive Mode on Selected, only BD routed, the Fuzz model pushed hard with the top taken off -- at 170 BPM and up. Everything else stays clean, which is what keeps the hats readable over a distorted floor.
+
+# Bass Drum
+bd_tune = 0.9
+bd_level = 0.8
+bd_attack = 1.0
+bd_decay = 160
+
+# Snare Drum
+sd_tune = 0.5
+sd_level = 0.8
+sd_tone = 0.5
+sd_snappy = 0.5
+
+# Low Tom
+lt_tune = 0.5
+lt_level = 0.8
+lt_decay = 150
+
+# Mid Tom
+mt_tune = 0.5
+mt_level = 0.8
+mt_decay = 150
+
+# Hi Tom
+ht_tune = 0.5
+ht_level = 0.8
+ht_decay = 150
+
+# Rim / Clap
+rs_level = 0.7
+cp_level = 0.6
+
+# Hi-Hat
+hh_level = 0.7
+ch_decay = 33.2
+oh_decay = 150
+
+# Crash
+cr_level = 0.6
+cr_tune = 0.5
+
+# Ride
+rd_level = 0.6
+rd_tune = 0.5
+
+# Master
+accent = 0.7
+volume = -9.5
+accent_threshold = 100
+
+# Sequencer
+mode = Sequencer
+scale = 1/16
+steps = 16
+shuffle = 1
+flam = 3
+pattern = 1
+chain_mode = Stay
+chain_length = 4
+pattern_trigger = At End
+chain_repeat = 1
+
+# Generator
+gen_seed = 1
+gen_style = House
+gen_busy = 0.5
+gen_accent = 0.35
+
+# Mods
+bd_pitch = 55
+bd_sweep = 3
+bd_shape = 0.5
+sd_pitch = 190
+tom_pitch = 90
+tom_sweep = 0.5
+tom_noise = 0.5
+rs_decay = 5
+cp_spread = 9
+hat_color = 0.5
+cym_color = 0.5
+dac_bits = 6
+local_accent = 0.6
+shuffle_unit = 8.33
+flam_unit = 4
+flam_grace = 0.6
+
+# Drive
+drive_mode = Selected
+dist_type = Fuzz
+drive = 0.85
+dist_bias = 0
+drive_tone = 5000
+dist_mix = 1
+
+# Drive Route
+route_bd = Drive
+route_sd = Dry
+route_lt = Dry
+route_mt = Dry
+route_ht = Dry
+route_rs = Dry
+route_cp = Dry
+route_ch = Dry
+route_oh = Dry
+route_cr = Dry
+route_rd = Dry
+
+# Pattern bank
+p1_bd = x... x... x... x...
+p1_oh = ..x. ..x. ..x. ..x.
+p1_cp = .... x... .... x...
+p1_ch = ...x ...x ...x ...x
+p1_ac = x... x... x... x...
+p2_bd = x... x... x... xxxx
+p2_oh = ..x. ..x. ..x. ....
+p2_cp = .... x... .... x.x.
+p2_ac = x... x... x... x.x.
