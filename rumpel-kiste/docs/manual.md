@@ -93,48 +93,61 @@ in brackets are what the circuit gives.
 ### Bass drum
 
 A triangle oscillator rounded towards a sine by a pair of diodes, swept down
-from a high start by two envelopes, with a click on the front.
+from well over five times its final pitch, with a click on the front. The kick
+holds its full level for the first 45 milliseconds or so before it starts to
+fall, whatever Decay says; that hold is much of its weight.
 
 - **Tune** does not tune the kick. It sets how long the pitch *stays up* after
-  the hit (a 7 ms to 40 ms time constant), which is heard as a higher, longer
+  the hit (an 8 ms to 29 ms time constant), which is heard as a higher, longer
   "boom" or a short, dry "thud". The note the kick settles on is fixed by the
   circuit; it is **BD Pitch** under ADVANCED.
 - **Attack** mixes a pulse and a burst of low-passed noise into the first
-  millisecond or two. Fully down leaves the plain oscillator.
-- **Decay** is the amplitude envelope (15 ms to 345 ms time constant). Fully
-  down all but mutes the kick, which is what the machine's own manual suggests
-  doing with it.
+  millisecond or two. Even fully down there is a little click, as on the
+  machine; the knob does most of its work in the top half of its travel.
+- **Decay** shows the time constant of the circuit's envelope (15 ms to
+  345 ms). What you hear after the hold is a fall of 16 ms to 64 ms. Fully
+  down leaves a short thump, which is what the machine's own manual suggests
+  for muting it.
 
 ### Snare drum
 
-Two oscillators a ratio of 1.47 apart, bent up at the hit, and two noise paths.
+Two oscillators a fifth apart, bent up at the hit, and two noise paths.
 
-- **Tune** moves both oscillators together, across exactly one octave.
-- **Tone** is how long the noise tail lasts (47 ms to 282 ms). A longer tail is
-  a brighter, splashier snare.
+- **Tune** moves both oscillators together, across one octave.
+- **Tone** is how long the noise tail lasts (a 24 ms to 77 ms time constant). A
+  longer tail is a brighter, splashier snare.
 - **Snappy** is how much noise there is at all: a short burst of high-passed
   noise as long as the trigger, and the low-passed tail Tone sets. Fully down is
   the drum with the snares off.
 
 ### Toms
 
-Three oscillators per tom, at 1, 1.5 and 2.75 times the lowest, bent down at
-the hit, with a tick of noise at the front.
+Three oscillators per tom. The one you hear as the pitch has a second a fifth
+below it, which comes in a moment after the hit and gives the drum its body,
+and a third higher up that is gone within a few tens of milliseconds. All three
+bend down at the hit, with a wash of noise and a tick at the front.
 
-- **Tune** spans exactly one octave. At the same setting the mid tom sits 1.22
-  times above the low one and the hi tom 1.5 times — so the three overlap, and
-  can be tuned to a phrase. The **Melody Toms** preset does that.
-- **Decay** is the main oscillator's envelope (38 ms to 378 ms).
+- **Tune** spans one octave. At the same setting the mid tom sits 1.22 times
+  above the low one and the hi tom 1.5 times — so the three overlap, and can be
+  tuned to a phrase. The **Melody Toms** preset does that. The bend at the hit
+  is the same number of hertz wherever Tune is, so a tom tuned low bends
+  further, as an interval, than one tuned high.
+- **Decay** shows the time constant of the circuit's envelope (38 ms to
+  378 ms). What you hear is shorter and moves less, as on the machine: the tom
+  holds for a moment and then dies away over roughly 45 to 115 ms on the low
+  tom, a little faster on the other two.
 
 ### Rim shot and hand clap
 
 Neither has a control beyond its level.
 
-- The **rim shot** is three resonators rung by one pulse — at 219 Hz, 495 Hz
-  and 1053 Hz — clipped hard by a pair of diodes and high-passed at 495 Hz.
-  The clipping is the sound.
+- The **rim shot** is three resonators rung by one pulse — near 220 Hz,
+  490 Hz and 1 kHz — clipped hard by a pair of diodes for the first eight
+  milliseconds or so, lopsidedly, and then left to ring on at the lowest of
+  them. The clipping is the crack; the ring after it is the wood.
 - The **hand clap** is noise through a 960 Hz band-pass, cut into four bursts
-  about nine milliseconds apart, with a darker tail rising under them.
+  ten or eleven milliseconds apart — not quite evenly, as on the machine — with
+  a darker tail that comes in with the last one.
 
 ### Hi-hat
 
@@ -143,16 +156,19 @@ sample memory read from two places through one amplifier. **A closed hat cuts
 off an open one**, and one Level serves both.
 
 - **CH Decay** and **OH Decay** set how fast the level falls. The amplifier is
-  a logarithmic one, so the hat falls evenly in decibels and then slows — a
-  different shape from the analog voices. The closed hat's range is a tenth of
-  the open hat's.
+  a logarithmic one, so the hat falls evenly in decibels. The knobs show the
+  circuit's charging times; what you hear is a closed hat of 9 ms to 45 ms and
+  an open hat of up to 120 ms, as on the machine.
 
 ### Crash and ride
 
-- **Tune** is the speed the sample memory is read at, a fifth either way. Like
-  retuning a sample, a higher setting is higher *and shorter*.
+- **Tune** is the speed the sample memory is read at, about four semitones
+  either way. Like retuning a sample, a higher setting is higher *and shorter*,
+  all of it at once.
 
-The ride has a ping over a longer wash; the crash is one long shimmer.
+The ride has a ping and a cluster of bell tones over a longer wash; the crash
+is one long shimmer. Both fade faster towards their end, the way the machine's
+do.
 
 ## 4. The drive bus
 
@@ -201,8 +217,9 @@ circuit puts the decay back afterwards with an amplifier driven from the read
 position or from a decay capacitor.
 
 The recordings themselves are not reproduced here. What plays instead is a
-synthesised metal sound, generated one sample at a time at the memory's own
-clock and put through everything the real data goes through: the six-bit
+synthesised metal sound, shaped to the spectrum of the real one, generated one
+sample at a time at the memory's own clock and put through everything the real
+data goes through: the six-bit
 converter, the hold between clock edges, and the envelope that restores the
 decay. That last part matters more than it sounds. Because the decay comes
 *after* the converter, the six-bit grit fades with the cymbal instead of
@@ -344,16 +361,27 @@ the mods, but leaves the patterns, the play mode and the clock alone.
 
 ## 9. Where the numbers came from
 
-Every number in this instrument is one of three things: worked out from the
-circuit diagram's component values, printed in the service notes, or fitted
-because neither gives it.
+Every number in this instrument is one of four things: worked out from the
+circuit diagram's component values, printed in the service notes, measured
+from recordings of a working machine, or fitted because none of those gives
+it.
 
-The worked-out ones are fixed. The snare's two oscillators are 1.47 apart
-because that is the ratio of their capacitors; the rim shot rings at 495 Hz
-because that is what its resistors and capacitors make; the toms tune over an
-octave because their tuning pots sit in a two-to-one divider; the clap has four
+The worked-out ones are fixed. The toms' oscillators sit where the ratios of
+their capacitors put them; the rim shot's resonators sit near where their
+resistors and capacitors put them; the toms and the snare tune over an octave
+because their tuning pots sit in a two-to-one divider; the clap has four
 bursts because the printed waveform shows four.
 
+The measured ones are everywhere a circuit diagram leaves something unsaid.
+How far and how fast each drum's pitch bends, how its envelopes hold and fall
+across the whole travel of every knob, how the toms' three oscillators are
+balanced, how the rim shot's clipping leans to one side, where the clap's
+bursts land, how fast the cymbals' memories are read, what the hats and
+cymbals sound like, how hard accent hits each voice and how loud the eleven
+are against each other were all measured from recordings of a real machine,
+voice by voice, and the voices were fitted to them until they matched. Where a recording and a
+component value disagreed a little — a resonator a few per cent off its nominal
+frequency, as real parts are — the recording won.
 **The fitted ones are all controls.** They are the mods under ADVANCED, and the
 number that was fitted is each one's default: the frequency the kick settles
 on, how far it sweeps, the snare's and the toms' pitch, how long the rim shot's
@@ -362,7 +390,8 @@ the strength of the local accent, the shuffle and flam units. The guesses are a
 starting point you can disagree with, not decisions buried in the engine.
 
 The honest summary: this is built from a circuit diagram and its printed
-waveforms. It has not been compared against a real machine by ear.
+waveforms, and every voice has been measured against recordings of a real
+machine and fitted to them. It has not yet been compared with one by ear.
 
 ## Appendix. Every parameter
 

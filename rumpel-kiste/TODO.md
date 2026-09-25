@@ -2,21 +2,27 @@
 
 ## 1. Listen to it
 
-Against a real machine or good recordings of one, voice by voice. The mods'
-defaults (BD Pitch, BD Sweep, SD Pitch, Tom Pitch, Tom Sweep, Rim Gate, Clap
-Spread, Local Accent) are where a reference would move numbers, and the
-voices' relative gains in `drums.cpp` are balanced by rendering, not by ear.
+Every voice has now been measured against recordings and fitted to them
+(`tools/analysis/README.md`, "Measured"). It has not been compared with a
+machine by ear. The things a pair of ears should judge first:
 
-## 2. Hidden guesses that should become mods
+- the hat and cymbal stand-ins: fitted by band levels, which is not timbre
+- the kick's weight against the rest, and the drive presets, which now get a
+  kick 8 dB quieter than they were written for
+- the late part of the open hat, which the recording darkens more than the
+  stand-in does
 
-The rule is that a number the schematic does not give is a control. Four are
-still constants:
+## 2. Measured constants that could become mods
 
-- C135's value, which sets both hat decay ranges (fitted to the p.9 traces).
-- The cymbal ROM envelopes' depth: 44 dB over the crash ROM, the ride's
-  14 dB ping plus 30 dB.
-- The clap tail's 12 ms rise.
-- The rim shot's clamp drive (`tanh(6x)`): how hard the resonators hit D91/D92.
+The rule is that a number the schematic does not give is a control. The
+recordings have since given many of them, and they are constants in
+`drums.cpp`, marked as measured -- measurements of one machine, not guesses.
+Worth deciding which deserve a knob:
+
+- the kick's 45 ms hold
+- the hats' and cymbals' ROM clocks, and the open hat's run length
+- the audible decay curves behind every Decay/Tone knob (their tables)
+- the rim shot's resonator tolerances and its clamp asymmetry
 
 ## 3. Features
 

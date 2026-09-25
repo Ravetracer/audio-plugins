@@ -103,13 +103,14 @@ struct DrumCoefs {
 
    // Bass drum.
    float bdPitchC9 = 0.0f; // e^-1/tau per sample, C9 through R57 + VR2
-   float bdPitchC1 = 0.0f; // C1 through R12, 6.8 ms
    float bdAmpAttack = 0.0f;
    float bdAmpDecay = 0.0f;
+   int bdHold = 0;
    float bdClickDecay = 0.0f;
    float bdPulseDecay = 0.0f;
    float bdShapeK = 2.0f;
    float bdShapeNorm = 1.0f;
+   float bdShapeOff = 0.0f;
 
    // Snare.
    float sdBend = 0.0f;   // IC36's supply, C66 through R248: 4.7 ms
@@ -119,12 +120,17 @@ struct DrumCoefs {
    float sdSnap = 0.0f;   // ENV5 after the trigger ends
 
    // Toms.
-   float tomFast = 0.0f;  // C17 through R61: 22 ms
-   float tomSlow = 0.0f;  // C16 through R60: 220 ms
-   float tomEnv2[3] = {0, 0, 0};
-   float tomEnv1[3] = {0, 0, 0};
-   float tomEnv3 = 0.0f;  // C25 through R110: 26 ms
-   float tomTick = 0.0f;  // C54 through R198: 0.47 ms
+   float tomFast = 0.0f;         // the fast part of the sweep, 30 ms
+   float tomSlow = 0.0f;         // C16 through R60: 220 ms
+   float tomEnv[3] = {0, 0, 0};  // the main VCA's envelope, from Decay
+   float tomKnee[3] = {1, 1, 1}; // where that VCA runs out of headroom
+   float tomKneeNorm[3] = {1, 1, 1};
+   float tomLowEnv[3] = {0, 0, 0};
+   float tomLowLag[3] = {0, 0, 0};
+   float tomTop[3] = {0, 0, 0};
+   float tomSquare = 0.0f;
+   float tomNoise = 0.0f;
+   float tomTick = 0.0f;         // C54 through R198: 0.47 ms
 
    // Rim shot.
    float rsExcite = 0.0f;
@@ -132,10 +138,11 @@ struct DrumCoefs {
 
    // Hand clap.
    float cpBurst = 0.0f;
-   float cpLast = 0.0f;
+   float cpBurstFast = 0.0f;
    float cpTailDecay = 0.0f;
    float cpTailRise = 0.0f;
    int cpSpread = 432;
+   long cpOnset[4] = {0, 0, 0, 0};
 
    // Master.
    float muteRamp = 0.0f;
@@ -217,10 +224,10 @@ private:
    // recording does.
    double mPhase[6] = {0, 0, 0, 0, 0, 0};
    double mFreq[6] = {0, 0, 0, 0, 0, 0};
-   double mBell[4] = {0, 0, 0, 0};
-   double mBellFreq[4] = {0, 0, 0, 0};
+   double mBell[8] = {0, 0, 0, 0, 0, 0, 0, 0};
+   double mBellFreq[8] = {0, 0, 0, 0, 0, 0, 0, 0};
    RngLite mRng;
-   Svf mRomHp1, mRomHp2, mRomPeak;
+   Svf mRomHp1, mRomHp2, mRomPeak, mRomPeak2, mRomLp;
 
    // After the converter.
    Svf mRecon;
@@ -264,10 +271,10 @@ private:
    struct Bd {
       bool active = false;
       double phase = 0.0;
-      float e1 = 0.0f, e2 = 0.0f; // C9 and C1, the two pitch envelopes
+      float e1 = 0.0f; // C9, the pitch envelope
       float depth = 0.0f;
-      float amp = 0.0f, ampPeak = 0.0f;
-      int trig = 0;
+      float amp = 0.0f, amp2 = 0.0f, ampPeak = 0.0f;
+      int trig = 0, hold = 0;
       float click = 0.0f, pulse = 0.0f;
       OnePoleLp noiseLp;
       OnePoleHp pulseHp;
@@ -283,26 +290,46 @@ private:
    };
    struct Tom {
       bool active = false;
-      double p1 = 0.0, p2 = 0.0, p3 = 0.0;
+      // The three oscillators: C19's (the lowest), C18's (the one heard as
+      // the pitch) and C20's.
+      double pLow = 0.0, pMain = 0.0, pTop = 0.0;
       float fast = 0.0f, slow = 0.0f;
-      float env1 = 0.0f, env2 = 0.0f, env3 = 0.0f;
-      float tick = 0.0f;
+      float env = 0.0f, lowSrc = 0.0f, lowEnv = 0.0f, top = 0.0f, square = 0.0f;
+      float noise = 0.0f, tick = 0.0f;
+      float amp = 0.0f, noiseAmp = 0.0f;
+      int trig = 0;
       Svf hp;
+   };
+   // One bridged-T resonator round its op-amp: the input plus a band-pass
+   // with the network's gain, as a biquad.
+   struct Resonator {
+      float b0 = 0, b1 = 0, b2 = 0, a1 = 0, a2 = 0;
+      float x1 = 0, x2 = 0, y1 = 0, y2 = 0;
+      void set(float hz, float q, float gain, float sr);
+      float tick(float x) {
+         const float y = b0 * x + b1 * x1 + b2 * x2 - a1 * y1 - a2 * y2;
+         x2 = x1;
+         x1 = x;
+         y2 = y1;
+         y1 = y;
+         return y;
+      }
    };
    struct Rs {
       bool active = false;
       float excite = 0.0f, gate = 0.0f;
       long time = 0;
-      Svf f1, f2, f3, hp;
+      Resonator f1, f2, f3;
    };
    struct Cp {
       bool active = false;
       long time = 0;
       float amp = 0.0f;
       float tailD = 0.0f, tailA = 0.0f;
-      float burst = 0.0f;
-      Svf bp;
-      OnePoleHp hp;
+      float burst = 0.0f, burstFast = 0.0f;
+      int next = 0;
+      Svf bp, bpWide;
+      OnePoleHp hp, hp2;
       OnePoleLp lp;
    };
 

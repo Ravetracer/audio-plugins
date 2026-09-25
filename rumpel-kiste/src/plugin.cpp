@@ -53,13 +53,17 @@ const clap_plugin_descriptor_t kDescriptor = {
 constexpr const char *kFactoryFolder = "Factory Presets";
 
 constexpr uint32_t kStateMagic = 0x54534B52u; // 'RKST' little-endian
-// Version 1. The layout: header, one (id, value) pair per parameter, the
+// Version 2. The layout: header, one (id, value) pair per parameter, the
 // sixty-four patterns of the bank at kMaxSteps words each, one byte for
 // whether the collapsible section is open, the pattern map (one signed byte
 // per MIDI note), each pattern's chain (a mode byte and a 16-bit repeat), and
 // one byte per voice for its mute. Anything appended later goes after that,
 // and a shorter blob stops where it stops and leaves the rest at defaults.
-constexpr uint32_t kStateVersion = 1;
+//
+// Version 1 is the same layout with Rim Gate on a 1-20 ms range; stateLoad()
+// moves such a value onto the current range so the gate keeps its length.
+constexpr uint32_t kStateVersion = 2;
+constexpr double kRimGateV1Min = 1.0, kRimGateV1Max = 20.0;
 
 } // namespace
 
@@ -423,6 +427,10 @@ private:
          const ParamDesc *d = paramById(id);
          if (!d)
             continue; // unknown id from a newer version: ignore
+         if (header[1] < 2 && id == kParamRsDecay) {
+            const double ms = kRimGateV1Min * std::pow(kRimGateV1Max / kRimGateV1Min, clampv(value, 0.0, 1.0));
+            value = std::log(ms / d->dispMin) / std::log(d->dispMax / d->dispMin);
+         }
          plug->mValues[id].store(clampv(value, d->min, d->max), std::memory_order_relaxed);
       }
       // Everything after the parameters is read as far as it goes: a project

@@ -62,6 +62,18 @@ break the rule.
   noise register and are not, which is the machine too.
 - **The rim shot clips whatever the accent**, so its accent is applied at the
   gate after the diodes (Q64/Q65), not at the excitation.
+- **The knobs show the circuit, the tables give the sound.** Every Decay,
+  Tone and the hats' decays keep their RC time constant as the displayed
+  value (so presets and saved states keep meaning), and `drums.cpp` maps the
+  pot position that implies onto the audible curve measured from recordings.
+  A new range there changes what old sessions sound like; a new table does
+  not break them.
+- **The cymbal stand-ins run at a fixed design clock** (`kCymClock`) and are
+  replayed at the one Tune sets. Specify anything in them against the design
+  clock, or Tune stops transposing it -- which is the bug 0.2.0 fixed.
+- **Measured numbers live in `tools/analysis/measure909.py`**, which reads
+  the sample pack in `!dev/`. Change a measured constant only with a new
+  measurement, and keep the README's "Measured" table in step.
 - **`drive.{h,cpp}` is SäureKiste's, copied unchanged** but for the namespace.
   Port a fix across in either direction.
 - **`seqwindow.cpp` is a fork of SäureKiste's fork of the shared window.**

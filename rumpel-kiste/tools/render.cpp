@@ -979,7 +979,24 @@ void testVoices(double sr) {
       const double tS = decayTime(shortK, sr, 0.1), tL = decayTime(longK, sr, 0.1);
       std::snprintf(msg, sizeof(msg), "Decay sets how long the kick lasts (%.0f vs %.0f ms)",
                     tS * 1000, tL * 1000);
-      check(tL > 4.0 * tS, msg, tL, 4.0 * tS);
+      check(tL > 1.4 * tS, msg, tL, 1.4 * tS);
+      // The recordings hold the kick at its level for 45 ms whatever Decay
+      // says, and only then let it fall.
+      const double held = peakIn(shortK, sr, 0.03, 0.042) / peakIn(shortK, sr, 0.005, 0.02);
+      std::snprintf(msg, sizeof(msg), "and it holds before it falls (%.2f of its level at 30-42 ms)", held);
+      check(held > 0.8, msg, held, 0.8);
+      // It starts about 5.6 times above where it lands, whatever the accent.
+      auto start = [&](float accent) {
+         const auto k = renderVoice(kVoiceBD, accent, 0.5, sr, [](DrumParams &p) {
+            p.bdAttack = 0.0f;
+            p.bdTune = 1.0f;
+         });
+         return zeroCrossFreq(k, sr, 0.0, 0.012) / zeroCrossFreq(k, sr, 0.3, 0.45);
+      };
+      const double s0 = start(0.0f), s1 = start(1.0f);
+      std::snprintf(msg, sizeof(msg), "the kick sweeps down from high up (%.2f times), the same at any accent (%.2f)",
+                    s1, s0);
+      check(s1 > 3.0 && within(s0, s1, 0.05), msg, s1, 3.0);
 
       const auto plain = renderVoice(kVoiceBD, 0.0f, 0.3, sr);
       const auto acc = renderVoice(kVoiceBD, 1.0f, 0.3, sr);
@@ -1008,10 +1025,11 @@ void testVoices(double sr) {
       // for the first few, so it is looked for where the bend has gone and
       // in a range that leaves the lower one out.
       const double f2 = spectralPeak(x, sr, 0.018, 0.05, 245.0, 330.0, 1.0);
+      const double sdPitch = paramToReal(paramTable()[kParamSdPitch], paramTable()[kParamSdPitch].def);
       std::snprintf(msg, sizeof(msg), "the snare's lower oscillator sits at SD Pitch (%.0f Hz)", f1);
-      check(within(f1, 190.0, 0.05), msg, f1, 190.0);
-      std::snprintf(msg, sizeof(msg), "and the upper at 1.47 times it, C69/C71 (%.0f Hz)", f2);
-      check(within(f2 / f1, 1.4706, 0.05), msg, f2 / f1, 1.4706);
+      check(within(f1, sdPitch, 0.05), msg, f1, sdPitch);
+      std::snprintf(msg, sizeof(msg), "and the upper at 1.5 times it, as measured (%.0f Hz)", f2);
+      check(within(f2 / f1, 1.5, 0.03), msg, f2 / f1, 1.5);
       const auto tuned = renderVoice(kVoiceSD, 1.0f, 0.3, sr, [](DrumParams &p) {
          p.sdSnappy = 0.0f;
          p.sdTune = 1.0f;
@@ -1043,55 +1061,112 @@ void testVoices(double sr) {
       check(rL > 3.0 * rS, msg, rL, 3.0 * rS);
    }
 
-   // ---- toms: the ratios the capacitors give, and the octave of Tune
+   // ---- toms: the ratios the capacitors give, the octave of Tune, and what
+   // recordings of a machine show
    {
+      const double pitch = paramToReal(paramTable()[kParamTomPitch], paramTable()[kParamTomPitch].def);
+      auto still = [](DrumParams &p) {
+         p.tomSweep = 0.0f;
+         p.tomNoise = 0.0f;
+         for (float &d : p.tomDecaySec)
+            d = 0.378f;
+      };
       double f[3];
       for (int i = 0; i < 3; ++i) {
-         const auto x = renderVoice(kVoiceLT + i, 1.0f, 0.6, sr, [](DrumParams &p) {
-            p.tomSweep = 0.0f;
-            p.tomNoise = 0.0f;
-            for (float &d : p.tomDecaySec)
-               d = 0.378f;
-         });
+         const auto x = renderVoice(kVoiceLT + i, 1.0f, 0.6, sr, still);
          f[i] = spectralPeak(x, sr, 0.05, 0.3, 40.0, 260.0, 0.5);
       }
       std::snprintf(msg, sizeof(msg), "the low tom sits at Tom Pitch (%.1f Hz)", f[0]);
-      check(within(f[0], 90.0, 0.03), msg, f[0], 90.0);
+      check(within(f[0], pitch, 0.03), msg, f[0], pitch);
       std::snprintf(msg, sizeof(msg), "the mid tom 1.22 times above it, C19/C33 (%.3f)", f[1] / f[0]);
       check(within(f[1] / f[0], 0.033 / 0.027, 0.03), msg, f[1] / f[0], 0.033 / 0.027);
       std::snprintf(msg, sizeof(msg), "the hi tom 1.5 times, C19/C102 (%.3f)", f[2] / f[0]);
       check(within(f[2] / f[0], 1.5, 0.03), msg, f[2] / f[0], 1.5);
-      const auto up = renderVoice(kVoiceLT, 1.0f, 0.6, sr, [](DrumParams &p) {
-         p.tomSweep = 0.0f;
-         p.tomNoise = 0.0f;
+
+      // The pitch heard is C18's oscillator; C19's sits a fifth under it and
+      // carries the body, and nothing sounds a fifth above.
+      const auto lt = renderVoice(kVoiceLT, 1.0f, 0.6, sr, still);
+      const double main = toneLevel(lt, sr, 0.1, 0.3, f[0]);
+      const double under = toneLevel(lt, sr, 0.1, 0.3, f[0] / 1.5);
+      const double over = toneLevel(lt, sr, 0.1, 0.3, f[0] * 1.5);
+      std::snprintf(msg, sizeof(msg), "a fifth under the pitch, C19's oscillator carries the body (%.2f of it)",
+                    under / main);
+      check(under > 0.3 * main && under < main, msg, under / main, 0.47);
+      std::snprintf(msg, sizeof(msg), "and nothing sounds a fifth above it (%.3f)", over / main);
+      check(over < 0.1 * main, msg, over / main, 0.1);
+
+      const auto up = renderVoice(kVoiceLT, 1.0f, 0.6, sr, [&](DrumParams &p) {
+         still(p);
          p.tomTune[0] = 1.0f;
-         p.tomDecaySec[0] = 0.378f;
       });
-      const auto down = renderVoice(kVoiceLT, 1.0f, 0.6, sr, [](DrumParams &p) {
-         p.tomSweep = 0.0f;
-         p.tomNoise = 0.0f;
+      const auto down = renderVoice(kVoiceLT, 1.0f, 0.6, sr, [&](DrumParams &p) {
+         still(p);
          p.tomTune[0] = 0.0f;
-         p.tomDecaySec[0] = 0.378f;
       });
       const double fu = spectralPeak(up, sr, 0.05, 0.3, 80.0, 180.0, 0.5);
-      const double fd = spectralPeak(down, sr, 0.05, 0.3, 40.0, 90.0, 0.5);
+      const double fd = spectralPeak(down, sr, 0.05, 0.3, 45.0, 90.0, 0.5);
       std::snprintf(msg, sizeof(msg), "Tune spans an octave, R112/R113 (%.1f to %.1f Hz)", fd, fu);
       check(within(fu / fd, 2.0, 0.03), msg, fu / fd, 2.0);
+
+      // The sweep is current added to Tune's: the same number of hertz at
+      // either end of Tune, not the same interval.
+      auto bend = [&](float tune) {
+         const auto x = renderVoice(kVoiceLT, 1.0f, 0.6, sr, [&](DrumParams &p) {
+            p.tomNoise = 0.0f;
+            p.tomTune[0] = tune;
+            p.tomDecaySec[0] = 0.378f;
+         });
+         const double lo = tune < 0.5f ? 45.0 : 90.0, hi = tune < 0.5f ? 110.0 : 170.0;
+         return spectralPeak(x, sr, 0.0, 0.08, lo, hi, 0.25) - spectralPeak(x, sr, 0.3, 0.5, lo, hi, 0.25);
+      };
+      const double bendLow = bend(0.0f), bendHigh = bend(1.0f);
+      std::snprintf(msg, sizeof(msg), "the toms bend by hertz, not by an interval (%.1f and %.1f Hz)", bendLow,
+                    bendHigh);
+      check(bendLow > 5.0 && within(bendHigh, bendLow, 0.25), msg, bendHigh, bendLow);
       const auto swept = renderVoice(kVoiceLT, 1.0f, 0.6, sr);
-      const double start = zeroCrossFreq(swept, sr, 0.0, 0.012);
-      check(start > 1.25 * f[0], "and bends down from a sharper start", start, 1.25 * f[0]);
+      const double start = spectralPeak(swept, sr, 0.0, 0.03, 60.0, 180.0, 0.5);
+      std::snprintf(msg, sizeof(msg), "and bend down from a start about a third sharp (%.2f)", start / f[0]);
+      check(start > 1.15 * f[0] && start < 1.45 * f[0], msg, start / f[0], 1.3);
+
+      // Decay: the audible time constant the recordings give, 114 ms at the
+      // top of the knob and 2.5 times shorter at the bottom.
+      auto tau = [&](float decaySec, double t0, double t1) {
+         const auto x = renderVoice(kVoiceLT, 1.0f, 0.8, sr, [&](DrumParams &p) {
+            still(p);
+            p.tomDecaySec[0] = decaySec;
+         });
+         const double a = toneLevel(x, sr, t0, t0 + 0.1, f[0]), b = toneLevel(x, sr, t1, t1 + 0.1, f[0]);
+         return (t1 - t0) / std::log(a / b);
+      };
+      const double tauLong = tau(0.378f, 0.25, 0.45), tauShort = tau(0.038f, 0.15, 0.25);
+      std::snprintf(msg, sizeof(msg), "Decay at the top dies away in 114 ms, as measured (%.1f ms)", tauLong * 1000.0);
+      check(within(tauLong, 0.114, 0.12), msg, tauLong, 0.114);
+      std::snprintf(msg, sizeof(msg), "and 2.5 times faster at the bottom (%.2f)", tauLong / tauShort);
+      check(within(tauLong / tauShort, 2.5, 0.2), msg, tauLong / tauShort, 2.5);
    }
 
-   // ---- rim shot: three resonators and a high-pass
+   // ---- rim shot: three resonators, clipped lopsidedly, ringing on at the
+   // lowest
    {
-      const auto x = renderVoice(kVoiceRS, 1.0f, 0.1, sr);
-      const double lowE = toneLevel(x, sr, 0.0, 0.03, 100.0);
-      const double midE = std::max(toneLevel(x, sr, 0.0, 0.03, 495.0), toneLevel(x, sr, 0.0, 0.03, 1053.0));
-      std::snprintf(msg, sizeof(msg), "the rim shot's energy is above the 495 Hz high-pass (%.1fx)",
-                    midE / std::max(lowE, 1e-12));
-      check(midE > 4.0 * lowE, msg, midE, 4.0 * lowE);
+      const auto x = renderVoice(kVoiceRS, 1.0f, 0.2, sr);
+      double pos = 0.0, neg = 0.0;
+      for (size_t i = 0; i < static_cast<size_t>(0.008 * sr); ++i) {
+         pos = std::max(pos, static_cast<double>(x[i]));
+         neg = std::max(neg, static_cast<double>(-x[i]));
+      }
+      std::snprintf(msg, sizeof(msg), "the rim shot clips lopsidedly for its first milliseconds (%.2f : 1)",
+                    neg / pos);
+      check(within(neg / pos, 1.58, 0.15), msg, neg / pos, 1.58);
+      const double low = toneLevel(x, sr, 0.015, 0.04, 228.0);
+      const double next = std::max(toneLevel(x, sr, 0.015, 0.04, 487.0), toneLevel(x, sr, 0.015, 0.04, 1014.0));
+      std::snprintf(msg, sizeof(msg), "and rings on at its lowest resonator (%.1fx the others)", low / next);
+      check(low > 3.0 * next, msg, low / next, 3.0);
       check(decayTime(x, sr, 0.05) < 0.05, "and is over within fifty milliseconds",
             decayTime(x, sr, 0.05), 0.05);
+      const auto cut = renderVoice(kVoiceRS, 1.0f, 0.2, sr, [](DrumParams &p) { p.rsGateSec = 0.004f; });
+      const double ringCut = rmsIn(cut, sr, 0.015, 0.04), ring = rmsIn(x, sr, 0.015, 0.04);
+      std::snprintf(msg, sizeof(msg), "a short Rim Gate cuts the ring off (%.3f of it)", ringCut / ring);
+      check(ringCut < 0.3 * ring, msg, ringCut / ring, 0.3);
    }
 
    // ---- clap: four bursts, Clap Spread apart
@@ -1132,7 +1207,7 @@ void testVoices(double sr) {
       const double tc = decayTime(ch, sr, 0.03), to = decayTime(oh, sr, 0.03);
       std::snprintf(msg, sizeof(msg), "the closed hat is shorter than the open one (%.0f vs %.0f ms)",
                     tc * 1000, to * 1000);
-      check(to > 4.0 * tc, msg, to, 4.0 * tc);
+      check(to > 2.0 * tc, msg, to, 2.0 * tc);
       const double bright = bandPower(oh, sr, 0.0, 0.1, 5000.0, 12000.0);
       const double dull = bandPower(oh, sr, 0.0, 0.1, 100.0, 1000.0);
       std::snprintf(msg, sizeof(msg), "the hats are high-pass metal (%.1f dB above 5 kHz)",
@@ -1171,6 +1246,21 @@ void testVoices(double sr) {
       std::snprintf(msg, sizeof(msg), "a crash tuned up is shorter, like a faster ROM clock (%.0f vs %.0f ms)",
                     lf * 1000, lc * 1000);
       check(lf < 0.85 * lc, msg, lf, 0.85 * lc);
+      // And higher: Tune transposes the whole recording, 28.5 kHz to 45.8 kHz.
+      const auto crSlow = renderVoice(kVoiceCR, 1.0f, 0.6, sr, [](DrumParams &q) { q.crTune = 0.0f; });
+      auto centroid = [&](const std::vector<float> &x, double lo, double hi) {
+         double num = 0.0, den = 0.0;
+         for (double f = lo; f <= hi; f *= 1.01) {
+            const double l = toneLevel(x, sr, 0.02, 0.3, f);
+            num += f * l * l;
+            den += l * l;
+         }
+         return num / std::max(den, 1e-30);
+      };
+      const double pSlow = centroid(crSlow, 300.0, 3000.0);
+      const double pFast = centroid(crFast, 300.0 * 45.8 / 28.5, 3000.0 * 45.8 / 28.5);
+      std::snprintf(msg, sizeof(msg), "and higher, all of it (%.2f times)", pFast / pSlow);
+      check(within(pFast / pSlow, 45.8 / 28.5, 0.08), msg, pFast / pSlow, 45.8 / 28.5);
       const auto rd = renderVoice(kVoiceRD, 1.0f, 1.6, sr);
       check(rmsIn(rd, sr, 0.5, 0.8) > 0.0 && rmsIn(rd, sr, 0.0, 0.05) > 3.0 * rmsIn(rd, sr, 0.5, 0.8),
             "the ride has a ping over a longer wash");
@@ -1207,6 +1297,10 @@ void testVoices(double sr) {
             p.drive = 0.8f;
             p.route[kVoiceBD] = routed;
             p.bdAttack = 0.0f;
+            // A kick near full scale, so what is measured is the stage and
+            // not how hot the kick happens to arrive.
+            p.bdLevel = 2.0f;
+            p.gain = 1.0f;
          });
       };
       const auto clean = kick(kDriveOff, false), driven = kick(kDriveMaster, false);
@@ -1216,7 +1310,7 @@ void testVoices(double sr) {
                              bandPower(driven, sr, 0.1, 0.3, 30.0, 120.0);
       std::snprintf(msg, sizeof(msg), "Drive Mode Master distorts the mix (%.1f dB more harmonics)",
                     10.0 * std::log10(hDriven / std::max(hClean, 1e-20)));
-      check(hDriven > 30.0 * hClean, msg, hDriven, 30.0 * hClean);
+      check(hDriven > 3.0 * hClean, msg, hDriven, 3.0 * hClean);
       // Selected: only what is routed goes through it.
       const auto selRouted = kick(kDriveSelected, true), selDry = kick(kDriveSelected, false);
       double dRouted = 0.0, dDry = 0.0;
@@ -1422,6 +1516,39 @@ void testSequencer(const clap_plugin_entry_t *entry, double sr) {
       saveState(b, blob2);
       check(blob == blob2, "state round-trips byte for byte", static_cast<double>(blob2.size()),
             static_cast<double>(blob.size()));
+      destroyPlugin(a);
+      destroyPlugin(b);
+   }
+
+   // A version-1 state keeps its Rim Gate: it was saved against a 1-20 ms
+   // range, and 5 ms there has to load as 5 ms on the current one.
+   {
+      const clap_plugin_t *a = createPlugin(entry, sr);
+      std::string blob, blob2;
+      saveState(a, blob);
+      auto valueAt = [](const std::string &b, uint32_t want) -> size_t {
+         uint32_t count = 0;
+         std::memcpy(&count, b.data() + 8, 4);
+         for (uint32_t k = 0; k < count; ++k) {
+            uint32_t id = 0;
+            std::memcpy(&id, b.data() + 12 + 12 * k, 4);
+            if (id == want)
+               return 12 + 12 * k + 4;
+         }
+         return 0;
+      };
+      const uint32_t v1 = 1;
+      const double oldRaw = std::log(5.0 / 1.0) / std::log(20.0 / 1.0);
+      std::memcpy(&blob[4], &v1, 4);
+      std::memcpy(&blob[valueAt(blob, kParamRsDecay)], &oldRaw, 8);
+      const clap_plugin_t *b = createPlugin(entry, sr);
+      check(loadState(b, blob), "a version-1 state loads");
+      saveState(b, blob2);
+      double raw = 0.0;
+      std::memcpy(&raw, blob2.data() + valueAt(blob2, kParamRsDecay), 8);
+      const double ms = paramToReal(paramTable()[kParamRsDecay], raw);
+      std::snprintf(msg, sizeof(msg), "and keeps its Rim Gate across the range change (%.2f ms)", ms);
+      check(within(ms, 5.0, 0.01), msg, ms, 5.0);
       destroyPlugin(a);
       destroyPlugin(b);
    }

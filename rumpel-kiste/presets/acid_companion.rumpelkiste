@@ -73,14 +73,14 @@ gen_accent = 0.35
 
 # Mods
 bd_pitch = 50
-bd_sweep = 3
+bd_sweep = 5.6
 bd_shape = 0.5
-sd_pitch = 190
-tom_pitch = 90
+sd_pitch = 174
+tom_pitch = 86
 tom_sweep = 0.5
 tom_noise = 0.5
-rs_decay = 5
-cp_spread = 9
+rs_decay = 47
+cp_spread = 10.6
 hat_color = 0.7
 cym_color = 0.5
 dac_bits = 6

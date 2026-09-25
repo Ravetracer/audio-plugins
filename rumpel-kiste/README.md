@@ -7,8 +7,8 @@ It models the Roland TR-909's voicing board from the June 1984 service notes.
 The seven analog voices are built as circuits, with every time constant, filter
 corner and oscillator ratio computed from the component values:
 
-- the bass drum's reset triangle core with its two pitch envelopes, where Tune
-  sets the sweep time and not the pitch
+- the bass drum's reset triangle core and its pitch envelope, where Tune sets
+  the sweep time and not the pitch
 - the snare's two oscillators and its split noise path
 - three oscillators per tom
 - the rim shot's three bridged-T resonators and its clamp diodes
@@ -17,6 +17,14 @@ corner and oscillator ratio computed from the component values:
 The hi-hats, crash and ride were six-bit ROM samples on the machine. Here they
 run through the same six-bit converter, ROM clock and decay circuitry, with a
 synthesised stand-in for the recordings, which are not reproduced.
+
+Where the service notes leave something out -- how far and how fast each
+drum's pitch bends, how its envelopes hold and fall, how the toms' oscillators
+are balanced, where the clap's bursts land, how fast the cymbal ROMs are read,
+the stand-ins' spectra, the accent response and the balance between the voices
+-- the numbers are measured from 96 kHz recordings of a machine and the voices
+are fitted to them. Nothing is sampled: the recordings are a reference, not a
+source. `tools/analysis/README.md` lists every number and where it came from.
 
 It plays from the host on the machine's own MIDI key numbers, or from its own
 **step sequencer**: twelve rows (total accent and eleven voices), 1 to 64 steps,
@@ -57,7 +65,7 @@ binaries.
 ## Tools
 
 ```sh
-build/rumpelkiste-render --selftest              # the suite, 148 checks
+build/rumpelkiste-render --selftest              # the suite, 182 checks
 build/rumpelkiste-render --list                  # the preset library
 build/rumpelkiste-render --all --outdir /tmp/rk  # every preset to WAV
 build/rumpelkiste-render --preset Warehouse --bpm 130 --seconds 16 --out w.wav

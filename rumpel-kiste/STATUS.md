@@ -1,30 +1,51 @@
 # RumpelKiste -- status
 
-Version 0.1.0. Linux and Windows, CLAP and VST3. 76 parameters, 19 presets.
-Builds clean on both platforms; `render --selftest` passes all 148 checks on
+Version 0.2.0. Linux and Windows, CLAP and VST3. 76 parameters, 19 presets.
+Builds clean on both platforms; `render --selftest` passes all 182 checks on
 the Linux build and on the Windows build under wine.
 
 ## What works, and what is measured
 
-The self-test holds the voices to the numbers the service notes give, at 44.1,
-48 and 96 kHz:
+Every voice has been measured against 96 kHz recordings of a machine (a
+commercial sample pack, every knob stepped across its travel; see
+`tools/analysis/README.md`, "Measured") and fitted to them. What changed from
+0.1.0, where the schematic alone had been read:
 
-- the kick settles on BD Pitch and its first cycle is more than 1.7 times
-  higher; Tune lengthens the sweep without moving the landing note; Decay and
-  Attack do what the circuit says
-- the snare's oscillators sit at SD Pitch and 1.47 times it (C69/C71), Tune
-  spans an octave, Snappy brings in the noise, Tone lengthens the tail
-- the toms sit at 1 : 1.222 : 1.5 (C19 : C33 : C102), Tune spans an octave,
-  and they bend down from a sharper start
-- the rim shot's energy is above its 495 Hz high-pass and dies within 50 ms
-- the clap has four bursts
-- the closed hat is shorter than the open one and chokes it; the hats are
-  high-pass metal; six bits are audible and their noise decays with the sound
-- a crash tuned up is shorter, like a faster ROM clock; the ride pings over a
-  wash
-- every voice is finite, in range, and louder accented than plain
-- the drive bus: Master distorts the mix, Selected drives only routed voices
-  and leaves the rest bit-identical
+- **Kick**: sweeps from 5.6x its landing pitch in one exponential (was 2.4x),
+  the same at every accent; holds 45 ms at full level, then falls in two
+  stages; Decay's audible range is 16-64 ms, not the RC's 15-345 ms; rounder
+  and slightly asymmetric; the first half-cycle negative.
+- **Snare**: 174 Hz and exactly 1.5x (the caps say 1.47); the upper oscillator
+  stays 10 dB under the lower instead of dying in 10 ms; the Tone tail is
+  24-77 ms, not 47-282 ms; accent lifts the noise far less than the drum.
+- **Toms**: the pitch heard is C18's oscillator, with C19's a fifth *under* it
+  and lagging in (was a partial a fifth above); the sweep is hertz, not a
+  ratio; the VCA holds, then falls at 46-114 ms (LT), not 38-378; the noise is
+  a 20 ms wash plus a tick at the trigger's end, not a 0.5 ms spike.
+- **Rim shot**: resonators at 487 / 228 / 1014 Hz, clipped lopsidedly (1.58:1)
+  for ~8 ms, then ringing on at 228 Hz; no 495 Hz high-pass (that reading of
+  IC50b was wrong, and the individual output shows none); gate 47 ms.
+- **Clap**: bursts at 0 / 10.0 / 21.5 / 31.8 ms; each falls fast and then
+  slowly; the tail comes in with the last burst and lasts 105 ms.
+- **Hats**: ROM clock 31.5 kHz, open-hat run 16384 samples (0.52 s); linear-dB
+  decays of 9-45 ms (CH) and 120 ms (OH at the top); the stand-in's spectrum
+  fitted to the recordings (1.3 dB mean error).
+- **Cymbals**: clock 28.5-45.8 kHz; Tune now transposes the stand-in instead of
+  only shortening it (it did not before -- a bug); envelopes that fall faster
+  towards the end; the ride's bell partials where the recording has them.
+- **Accent and balance**: every voice's accent span and its level against the
+  kick, all parts at 50 %, as recorded.
+- **Help line**: a fixed three-line area under the controls, cut with an
+  ellipsis after the third line, instead of wrapping upward over the controls
+  (the fix SäureKiste 0.15.1 has). The window is 26 px taller.
+- **Defaults**: Tom Pitch 86 Hz, SD Pitch 174 Hz, BD Sweep 5.6x, Clap Spread
+  10.6 ms, Rim Gate 47 ms (C119 into R403), all written into the factory
+  presets. Rim Gate's range is now 2-200 ms; the state version went to 2, and
+  a version-1 session's gate is converted so it keeps its length.
+
+The self-test holds the voices to those numbers and to the ones the service
+notes give, at 44.1, 48 and 96 kHz. The measured checks were each run against
+the 0.1.0 engine first and fail there.
 
 and the sequencer and the plugin around it:
 
@@ -44,12 +65,26 @@ shows nothing per-instance at file scope.
 ## What has not been done
 
 - **No DAW has loaded it.** wine is not Windows and guihost is not a host.
-- **It has not been compared against a real machine by ear**, or against
-  recordings of one. Everything above is the build agreeing with the schematic.
+- **It has not been compared against a real machine by ear.** It has been
+  measured against recordings of one, which is not the same thing.
 - The hi-hat and cymbal content is a synthesised stand-in (see the manual,
-  §5). How close it gets to the ROMs has not been judged against anything.
+  §5), fitted to the recordings' spectra band by band; the fit is 1.3-2.9 dB
+  on average, and a band average says nothing about how metallic it sounds.
+- The drive bus sees the kick about 8 dB lower than in 0.1.0, because the kick
+  now sits at the machine's balance. The presets that use Master or Selected
+  drive were not re-trimmed. Factory presets are 2-5 dB lower in RMS.
 
 ## Bugs found and fixed on the way
+
+- The cymbals' Tune did not transpose them: the stand-in's oscillators and
+  filters were specified against the clock Tune moved, so only the length
+  changed. They are now computed at a fixed design clock and replayed at the
+  tuned one.
+- IC50b, after the rim shot, was read as a 495 Hz high-pass; R422 feeds back
+  from the gain-of-two divider, which makes it 229 Hz, Q 1.58 -- and the
+  recordings show neither.
+- The rim shot's excitation time constant used R395 || R396; the two are in
+  series (0.79 ms, measured 0.48 ms).
 
 - Every row label read as permanently lit on Windows: the flash timer kept a
   steady clock in milliseconds in a `long`, which is 32 bits there and wraps

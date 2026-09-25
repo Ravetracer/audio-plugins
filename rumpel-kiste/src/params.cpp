@@ -39,7 +39,7 @@ const ParamDesc kParams[kNumParams] = {
        "VR2, and it does not do what its name says. It sits in the discharge path of "
        "C9 (0.33 uF, with R57 22 k in series), which is the envelope that sweeps the "
        "oscillator down after the hit -- so it sets how long the pitch stays up, from a "
-       "7.3 ms time constant to 40 ms, not the note the kick settles on. That note is "
+       "7.6 ms time constant to 29 ms on a machine, not the note the kick settles on. That note is "
        "fixed by R27's bias; it is BD Pitch under ADVANCED. The owner's manual says as "
        "much: whatever the Tune setting, the Decay knob works at its own time."),
    PCT(kParamBdLevel, "bd_level", "Level", "Bass Drum", 0.8,
@@ -48,12 +48,14 @@ const ParamDesc kParams[kNumParams] = {
        "VR3, a 500 ohm pot mixing two things into the click at the front of the kick: "
        "a pulse from Q8/Q9 and the shared noise, low-passed by R45 and C13. Both go "
        "through Q6, whose envelope is C12 (0.033 uF) discharging through R41 (22 k): "
-       "0.73 ms. Fully down leaves the plain oscillator."),
+       "0.73 ms. Even fully down a machine still clicks a little, and the knob does most "
+       "of its work in the top half of its travel."),
    LOG(kParamBdDecay, "bd_decay", "Decay", "Bass Drum", 0.5, 15.5, 345.0, "ms",
        "VR5, 1 M audio taper, with R58 (47 k) in series, discharging C8 (0.33 uF): the "
        "amplitude envelope's time constant runs from 15.5 ms to 345 ms, which is what "
-       "this knob shows. The owner's manual's advice for muting the kick is to turn "
-       "this fully down."),
+       "this knob shows. What a machine does with it: the kick holds its level for "
+       "45 ms whatever this says, then falls in two stages over 16 ms to 64 ms. The "
+       "owner's manual's advice for muting the kick is to turn this fully down."),
 
    // ---------------------------------------------------------------- snare
    PCT(kParamSdTune, "sd_tune", "Tune", "Snare Drum", 0.5,
@@ -67,8 +69,9 @@ const ParamDesc kParams[kNumParams] = {
    PCT(kParamSdTone, "sd_tone", "Tone", "Snare Drum", 0.5,
        "VR7, 500 k linear, which the owner's manual calls timbre and the circuit "
        "calls a decay: it discharges C67 (0.47 uF) together with R254 (100 k), and that "
-       "envelope opens Q48 onto the low-passed noise. The noise tail's time constant "
-       "runs from 47 ms to 282 ms, and a longer tail is the brighter snare."),
+       "envelope opens Q48 onto the low-passed noise. The parts give the tail a time "
+       "constant of 47 ms to 282 ms; a machine gives 24 ms to 77 ms, and that is what "
+       "this does. A longer tail is the brighter snare."),
    PCT(kParamSdSnappy, "sd_snappy", "Snappy", "Snare Drum", 0.5,
        "VR9, 10 k linear, the gain of IC39b, which mixes the two noise paths: a "
        "short burst of high-passed noise (IC39a, 4.0 kHz) as long as the trigger "
@@ -83,30 +86,36 @@ const ParamDesc kParams[kNumParams] = {
        "them overlap."),
    PCT(kParamLtLevel, "lt_level", "Level", "Low Tom", 0.8, "VR12, 50 k linear."),
    LOG(kParamLtDecay, "lt_decay", "Decay", "Low Tom", 0.598, 38.0, 378.0, "ms",
-       "VR11, 500 k linear with R111 (56 k), discharging C23 (0.68 uF): the main "
-       "oscillator's envelope runs from 38 ms to 378 ms."),
+       "VR11, 500 k linear with R111 (56 k), discharging C23 (0.68 uF): 38 ms to 378 "
+       "ms, which is what the knob shows. What reaches the ear is shorter and moves "
+       "less, as the machine does: the tom holds for a moment and then dies away "
+       "with a time constant of 46 to 114 ms."),
    PCT(kParamMtTune, "mt_tune", "Tune", "Mid Tom", 0.5,
        "VR13. One octave, like the low tom's. The mid tom's timing capacitors are "
        "0.018, 0.027 and 0.01 uF against the low tom's 0.022, 0.033 and 0.012, so at "
        "the same setting it sits 1.22 times higher."),
    PCT(kParamMtLevel, "mt_level", "Level", "Mid Tom", 0.8, "The mid tom's level, 50 k linear like the low tom's."),
    LOG(kParamMtDecay, "mt_decay", "Decay", "Mid Tom", 0.598, 38.0, 378.0, "ms",
-       "The same envelope as the low tom's, from the same part values."),
+       "The same envelope as the low tom's, from the same part values. The mid tom "
+       "still dies away faster than the low one, at 32 to 79 ms."),
    PCT(kParamHtTune, "ht_tune", "Tune", "Hi Tom", 0.5,
        "VR16. One octave. The hi tom's capacitors are 0.015, 0.022 and 0.0082 uF, so "
        "at the same setting it sits 1.5 times above the low tom."),
    PCT(kParamHtLevel, "ht_level", "Level", "Hi Tom", 0.8, "The hi tom's level, 50 k linear like the low tom's."),
    LOG(kParamHtDecay, "ht_decay", "Decay", "Hi Tom", 0.598, 38.0, 378.0, "ms",
-       "The same envelope as the low tom's, from the same part values."),
+       "The same envelope as the low tom's, from the same part values. The hi tom "
+       "dies away at 34 to 84 ms."),
 
    // ------------------------------------------------------ rim shot, clap
    PCT(kParamRsLevel, "rs_level", "Rim Shot", "Rim / Clap", 0.7,
        "VR19, the rim shot's level. The voice itself has no other control: three "
-       "bridged-T resonators rung by one pulse, at 219 Hz, 495 Hz and 1053 Hz by their "
-       "component values, clipped by D91/D92 and high-passed at 495 Hz."),
+       "bridged-T resonators rung by one pulse, near 220 Hz, 490 Hz and 1 kHz, "
+       "clipped hard by D91/D92 for the first few milliseconds and then left to ring "
+       "on at the lowest of them."),
    PCT(kParamCpLevel, "cp_level", "Hand Clap", "Rim / Clap", 0.7,
        "VR20, the hand clap's level. Noise through a 960 Hz band-pass, cut into four "
-       "bursts by a sawtooth envelope, with a darker tail under the last one."),
+       "bursts by a sawtooth envelope, with a darker tail that comes in with the last "
+       "one."),
 
    // --------------------------------------------------------------- hi-hat
    PCT(kParamHhLevel, "hh_level", "Level", "Hi-Hat", 0.7,
@@ -115,21 +124,23 @@ const ParamDesc kParams[kNumParams] = {
        "cuts off an open one for the same reason."),
    LOG(kParamChDecay, "ch_decay", "CH Decay", "Hi-Hat", 0.5, 10.0, 110.0, "ms",
        "VR21. The hats' amplifier is an anti-log converter driven by C135 charging, so "
-       "the level falls linearly in decibels as the capacitor charges and slows as it "
-       "fills. The closed hat charges it through R451 (10 k) and VR21 (100 k); the "
-       "service notes give that path as a tenth of the open hat's. C135's value is not "
-       "legible in the scan, so the range is fitted to the printed waveforms."),
+       "the level falls linearly in decibels. The closed hat charges it through R451 "
+       "(10 k) and VR21 (100 k), which is what this shows; C135's value is not legible, "
+       "and a machine's closed hat dies away with a time constant of 9 ms to 45 ms "
+       "over the knob's travel."),
    LOG(kParamOhDecay, "oh_decay", "OH Decay", "Hi-Hat", 0.5, 100.0, 1100.0, "ms",
        "VR23, 1 M, with R452 (100 k): ten times the closed hat's charging path, which "
-       "is the ratio the service notes state."),
+       "is the ratio the service notes state. A machine's open hat is not ten times "
+       "longer: 120 ms at the top of the knob against the closed hat's 45 ms."),
 
    // -------------------------------------------------------------- cymbals
    PCT(kParamCrLevel, "cr_level", "Level", "Crash", 0.6, "VR24, the crash's level."),
    PCT(kParamCrTune, "cr_tune", "Tune", "Crash", 0.5,
        "The clock that reads the crash ROM, from the 4011 oscillator VR25 tunes. A "
        "faster clock plays the whole cymbal higher and shorter, which is what "
-       "retuning a sample does and what the owner's manual means by pitch. The range, "
-       "a fifth either way, is not printed."),
+       "retuning a sample does and what the owner's manual means by pitch. The range "
+       "is not printed; a machine's runs from 28.5 kHz to 45.8 kHz, 37 kHz at the "
+       "centre, about four semitones either way."),
    PCT(kParamRdLevel, "rd_level", "Level", "Ride", 0.6, "VR26, the ride's level."),
    PCT(kParamRdTune, "rd_tune", "Tune", "Ride", 0.5,
        "VR27, the ride ROM's clock, like the crash's."),
@@ -221,52 +232,57 @@ const ParamDesc kParams[kNumParams] = {
        "The frequency the kick settles on. It is set by R27 (1.5 M) feeding the "
        "oscillator's integrator, and the service notes give the resistor but not the "
        "frequency it produces, so this is a mod rather than a guess baked in."),
-   LIN(kParamBdSweep, "bd_sweep", "BD Sweep", "Mods", 1.0, 5.0, 3.0, "x",
-       "How far above BD Pitch the kick starts, as a ratio. Two envelopes sweep it: "
-       "C9, whose time Tune sets, and C1 (0.068 uF through R12, 100 k) at 6.8 ms. How "
-       "high they drive the oscillator depends on levels the schematic does not "
-       "print. An accent pushes it further."),
+   LIN(kParamBdSweep, "bd_sweep", "BD Sweep", "Mods", 1.0, 8.0, 5.6, "x",
+       "How far above BD Pitch the kick starts, as a ratio. C9's envelope sweeps it, "
+       "for as long as Tune says; how high it drives the oscillator depends on levels "
+       "the schematic does not print. The default is the machine's: a kick that "
+       "settles near 50 Hz starts near 280, at every accent."),
    PCT(kParamBdShape, "bd_shape", "BD Shape", "Mods", 0.5,
        "How hard the triangle is driven into D10/D11, the diode pair that rounds it "
        "towards a sine. Low leaves more of the triangle's edge; high flattens the tops "
        "into something closer to a square. The triangle's amplitude against the "
        "diodes' knee is not printed."),
-   LOG(kParamSdPitch, "sd_pitch", "SD Pitch", "Mods", 0.5015, 120.0, 300.0, "Hz",
-       "The snare's lower oscillator at Tune's centre. The upper one runs 1.47 times "
-       "higher, which is the ratio of their capacitors (C69 0.01 uF, C71 0.0068 uF) "
-       "and is fixed. Both bend up at the hit by the 5 V to 2 V swing of IC36's supply "
-       "the service notes draw, which is fixed too."),
-   LOG(kParamTomPitch, "tom_pitch", "Tom Pitch", "Mods", 0.5053, 50.0, 160.0, "Hz",
-       "The low tom's lowest oscillator at Tune's centre. Everything else about the "
-       "toms' pitch follows from capacitors: each tom's other two oscillators run 1.5 "
-       "and 2.75 times higher, the mid tom sits 1.22 and the hi tom 1.5 times above "
-       "the low one."),
+   LOG(kParamSdPitch, "sd_pitch", "SD Pitch", "Mods", 0.4055, 120.0, 300.0, "Hz",
+       "The snare's lower oscillator at Tune's centre. The upper one runs 1.5 times "
+       "higher -- their capacitors (C69 0.01 uF, C71 0.0068 uF) say 1.47, a machine "
+       "measures 1.50 -- and that is fixed. Both bend up at the hit by the 5 V to 2 V "
+       "swing of IC36's supply the service notes draw, which is fixed too."),
+   LOG(kParamTomPitch, "tom_pitch", "Tom Pitch", "Mods", 0.4663, 50.0, 160.0, "Hz",
+       "The low tom's pitch at Tune's centre once the sweep has settled: its middle "
+       "oscillator, the one the ear follows. Everything else about the toms' pitch "
+       "follows from capacitors: each tom's lowest oscillator runs a fifth under it "
+       "and its top one 1.83 times over it, the mid tom sits 1.22 and the hi tom 1.5 "
+       "times above the low one."),
    PCT(kParamTomSweep, "tom_sweep", "Tom Sweep", "Mods", 0.5,
-       "How far the toms bend down at the hit. Two envelopes do it, C17 (0.047 uF, "
-       "470 k: 22 ms) and C16 (0.1 uF, 2.2 M: 220 ms); their times are fixed, how high "
-       "they start is this. At 50 % a tom starts 60 % sharp."),
+       "How far the toms bend down at the hit. Two envelopes add their current to "
+       "Tune's, one gone in about 30 ms and C16's (0.1 uF, 2.2 M: 220 ms), so the "
+       "bend is a number of hertz rather than an interval: a tom tuned low bends "
+       "further, in pitch, than one tuned high. At 50 % a tom at Tune's centre starts "
+       "38 % sharp."),
    PCT(kParamTomNoise, "tom_noise", "Tom Noise", "Mods", 0.5,
-       "The tick of noise at the front of every tom: the shared noise high-passed at "
-       "720 Hz and gated for well under a millisecond by C54 and R198. Its level "
-       "against the oscillators is not printed."),
-   LOG(kParamRsDecay, "rs_decay", "Rim Gate", "Mods", 0.537, 1.0, 20.0, "ms",
-       "How long Q65 lets the rim shot's resonators through. The resonators ring for "
-       "as long as their component values say -- 5, 9 and 2 ms time constants -- but "
-       "the gate after them is what the ear hears as the length of the hit, and its "
-       "timing is not legible."),
-   LOG(kParamCpSpread, "cp_spread", "Clap Spread", "Mods", 0.5039, 4.0, 20.0, "ms",
+       "The noise at the front of every tom: the shared noise high-passed at 720 Hz, "
+       "a short wash under the hit and a tick from C54 and R198 as the trigger ends. "
+       "Its level against the oscillators is not printed; 50 % is the machine's."),
+   LOG(kParamRsDecay, "rs_decay", "Rim Gate", "Mods", 0.6856, 2.0, 200.0, "ms",
+       "How long Q65 lets the rim shot through: C119 (0.047 uF) discharging into "
+       "R403 (1 M), 47 ms. The resonators ring out well inside that, so the default "
+       "leaves the hit as long as they make it; turned down, the gate cuts the "
+       "low ring off and leaves the click."),
+   LOG(kParamCpSpread, "cp_spread", "Clap Spread", "Mods", 0.6055, 4.0, 20.0, "ms",
        "The gap between the clap's four bursts. The service notes' printed waveform "
-       "shows four, about nine milliseconds apart, which is the default; the "
+       "shows four; a machine spaces them 10.0, 11.5 and 10.3 ms apart, 10.6 ms on "
+       "average, which is the default, and this keeps that uneven pattern. The "
        "oscillator that times them is not legible."),
    PCT(kParamHatColor, "hat_color", "Hat Color", "Mods", 0.5,
        "The hats on the machine are samples of real ones, stored as six-bit PCM in a "
        "ROM that is not in the service notes and is not ours to have. What plays "
        "instead is a synthesised metal source put through the same six-bit converter, "
-       "the same thirty-kilohertz clock and the same decay circuit. This sets how "
-       "bright that source is."),
+       "the same 31.5 kHz clock and the same decay circuit, shaped to a machine's "
+       "spectrum at 50 %. This sets how bright that source is."),
    PCT(kParamCymColor, "cym_color", "Cym Color", "Mods", 0.5,
        "The same for the crash and the ride: how bright the synthesised source is that "
-       "stands in for their ROMs."),
+       "stands in for their ROMs. At 50 % it is shaped to a machine's spectrum, the "
+       "ride's bell partials where the recording has them."),
    STEP(kParamDacBits, "dac_bits", "DAC Bits", "Mods", 4.0, 16.0, 6.0, "bit",
         "The resolution of the hats' and cymbals' converters. Six is the machine: the "
         "ROM data is six bits wide, latched into IC68 and converted by a resistor "
