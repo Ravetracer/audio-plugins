@@ -244,6 +244,81 @@ constexpr float kSdEnv2 = 0.025f;
 constexpr float kSdUpper = 0.49f;
 constexpr float kSdTailTau[5] = {0.024f, 0.042f, 0.057f, 0.075f, 0.077f};
 
+// How the controls reach a new value. A host sends automation as a staircase
+// and a dragged knob arrives once per audio block, so a control that jumped to
+// each value put a step into every voice still ringing -- a zipper under a
+// tom's or a cymbal's tail while its Tune is swept, and a click on a Level or
+// the Volume. A pot on the machine has no steps to jump.
+//
+// Each control therefore follows its value through a one-pole with this time
+// constant, stepped every kGlideStep samples: 63 % of the way after 20 ms,
+// snapped to its end after nine time constants, where 1e-4 of the move is
+// left. The same numbers as SaeureKiste's, so the two feel alike.
+constexpr float kGlideSec = 0.02f;
+constexpr float kGlideSettleTaus = 9.0f;
+constexpr uint32_t kGlideStep = 8;
+// The drive stage's settings glide on a coarser grid, because rederiving it
+// runs a level match through its curve; every 64 samples is 750 Hz at 48 k.
+constexpr uint32_t kDriveGlideFrames = 64;
+
+enum class Glide {
+   Linear,
+   Octaves, // a frequency: glided in pitch, so a sweep moves evenly across the range
+   Drive,   // linear, on the drive stage's grid
+};
+
+struct GlidedRef {
+   float *value;
+   Glide how;
+};
+
+constexpr int kMaxGlided = 40;
+
+// Every control a sounding voice reads while it rings, in one place. What is
+// not here takes effect at once: the switches, and the controls a hit takes at
+// its start (the decays, the gate, the spread, the kick's sweep depth), which
+// have no ringing voice to step.
+int glidedFields(DrumParams &p, GlidedRef *out) {
+   int n = 0;
+   auto add = [&](float &v, Glide how) { out[n++] = {&v, how}; };
+   add(p.bdLevel, Glide::Linear);
+   add(p.bdAttack, Glide::Linear);
+   add(p.sdTune, Glide::Linear);
+   add(p.sdLevel, Glide::Linear);
+   add(p.sdSnappy, Glide::Linear);
+   for (int i = 0; i < 3; ++i) {
+      add(p.tomTune[i], Glide::Linear);
+      add(p.tomLevel[i], Glide::Linear);
+   }
+   add(p.rsLevel, Glide::Linear);
+   add(p.cpLevel, Glide::Linear);
+   add(p.hhLevel, Glide::Linear);
+   add(p.crLevel, Glide::Linear);
+   add(p.crTune, Glide::Linear);
+   add(p.rdLevel, Glide::Linear);
+   add(p.rdTune, Glide::Linear);
+   add(p.gain, Glide::Linear);
+   add(p.bdPitchHz, Glide::Octaves);
+   add(p.bdShape, Glide::Linear);
+   add(p.sdPitchHz, Glide::Octaves);
+   add(p.tomPitchHz, Glide::Octaves);
+   add(p.tomSweep, Glide::Linear);
+   add(p.tomNoise, Glide::Linear);
+   add(p.hatColor, Glide::Linear);
+   add(p.cymColor, Glide::Linear);
+   add(p.drive, Glide::Drive);
+   add(p.driveBias, Glide::Drive);
+   add(p.driveToneHz, Glide::Octaves);
+   add(p.driveMix, Glide::Linear);
+   return n;
+}
+
+// A one-pole's step over `frames` samples.
+inline float glideCoef(uint32_t frames, float sampleRate) {
+   return 1.0f - static_cast<float>(std::exp(-static_cast<double>(frames) /
+                                             (kGlideSec * static_cast<double>(sampleRate))));
+}
+
 } // namespace
 
 // ---------------------------------------------------------------- the noise
@@ -472,7 +547,13 @@ void DrumEngine::prepare(double sampleRate) {
    mRide.init(RomVoice::kRide);
    mDcBlock.setCutoff(5.0f, mSampleRate);
    mDrive.prepare(mSampleRate);
-   setParams(mP);
+   mGlideCoef = glideCoef(kGlideStep, mSampleRate);
+   mGlideTotal = static_cast<uint32_t>(std::ceil(kGlideSettleTaus * kGlideSec * mSampleRate));
+   // The ROM voices and the drive stage depend on the rate, so both have to
+   // be derived again.
+   mRatesSet[0] = -1.0f;
+   mDriveModelSet = -1;
+   derive(mP);
    reset();
 }
 
@@ -491,12 +572,73 @@ void DrumEngine::reset() {
    mDcBlock.reset();
    mDrive.reset();
    mDriveTone.reset();
+   // A glide under way ends where it was going, and the next values are where
+   // the engine starts rather than a move: nothing is sounding, so there is
+   // nothing to glide.
+   mGlideLeft = 0;
+   mGlidePhase = 0;
+   mPrimed = false;
    // The filter coefficients live in the voices' own filter objects, which
    // the assignments above just threw away.
-   setParams(mP);
+   derive(mTarget);
 }
 
 void DrumEngine::setParams(const DrumParams &p) {
+   mTarget = p;
+   if (!mPrimed) {
+      mPrimed = true;
+      mGlideLeft = 0;
+      derive(p);
+      return;
+   }
+   // Everything at once, then the gliding controls put back where they were;
+   // glideStep() takes them the rest of the way.
+   DrumParams next = p;
+   GlidedRef to[kMaxGlided], was[kMaxGlided];
+   const int n = glidedFields(next, to);
+   glidedFields(mP, was);
+   for (int i = 0; i < n; ++i)
+      *to[i].value = *was[i].value;
+   mGlideLeft = mGlideTotal;
+   derive(next);
+}
+
+void DrumEngine::glideStep(uint32_t frames) {
+   if (frames >= mGlideLeft) {
+      mGlideLeft = 0;
+      derive(mTarget);
+      return;
+   }
+   mGlideLeft -= frames;
+
+   mDriveGlideFrames += frames;
+   const bool driveStep = mDriveGlideFrames >= kDriveGlideFrames;
+   const float cDrive = driveStep ? glideCoef(mDriveGlideFrames, mSampleRate) : 0.0f;
+   if (driveStep)
+      mDriveGlideFrames = 0;
+
+   GlidedRef cur[kMaxGlided], tgt[kMaxGlided];
+   const int n = glidedFields(mP, cur);
+   glidedFields(mTarget, tgt);
+   for (int i = 0; i < n; ++i) {
+      float &v = *cur[i].value;
+      const float target = *tgt[i].value;
+      switch (cur[i].how) {
+      case Glide::Linear:
+         v += (target - v) * mGlideCoef;
+         break;
+      case Glide::Octaves:
+         v = v > 0.0f && target > 0.0f ? v * std::pow(target / v, mGlideCoef) : target;
+         break;
+      case Glide::Drive:
+         v += (target - v) * cDrive;
+         break;
+      }
+   }
+   deriveLive();
+}
+
+void DrumEngine::derive(const DrumParams &p) {
    mP = p;
    const float sr = mSampleRate;
    DrumCoefs &c = mC;
@@ -517,9 +659,6 @@ void DrumEngine::setParams(const DrumParams &p) {
    // through R14 (22 k).
    c.bdClickDecay = rc(0.033e-6f * 22.0e3f, sr);
    c.bdPulseDecay = rc(0.0068e-6f * 22.0e3f, sr);
-   c.bdShapeK = 1.8f * std::pow(2.2f, 2.0f * p.bdShape - 1.0f);
-   c.bdShapeOff = std::tanh(c.bdShapeK * kBdShapeBias);
-   c.bdShapeNorm = 1.0f / (c.bdShapeOff - std::tanh(c.bdShapeK * (kBdShapeBias - 1.0f)));
    // R45 (4.7 k) and C13 (0.1 uF) on the noise into the click: 339 Hz. C11
    // (0.47 uF) into R8 || R44 couples the pulse: 49 Hz.
    mBd.noiseLp.setCutoff(339.0f, sr);
@@ -601,21 +740,49 @@ void DrumEngine::setParams(const DrumParams &p) {
    // of the three before it, as the printed waveform does.
    c.cpTailRise = rc(0.001f, sr);
 
+   mHat.setDecay(p.chDecaySec, p.ohDecaySec, sr);
+
+   c.muteRamp = approach(0.003f, sr);
+
+   deriveLive();
+}
+
+void DrumEngine::deriveLive() {
+   const DrumParams &p = mP;
+   const float sr = mSampleRate;
+   DrumCoefs &c = mC;
+
+   c.bdShapeK = 1.8f * std::pow(2.2f, 2.0f * p.bdShape - 1.0f);
+   c.bdShapeOff = std::tanh(c.bdShapeK * kBdShapeBias);
+   c.bdShapeNorm = 1.0f / (c.bdShapeOff - std::tanh(c.bdShapeK * (kBdShapeBias - 1.0f)));
+
    // The ROM voices. The hat ROM is read at "about 60 kHz divided by two"
    // (p.5); the cymbals' clocks follow their Tune knobs, a fifth either way.
-   const float crRate = kCymClockLow + (kCymClockHigh - kCymClockLow) * p.crTune;
-   const float rdRate = kCymClockLow + (kCymClockHigh - kCymClockLow) * p.rdTune;
-   mHat.setRates(sr, kHatClock, p.hatColor, p.dacBits);
-   mCrash.setRates(sr, crRate, p.cymColor, p.dacBits);
-   mRide.setRates(sr, rdRate, p.cymColor, p.dacBits);
-   mHat.setDecay(p.chDecaySec, p.ohDecaySec, sr);
+   if (p.crTune != mRatesSet[0] || p.rdTune != mRatesSet[1] || p.hatColor != mRatesSet[2] ||
+       p.cymColor != mRatesSet[3] || p.dacBits != mDacBitsSet) {
+      const float crRate = kCymClockLow + (kCymClockHigh - kCymClockLow) * p.crTune;
+      const float rdRate = kCymClockLow + (kCymClockHigh - kCymClockLow) * p.rdTune;
+      mHat.setRates(sr, kHatClock, p.hatColor, p.dacBits);
+      mCrash.setRates(sr, crRate, p.cymColor, p.dacBits);
+      mRide.setRates(sr, rdRate, p.cymColor, p.dacBits);
+      mRatesSet[0] = p.crTune;
+      mRatesSet[1] = p.rdTune;
+      mRatesSet[2] = p.hatColor;
+      mRatesSet[3] = p.cymColor;
+      mDacBitsSet = p.dacBits;
+   }
    mHat.setLevel(p.hhLevel * kHatGain);
    mCrash.setLevel(p.crLevel * kCymGain);
    mRide.setLevel(p.rdLevel * kCymGain * kRideLevel);
 
-   c.muteRamp = approach(0.003f, sr);
-
-   mDrive.setParams(p.driveModel, p.drive, p.driveBias, p.driveMix);
+   if (p.driveModel != mDriveModelSet || p.drive != mDriveSet || p.driveBias != mDriveBiasSet) {
+      mDrive.setParams(p.driveModel, p.drive, p.driveBias, p.driveMix);
+      mDriveModelSet = p.driveModel;
+      mDriveSet = p.drive;
+      mDriveBiasSet = p.driveBias;
+   } else {
+      mDrive.setMix(p.driveMix);
+   }
    mDriveTone.setCutoff(std::min(p.driveToneHz, sr * 0.45f), sr);
 }
 
@@ -919,6 +1086,11 @@ float DrumEngine::tickCp(float noise) {
 void DrumEngine::process(float *out, uint32_t n) {
    const float ramp = mC.muteRamp;
    for (uint32_t i = 0; i < n; ++i) {
+      if (mGlideLeft > 0 && ++mGlidePhase >= kGlideStep) {
+         mGlidePhase = 0;
+         glideStep(kGlideStep);
+      }
+
       // Flams and anything else that was scheduled.
       for (int k = 0; k < mPendingCount;) {
          if (mPending[k].delay == 0) {

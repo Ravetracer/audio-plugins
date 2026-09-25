@@ -243,6 +243,10 @@ public:
 
    void prepare(double sampleRate);
    void reset();
+   // The controls a sounding voice reads while it rings glide to what this
+   // hands over rather than jumping to it; the rest -- switches, and what a
+   // hit takes at its start -- take effect at once. The first call after
+   // prepare() or reset() is not a change and is taken as it is.
    void setParams(const DrumParams &p);
 
    // One hit. `accent` is the accent voltage for it, 0 for a plain step and 1
@@ -266,6 +270,15 @@ public:
 
 private:
    void startVoice(int voice, float accent, float gain);
+
+   // Everything derived from `p`, which becomes mP. What setParams() did
+   // before the controls glided.
+   void derive(const DrumParams &p);
+   // The part of derive() a glide step has to redo: the values the voices
+   // read through a derived coefficient rather than straight from mP.
+   void deriveLive();
+   // One step of the glide from mP towards mTarget, over `frames` samples.
+   void glideStep(uint32_t frames);
 
    // Every voice's own state, as the circuit has it.
    struct Bd {
@@ -341,6 +354,25 @@ private:
 
    DrumParams mP;
    DrumCoefs mC;
+
+   // What the controls last asked for. mP differs from it only while a glide
+   // is under way.
+   DrumParams mTarget;
+   bool mPrimed = false;           // whether setParams() has been called since reset()
+   uint32_t mGlideLeft = 0;        // samples left before mP is snapped to mTarget
+   uint32_t mGlideTotal = 0;       // how many a glide takes, from the sample rate
+   uint32_t mGlidePhase = 0;       // samples since the last glide step
+   uint32_t mDriveGlideFrames = 0; // samples since the drive stage's settings last stepped
+   float mGlideCoef = 1.0f;        // one glide step
+
+   // What the ROM voices and the drive stage were last derived for. Both are
+   // rederived on a glide step only when one of their inputs has moved: the
+   // drive stage's level match costs up to 30 us on the heaviest model.
+   float mRatesSet[4] = {-1.0f, -1.0f, -1.0f, -1.0f}; // crTune, rdTune, hatColor, cymColor
+   int mDacBitsSet = -1;
+   int mDriveModelSet = -1;
+   float mDriveSet = -1.0f;
+   float mDriveBiasSet = -2.0f;
    NoiseSource mNoise;
 
    Bd mBd;

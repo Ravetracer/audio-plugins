@@ -1,8 +1,24 @@
 # RumpelKiste -- status
 
-Version 0.2.0. Linux and Windows, CLAP and VST3. 76 parameters, 19 presets.
-Builds clean on both platforms; `render --selftest` passes all 182 checks on
+Version 0.2.1. Linux and Windows, CLAP and VST3. 76 parameters, 19 presets.
+Builds clean on both platforms; `render --selftest` passes all 190 checks on
 the Linux build and on the Windows build under wine.
+
+0.2.1 makes the controls glide, as SäureKiste 0.15.2 does. Every control
+jumped straight to each new value, so host automation and a dragged knob put a
+step into every voice still ringing: a zipper under a tom or a cymbal while its
+Tune is swept, a click on a Level or the Volume. The controls a ringing voice
+reads -- the Levels, the Tunes, the pitch and colour mods, Snappy, BD Attack
+and Shape, Tom Sweep and Noise, the drive bus and the Volume -- now follow
+their value through a 20 ms one-pole stepped every 8 samples (`glidedFields()`
+in `dsp/drums.cpp`, frequencies in octaves). What a hit takes at its start --
+the decays, Rim Gate, Clap Spread, BD Sweep -- and the switches act at once.
+`derive()` is the old `setParams()`; a glide step runs only `deriveLive()`,
+which rederives the ROM voices and the drive stage only when their inputs have
+moved. The first values after `prepare()` or `reset()` snap, so every preset
+and every voice renders bit for bit what 0.2.0 rendered, at 44.1, 48 and
+96 kHz. The glide checks were confirmed by putting the jump back and watching
+them fail.
 
 ## What works, and what is measured
 

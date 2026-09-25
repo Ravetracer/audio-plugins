@@ -90,6 +90,13 @@ Accent knob's accent, and one below plays plain.
 Every Level knob is a plain volume. What the others do is below; the numbers
 in brackets are what the circuit gives.
 
+**Every knob glides.** A turned knob, or a host's automation, reaches the sound
+over a few milliseconds rather than in one step — 63 % of the way in 20 ms —
+so sweeping a Tune under a ringing tom or cymbal bends it smoothly instead of
+stepping it, and a Level or the Volume never clicks. What a hit takes when it
+starts — the decays, Rim Gate, Clap Spread and BD Sweep — applies from the next
+hit, and the switches act at once.
+
 ### Bass drum
 
 A triangle oscillator rounded towards a sine by a pair of diodes, swept down

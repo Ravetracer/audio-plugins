@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.16)
-project(RumpelKiste VERSION 0.2.0 LANGUAGES CXX)
+project(RumpelKiste VERSION 0.2.1 LANGUAGES CXX)
 
 # RumpelKiste builds as a CLAP and as a VST3, for Linux and for Windows.
 #

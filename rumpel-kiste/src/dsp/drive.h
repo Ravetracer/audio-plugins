@@ -252,6 +252,11 @@ public:
    // `mix` is 0..1, where 0 is a bypass and 1 is the stage alone.
    void setParams(int model, float drive, float bias, float mix);
 
+   // The mix on its own. It is a crossfade and derives nothing, so the engine
+   // can move it on every step of a glide without paying for the level
+   // matching setParams() does.
+   void setMix(float mix) { mMix = clampv(mix, 0.0f, 1.0f); }
+
    inline float tick(float x) {
       if (mMix <= 0.0f)
          return x;

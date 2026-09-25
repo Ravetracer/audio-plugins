@@ -1620,6 +1620,78 @@ void testPresets(const clap_plugin_entry_t *entry, const std::vector<PresetEntry
    check(gPresetErrorCount == 0, "no preset reported an error", gPresetErrorCount, 0);
 }
 
+// The controls glide. A host sends automation as a staircase and a dragged
+// knob arrives once per block, so a control that jumped to each value put a
+// step into every voice still ringing. Measured in the audio: a control thrown
+// across its travel under a ringing voice has barely moved the sound 2 ms
+// later, and has arrived 300 ms later.
+void testGlide(const clap_plugin_entry_t *entry, double sr) {
+   std::printf("controls glide (%.0f Hz)\n", sr);
+   Transport tp;
+   tp.playing = false;
+   // On a block edge, because renderPlugin() puts a parameter at the top of
+   // its block.
+   const uint64_t jumpAt = static_cast<uint64_t>(0.1 * sr) / 256 * 256;
+   const uint64_t shortly = static_cast<uint64_t>(0.002 * sr);
+   const uint64_t later = jumpAt + static_cast<uint64_t>(0.3 * sr);
+   const uint64_t window = static_cast<uint64_t>(0.1 * sr);
+
+   auto run = [&](const std::string &lines, int key, bool move, clap_id id, double to) {
+      const clap_plugin_t *p = pluginWithPattern(entry, sr, "mode = MIDI\n" + lines);
+      std::vector<Scheduled> in = {noteAt(100, key, 1.0)};
+      if (move) {
+         Scheduled s{};
+         s.frame = jumpAt;
+         s.isNote = false;
+         s.param = makeParamValue(id, to);
+         in.push_back(s);
+      }
+      RenderResult r = renderPlugin(p, sr, 0.6, tp, in);
+      destroyPlugin(p);
+      return r;
+   };
+   auto level = [](const std::vector<float> &a, uint64_t from, uint64_t len) {
+      double sum = 0.0;
+      for (uint64_t i = from; i < from + len; ++i)
+         sum += static_cast<double>(a[i]) * a[i];
+      return std::sqrt(sum / static_cast<double>(len));
+   };
+   auto apart = [](const std::vector<float> &a, const std::vector<float> &b, uint64_t from,
+                   uint64_t len) {
+      double sum = 0.0;
+      for (uint64_t i = from; i < from + len; ++i)
+         sum += (static_cast<double>(a[i]) - b[i]) * (static_cast<double>(a[i]) - b[i]);
+      return std::sqrt(sum / static_cast<double>(len));
+   };
+   char msg[160];
+
+   // A tom's Tune thrown from the bottom to the top while it rings. Jumping,
+   // the pitch doubles on the next sample and the two renders part at once.
+   {
+      const std::string lines = "lt_tune = 0\nlt_decay = 378\n";
+      const RenderResult still = run(lines, 41, false, kParamLtTune, 0.0);
+      const RenderResult thrown = run(lines, 41, true, kParamLtTune, 1.0);
+      const double soon = apart(thrown.left, still.left, jumpAt, shortly) /
+                          level(still.left, jumpAt, shortly);
+      std::snprintf(msg, sizeof(msg),
+                    "a tom's Tune thrown up glides rather than jumping (%.3f apart after 2 ms)",
+                    soon);
+      check(soon < 0.25, msg, soon, 0.25);
+   }
+
+   // Volume thrown up under a crash, from silence.
+   {
+      const RenderResult raised = run("volume = -60\n", 49, true, kParamVolume, 0.0);
+      const RenderResult full = run("volume = 0\n", 49, false, kParamVolume, 0.0);
+      check(level(raised.left, jumpAt - window, window) == 0.0,
+            "Volume at its minimum is silent, so the glide starts from nothing");
+      const double soon = level(raised.left, jumpAt, shortly) / level(full.left, jumpAt, shortly);
+      const double after = level(raised.left, later, window) / level(full.left, later, window);
+      check(soon < 0.25, "Volume thrown up glides rather than jumping", soon, 0.25);
+      check(std::fabs(after - 1.0) < 0.01, "and arrives where it was sent", after, 1.0);
+   }
+}
+
 int runSelfTest(const clap_plugin_entry_t *entry, const std::vector<PresetEntry> &presets) {
    testParamTable();
    testPatternFormat();
@@ -1628,6 +1700,8 @@ int runSelfTest(const clap_plugin_entry_t *entry, const std::vector<PresetEntry>
       testVoices(sr);
    for (double sr : {44100.0, 48000.0})
       testSequencer(entry, sr);
+   for (double sr : {44100.0, 48000.0})
+      testGlide(entry, sr);
    testPresets(entry, presets, 48000.0);
    std::printf("\n%d checks, %d failed\n", gChecks, gFailures);
    return gFailures == 0 ? 0 : 1;
