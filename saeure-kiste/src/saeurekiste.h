@@ -27,7 +27,7 @@ constexpr char kPluginName[] = "SäureKiste";
 // ~/.clap instead of having one of each spelling.
 constexpr char kPluginDirName[] = "SaeureKiste";
 constexpr char kPluginVendor[] = "Ravetracer";
-constexpr char kPluginVersion[] = "0.15.1";
+constexpr char kPluginVersion[] = "0.15.2";
 
 // Nothing else keeps the two version sites in step, and drift here is quiet.
 // The build fails if the version here and the one in CMakeLists.txt disagree.

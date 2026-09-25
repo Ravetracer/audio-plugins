@@ -158,6 +158,74 @@ constexpr float kSweepSlowCeiling = 2.0f;
 // out of the per-sample path.
 constexpr uint32_t kControlBlock = 8;
 
+// How the continuous controls reach a new value. A host sends automation as a
+// staircase and a dragged knob arrives once per audio block, so a control that
+// jumped straight to each value put a step into the cutoff every few
+// milliseconds -- heard, on a fast sweep at any resonance, as a fine zipper or
+// a bubbling under the note. A pot on the machine has no steps to jump.
+//
+// Each control therefore follows its value through a one-pole with this time
+// constant, stepped on the control block. It is 63 % of the way after 20 ms,
+// short enough that a knob still feels connected to the sound and long enough
+// to fill in a host that sends one value per 1024-sample block. The glide is
+// snapped to its end after nine time constants, where what is left is 1e-4 of
+// the move -- a hundredth of a cent on the cutoff.
+constexpr float kGlideSec = 0.02f;
+constexpr float kGlideSettleTaus = 9.0f;
+
+// The drive stage's settings glide on a coarser grid, because rederiving the
+// stage runs a level match through its curve (see DriveStage::setParams) that
+// costs up to 30 us on the heaviest model. Every 64 samples is 750 Hz at 48 k,
+// still far faster than a hand moves a knob.
+constexpr uint32_t kDriveGlideFrames = 64;
+
+// Which controls glide, and how. Everything not listed -- the switches, and
+// the times, which set how fast something else moves rather than where the
+// sound is -- takes effect at once, so a field added to EngineParams is
+// immediate until it is put here.
+enum class Glide {
+   Linear,
+   Octaves, // a frequency: glided in pitch, so a sweep moves evenly across the range
+   Drive,   // linear, on the drive stage's grid
+};
+
+struct GlidedField {
+   float EngineParams::*field;
+   Glide how;
+};
+
+constexpr GlidedField kGlided[] = {
+   {&EngineParams::tuningCents, Glide::Linear},
+   {&EngineParams::cutoffHz, Glide::Octaves},
+   {&EngineParams::resonance, Glide::Linear},
+   {&EngineParams::envMod, Glide::Linear},
+   {&EngineParams::tracking, Glide::Linear},
+   {&EngineParams::accent, Glide::Linear},
+   {&EngineParams::drive, Glide::Drive},
+   {&EngineParams::toneHz, Glide::Octaves},
+   {&EngineParams::distBias, Glide::Drive},
+   {&EngineParams::distMix, Glide::Linear},
+   {&EngineParams::gain, Glide::Linear},
+   {&EngineParams::envBiasOct, Glide::Linear},
+   {&EngineParams::envDepthOct, Glide::Linear},
+   {&EngineParams::accSweepOct, Glide::Linear},
+   {&EngineParams::accGain, Glide::Linear},
+   {&EngineParams::droopHz, Glide::Octaves},
+   {&EngineParams::ladder, Glide::Linear},
+   {&EngineParams::resRange, Glide::Linear},
+   {&EngineParams::drift, Glide::Linear},
+   {&EngineParams::vibratoCents, Glide::Linear},
+   {&EngineParams::oscDrive, Glide::Linear},
+   {&EngineParams::filterFm, Glide::Linear},
+   {&EngineParams::ampSustain, Glide::Linear},
+};
+
+// A one-pole's step over `frames` samples.
+inline float glideCoef(uint32_t frames, double sampleRate) {
+   return 1.0f - static_cast<float>(
+                    std::exp(-static_cast<double>(frames) / (kGlideSec * sampleRate)));
+}
+
 // Drift. Two slow sines at rates with no common factor, so the wander never
 // repeats inside a take, plus one offset drawn per note. The scalings are in
 // cents at Drift = 100 %: a machine that is a quarter tone out with itself by
@@ -235,6 +303,11 @@ void AcidEngine::prepare(double sampleRate, uint32_t /*maxBlockFrames*/) {
    // The drive stage runs its models at twice this rate and has filters of its
    // own, so it has to be told the rate before anything is reset.
    mDriveStage.prepare(mSampleRate);
+   mGlideCoef = glideCoef(kControlBlock, mSampleRate);
+   mGlideTotal =
+      static_cast<uint32_t>(std::ceil(kGlideSettleTaus * kGlideSec * mSampleRate));
+   // The stage's filters depend on the rate, so it has to be derived again.
+   mDriveModelSet = -1;
    reset();
    updateDerived();
 }
@@ -273,10 +346,68 @@ void AcidEngine::reset() {
    mVibAge = 0.0f;
    mVibCents = 0.0f;
    mModWheel = 0.0f;
+   // A glide under way ends where it was going: after a reset the engine is
+   // where the controls are, not somewhere on the way to them.
+   if (mGlideLeft > 0) {
+      mGlideLeft = 0;
+      mParams = mTarget;
+      updateDerived();
+   }
+   // And the next values are where it starts rather than a move. Nothing is
+   // sounding, so there is nothing to glide -- and gliding from the defaults,
+   // or from the last preset, would sweep the first note of the next one.
+   mPrimed = false;
 }
 
 void AcidEngine::setParams(const EngineParams &p) {
-   mParams = p;
+   mTarget = p;
+   if (!mPrimed) {
+      mPrimed = true;
+      mParams = p;
+      mGlideLeft = 0;
+   } else {
+      // Everything at once, then the gliding controls put back where they
+      // were; glideParams() takes them the rest of the way.
+      const EngineParams was = mParams;
+      mParams = p;
+      for (const GlidedField &g : kGlided)
+         mParams.*g.field = was.*g.field;
+      mGlideLeft = mGlideTotal;
+   }
+   updateDerived();
+}
+
+void AcidEngine::glideParams(uint32_t frames) {
+   if (frames >= mGlideLeft) {
+      mGlideLeft = 0;
+      mParams = mTarget;
+      updateDerived();
+      return;
+   }
+   mGlideLeft -= frames;
+
+   const float c = frames == kControlBlock ? mGlideCoef : glideCoef(frames, mSampleRate);
+   mDriveGlideFrames += frames;
+   const bool driveStep = mDriveGlideFrames >= kDriveGlideFrames;
+   const float cDrive = driveStep ? glideCoef(mDriveGlideFrames, mSampleRate) : 0.0f;
+   if (driveStep)
+      mDriveGlideFrames = 0;
+
+   for (const GlidedField &g : kGlided) {
+      float &cur = mParams.*g.field;
+      const float target = mTarget.*g.field;
+      switch (g.how) {
+      case Glide::Linear:
+         cur += (target - cur) * c;
+         break;
+      case Glide::Octaves:
+         cur = cur > 0.0f && target > 0.0f ? cur * std::pow(target / cur, c) : target;
+         break;
+      case Glide::Drive:
+         cur += (target - cur) * cDrive;
+         break;
+      }
+   }
    updateDerived();
 }
 
@@ -343,8 +474,20 @@ void AcidEngine::updateDerived() {
    // The drive stage. Which model, how hard, where its operating point sits
    // and how much of it is heard -- all of it, including the gain staging and
    // the level matching, belongs to the stage itself; see dsp/drive.cpp.
-   mDriveStage.setParams(mParams.distType, mParams.drive, mParams.distBias,
-                         mParams.distMix);
+   //
+   // Only when one of its settings has moved, though: the level match makes
+   // it too dear to redo on every step of a glide that is moving something
+   // else.
+   if (mParams.distType != mDriveModelSet || mParams.drive != mDriveSet ||
+       mParams.distBias != mDriveBiasSet) {
+      mDriveStage.setParams(mParams.distType, mParams.drive, mParams.distBias,
+                            mParams.distMix);
+      mDriveModelSet = mParams.distType;
+      mDriveSet = mParams.drive;
+      mDriveBiasSet = mParams.distBias;
+   } else {
+      mDriveStage.setMix(mParams.distMix);
+   }
 }
 
 // ------------------------------------------------------------------- notes
@@ -535,6 +678,10 @@ void AcidEngine::process(float *outL, float *outR, uint32_t frames) {
       }
 
       const uint32_t n = (frames - i) < kControlBlock ? (frames - i) : kControlBlock;
+
+      // ------------------------------------------------ control rate: glide
+      if (mGlideLeft > 0)
+         glideParams(n);
 
       // ------------------------------------------------- control rate: drift
       if (mParams.drift > 0.0f) {

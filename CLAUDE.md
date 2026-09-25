@@ -50,7 +50,7 @@ audio-plugins/
 
 | # | Plugin | Folder | Status | Platforms | Formats | What it is |
 |---|--------|--------|--------|-----------|---------|------------|
-| 1 | **SäureKiste** | `saeure-kiste/` | 0.15.1 | Linux, Windows | CLAP, VST3 | a Roland TB-303 model, from the 1982 service notes, plus Robin Whittle's Devil Fish modification |
+| 1 | **SäureKiste** | `saeure-kiste/` | 0.15.2 | Linux, Windows | CLAP, VST3 | a Roland TB-303 model, from the 1982 service notes, plus Robin Whittle's Devil Fish modification |
 | 2 | **RumpelKiste** | `rumpel-kiste/` | 0.2.0 | Linux, Windows | CLAP, VST3 | a Roland TR-909 model, from the 1984 service notes, with SäureKiste's sequencer and drive stage |
 
 Naming follows the plugin, not a pattern: the CMake project, the installed

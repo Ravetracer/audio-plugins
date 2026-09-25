@@ -26,6 +26,8 @@ void DelayStage::prepare(double sampleRate) {
    // 50 ms to reach the new delay time. Short enough that the control feels
    // connected, long enough that the glide is a slide rather than a click.
    mSlew = onePoleCoef(0.05f, static_cast<float>(mSampleRate));
+   // 20 ms, the engine's glide, so every control on the instrument moves alike.
+   mParamSlew = onePoleCoef(0.02f, static_cast<float>(mSampleRate));
    reset();
 }
 
@@ -41,9 +43,9 @@ void DelayStage::setParams(bool on, int mode, float timeSec, float feedback, flo
                            float width) {
    mOn = on;
    mMode = mode < 0 || mode >= kNumDelayModes ? kDelayStereo : mode;
-   mFeedback = feedback < 0.0f ? 0.0f : feedback;
-   mMix = clampv(mix, 0.0f, 1.0f);
-   mWidth = clampv(width, 0.0f, 2.0f);
+   mFeedbackTarget = feedback < 0.0f ? 0.0f : feedback;
+   mMixTarget = on ? clampv(mix, 0.0f, 1.0f) : 0.0f;
+   mWidthTarget = clampv(width, 0.0f, 2.0f);
 
    // One sample is the shortest a line can be read at without the read head
    // passing the write head; the top is whatever the buffer holds.
@@ -53,10 +55,14 @@ void DelayStage::setParams(bool on, int mode, float timeSec, float feedback, flo
    mRight.target = mMode == kDelayStereo ? clampv(samples * kStereoRatio, 1.0f, maxLen) : samples;
    // The first time round, the heads start where they are pointed rather than
    // gliding up to it from zero.
+   // The same holds for the level controls.
    if (!mPrimed) {
       mPrimed = true;
       mLeft.length = mLeft.target;
       mRight.length = mRight.target;
+      mFeedback = mFeedbackTarget;
+      mMix = mMixTarget;
+      mWidth = mWidthTarget;
    }
 }
 
@@ -64,24 +70,17 @@ void DelayStage::process(float *left, float *right, uint32_t frames) {
    if (!left || !right || mLeft.buffer.empty())
       return;
 
-   // Off, or fully dry: nothing to add. The buffers are left holding whatever
-   // was last written so that switching the stage back on picks up where it
-   // was rather than from silence -- but the tail is declared over, because
-   // nothing of it is being heard.
-   if (!mOn || mMix <= 0.0f) {
+   // Off, or fully dry, and done gliding there: nothing to add. The buffers
+   // are left holding whatever was last written so that switching the stage
+   // back on picks up where it was rather than from silence -- but the tail is
+   // declared over, because nothing of it is being heard.
+   if (mMix <= 0.0f && mMixTarget <= 0.0f) {
       mRingFrames = 0;
       return;
    }
 
    const size_t size = mLeft.buffer.size();
    const uint32_t hold = static_cast<uint32_t>(mSampleRate * kTailHoldSeconds);
-
-   // [musicdsp] 256, the volume-adjusted form: the mid and side coefficients
-   // are constant across the block, so they are worked out once.
-   const float span = 1.0f + mWidth;
-   const float norm = 1.0f / (span > 2.0f ? span : 2.0f);
-   const float coefM = norm;
-   const float coefS = mWidth * norm;
 
    float loudest = 0.0f;
 
@@ -91,6 +90,16 @@ void DelayStage::process(float *left, float *right, uint32_t frames) {
 
       mLeft.length += (mLeft.target - mLeft.length) * mSlew;
       mRight.length += (mRight.target - mRight.length) * mSlew;
+      mFeedback += (mFeedbackTarget - mFeedback) * mParamSlew;
+      mMix += (mMixTarget - mMix) * mParamSlew;
+      mWidth += (mWidthTarget - mWidth) * mParamSlew;
+
+      // [musicdsp] 256, the volume-adjusted form. Per sample, because Width
+      // may be gliding.
+      const float span = 1.0f + mWidth;
+      const float norm = 1.0f / (span > 2.0f ? span : 2.0f);
+      const float coefM = norm;
+      const float coefS = mWidth * norm;
 
       const float tapL = mLeft.read(mWrite);
       const float tapR = mRight.read(mWrite);
@@ -173,6 +182,16 @@ void DelayStage::process(float *left, float *right, uint32_t frames) {
       left[i] = dryL + (outL - dryL) * mMix;
       right[i] = dryR + (outR - dryR) * mMix;
    }
+
+   // A one-pole never quite arrives, and the stage only switches itself off
+   // once the mix is exactly where it was sent.
+   auto settle = [](float &cur, float target) {
+      if (std::fabs(target - cur) < 1.0e-5f)
+         cur = target;
+   };
+   settle(mFeedback, mFeedbackTarget);
+   settle(mMix, mMixTarget);
+   settle(mWidth, mWidthTarget);
 
    if (loudest > kTailFloor)
       mRingFrames = hold;

@@ -2705,6 +2705,43 @@ int runSelfTest(const clap_plugin_entry_t *entry, double sampleRate) {
             check(!d.ringing(), "a delay that is off is not ringing");
          }
 
+         // Switching it off fades the repeats out rather than cutting them, and
+         // then it is off. The line is filled with a sine first, so there is a
+         // repeat sounding under the switch wherever it lands; the input then
+         // goes silent, so what comes out after the switch is the delay alone.
+         {
+            DelayStage d;
+            d.prepare(kRate);
+            d.setParams(true, kDelayMono, kTime, 0.5f, 1.0f, 1.0f);
+            std::vector<float> bl(512, 0.0f), br(512, 0.0f);
+            for (int block = 0; block < 20; ++block) {
+               for (int i = 0; i < 512; ++i)
+                  bl[i] = br[i] = 0.5f * std::sin(static_cast<float>(block * 512 + i) * 0.05f);
+               d.process(bl.data(), br.data(), 512);
+            }
+            const float before = std::fabs(bl[511]);
+
+            d.setParams(false, kDelayMono, kTime, 0.5f, 1.0f, 1.0f);
+            std::fill(bl.begin(), bl.end(), 0.0f);
+            std::fill(br.begin(), br.end(), 0.0f);
+            d.process(bl.data(), br.data(), 512);
+            float fading = 0.0f;
+            for (int i = 0; i < 48; ++i) // the first millisecond
+               fading = std::max(fading, std::fabs(bl[i]));
+            check(before > 0.05f && fading > 0.05f,
+                  "a delay switched off mid-repeat does not cut it on the next sample");
+            for (int block = 0; block < 40; ++block) { // ~430 ms, twenty time constants
+               std::fill(bl.begin(), bl.end(), 0.0f);
+               std::fill(br.begin(), br.end(), 0.0f);
+               d.process(bl.data(), br.data(), 512);
+            }
+            bool silent = true;
+            for (int i = 0; i < 512; ++i)
+               if (bl[i] != 0.0f || br[i] != 0.0f)
+                  silent = false;
+            check(silent && !d.ringing(), "and once faded it is off and not ringing");
+         }
+
          // The synced times are the note values they are named after.
          check(delayDivisionBeats(kDelayDiv4) == 1.0, "a quarter note is one beat");
          check(delayDivisionBeats(kDelayDiv8) == 0.5, "an eighth is half of one");
@@ -2803,6 +2840,72 @@ int runSelfTest(const clap_plugin_entry_t *entry, double sampleRate) {
          buildPattern(sampleRate, 2.0, 130.0, 36, 0.55, 0.55);
       const RenderResult flatRes = renderSequence(plugin, sampleRate, 512, 2.0, 0.5, flat);
       check(seq.rms > flatRes.rms * 1.02, "accented notes are louder than unaccented ones");
+
+      // --- the controls glide. A host sends automation as a staircase and a
+      // dragged knob arrives once per block, so a control that jumped to each
+      // value put a step into the sound every few milliseconds -- a zipper
+      // under a fast cutoff sweep. Measured in the audio, not in the engine: a
+      // control thrown across its whole travel is still near where it started
+      // 2 ms later, and has arrived 300 ms later.
+      {
+         using namespace saeurekiste;
+         const uint32_t jumpAt = static_cast<uint32_t>(0.5 * sampleRate);
+         const uint32_t shortly = static_cast<uint32_t>(0.002 * sampleRate);
+         const uint32_t later = jumpAt + static_cast<uint32_t>(0.3 * sampleRate);
+         const uint32_t window = static_cast<uint32_t>(0.1 * sampleRate);
+         // A held C6: its period is 46 samples at 48 k, so even the 2 ms window
+         // holds two whole cycles of it. Env Mod at zero, so nothing but the
+         // knob moves the cutoff.
+         auto renderMove = [&](uint32_t id, double from, double to, bool move) {
+            gParamOverrides.clear();
+            gParamOverrides.emplace_back(kParamEnvMod, 0.0);
+            gParamOverrides.emplace_back(id, move ? from : to);
+            plugin->reset(plugin);
+            std::vector<SeqEvent> s = {{0, CLAP_EVENT_NOTE_ON, 84, 0.5, 1}};
+            if (move)
+               s.push_back(paramEvent(jumpAt, id, to));
+            s.push_back({static_cast<uint32_t>(1.0 * sampleRate), CLAP_EVENT_NOTE_OFF, 84, 0.0,
+                         1});
+            const RenderResult r = renderSequence(plugin, sampleRate, 512, 1.0, 0.1, s);
+            gParamOverrides.clear();
+            return r;
+         };
+         // The second difference's RMS: how much top end there is.
+         auto top = [](const RenderResult &r, uint32_t from, uint32_t len) {
+            double sum = 0.0;
+            for (uint32_t i = from; i < from + len; ++i) {
+               const double d = r.interleaved[i * 2] - 2.0 * r.interleaved[(i - 1) * 2] +
+                                r.interleaved[(i - 2) * 2];
+               sum += d * d;
+            }
+            return std::sqrt(sum / len);
+         };
+         auto level = [](const RenderResult &r, uint32_t from, uint32_t len) {
+            double sum = 0.0;
+            for (uint32_t i = from; i < from + len; ++i)
+               sum += static_cast<double>(r.interleaved[i * 2]) * r.interleaved[i * 2];
+            return std::sqrt(sum / len);
+         };
+
+         const RenderResult thrown = renderMove(kParamCutoff, 0.0, 1.0, true);
+         const RenderResult open = renderMove(kParamCutoff, 0.0, 1.0, false);
+         const double soon = top(thrown, jumpAt, shortly) / top(open, jumpAt, shortly);
+         const double after = top(thrown, later, window) / top(open, later, window);
+         std::printf("       cutoff thrown open: %.3f of the top end after 2 ms, %.4f after "
+                     "300 ms\n",
+                     soon, after);
+         check(soon < 0.25, "a cutoff thrown open glides rather than jumping");
+         check(std::fabs(after - 1.0) < 0.01, "and arrives where it was sent");
+
+         const RenderResult raised = renderMove(kParamVolume, -60.0, 0.0, true);
+         const RenderResult full = renderMove(kParamVolume, -60.0, 0.0, false);
+         const double vSoon = level(raised, jumpAt, shortly) / level(full, jumpAt, shortly);
+         const double vAfter = level(raised, later, window) / level(full, later, window);
+         check(level(raised, jumpAt - window, window) == 0.0,
+               "Volume at its minimum is silent, so the glide starts from nothing");
+         check(vSoon < 0.25, "Volume thrown up glides rather than jumping");
+         check(std::fabs(vAfter - 1.0) < 0.01, "and arrives where it was sent");
+      }
 
       // --- the Devil Fish controls. Every one of them has to do the thing its
       // documentation says, and the stock setting has to do nothing at all --

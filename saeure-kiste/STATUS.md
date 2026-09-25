@@ -1,11 +1,25 @@
 # SäureKiste -- status
 
-Version 0.15.1. Linux and Windows, CLAP and VST3. 65 parameters, 30 presets,
-builds clean, self-test passes with no failures across 304 checks, and
+Version 0.15.2. Linux and Windows, CLAP and VST3. 65 parameters, 30 presets,
+builds clean, self-test passes with no failures across 311 checks, and
 `tools/check-instances.sh` passes with two editors open at once.
 
 Six of seven fixes were confirmed by backing the bug out and watching the suite
 fail; the seventh has no contract to assert. See `TODO.md` §3.
+
+0.15.2 makes the continuous controls glide. Every one of them jumped straight
+to each new value, so host automation (a staircase) and a dragged knob (one
+value per block) put a step into the cutoff every few milliseconds, heard on a
+fast sweep as a zipper or a bubbling. `AcidEngine::setParams()` now takes
+switches and times at once and glides the rest through a 20 ms one-pole on the
+control block -- the fields are listed in `kGlided` in `acid_engine.cpp`,
+frequencies in octaves. The drive stage's Drive and Bias glide on a 64-sample
+grid and it is rederived only when they move, because its level match costs up
+to 30 us. The delay glides Mix, Feedback and Width per sample and Enable off
+fades the mix. The first values after `prepare()` or `reset()` snap, so every
+factory preset renders bit for bit what 0.15.1 rendered, at 44.1, 48 and
+96 kHz. Seven new checks; the three that assert the glide were confirmed by
+putting the jump back and watching them fail.
 
 0.15.1 gives the help line a fixed three-line area under the controls. In
 0.15.0 a long tip or preset description wrapped upward over the controls

@@ -121,6 +121,16 @@ private:
    float mMix = 0.0f;
    float mWidth = 1.0f;
    float mSlew = 1.0f;  // how fast the read heads follow their target
+
+   // Mix, Feedback and Width glide to their controls rather than jumping, for
+   // the reason the engine's controls do: a host's automation and a dragged
+   // knob both arrive as steps, and a step in the mix is a click. Switching the
+   // stage off is a glide of the mix to nothing, so the repeats fade out
+   // instead of being cut.
+   float mFeedbackTarget = 0.0f;
+   float mMixTarget = 0.0f;
+   float mWidthTarget = 1.0f;
+   float mParamSlew = 1.0f;
    // Whether a delay time has been set since the last reset. The read heads
    // glide to a new one, which is the point of them, but the *first* one is
    // not a change -- gliding up to it from zero would smear the first repeat

@@ -98,6 +98,9 @@ public:
 
    void prepare(double sampleRate, uint32_t maxBlockFrames);
    void reset();
+   // The continuous controls glide to what this hands over rather than jumping
+   // to it; switches and times take effect at once. The first call after
+   // prepare() or reset() is not a change and is taken as it is.
    void setParams(const EngineParams &p);
 
    void noteOn(int16_t port, int16_t channel, int16_t key, int32_t noteId, double velocity);
@@ -165,11 +168,29 @@ private:
    static float softKnee(float x, float knee);
 
    void updateDerived();
+   // One control block's step of the glide from mParams towards mTarget, for
+   // a block of `frames` samples.
+   void glideParams(uint32_t frames);
 
    // ------------------------------------------------------------------- state
    double mSampleRate = 48000.0;
 
+   // What the engine is running at, and what the controls last asked for. The
+   // two differ only while a glide is under way.
    EngineParams mParams{};
+   EngineParams mTarget{};
+   bool mPrimed = false;          // whether setParams() has been called since reset()
+   uint32_t mGlideLeft = 0;       // samples left before mParams is snapped to mTarget
+   uint32_t mGlideTotal = 0;      // how many a glide takes, from the sample rate
+   uint32_t mDriveGlideFrames = 0; // samples since the drive stage's settings last stepped
+   float mGlideCoef = 1.0f;       // a full control block's step
+
+   // What the drive stage was last derived for. Its setParams() runs a level
+   // match through the curve that costs up to 30 us on the heaviest model, so it
+   // is redone only when one of these has moved.
+   int mDriveModelSet = -1;
+   float mDriveSet = -1.0f;
+   float mDriveBiasSet = -2.0f;
 
    HeldNote mHeld[kStackSize]{};
    int mHeldCount = 0;

@@ -8,7 +8,7 @@ subtitle: CLAP and VST3 instrument for Linux and Windows
 
 *A monophonic acid bass synthesiser. Linux and Windows, CLAP and VST3.*
 
-Version 0.15.1
+Version 0.15.2
 
 ---
 
@@ -98,6 +98,15 @@ that the machine does not have. Everything else is an addition: one of them is
 marked **(added)** where it sits beside originals, the VCF Mod, Drive, Delay,
 Vibrato and Mods panels are additions entire and say so in their headings, and
 the controls of the modification are gathered in §10.
+
+**Every knob glides.** A turned knob, or a host's automation, reaches the sound
+over a few milliseconds rather than in one step — 63 % of the way in 20 ms —
+the way a pot on a circuit board moves a voltage. A fast sweep of Cutoff is
+therefore one continuous sweep, not a staircase of small jumps that can be heard
+as a zipper under the note. The switches (Waveform, Type, Muffler and the like)
+and the time controls (Decay, Slide Time and the rest) take effect at once,
+because they have nothing to glide through. So does everything a preset sets
+when it loads onto a silent instrument.
 
 ### VCO
 
@@ -309,7 +318,9 @@ stopped.
 **Turning Time while it runs** bends the repeats rather than clicking. The read
 head glides to a new setting over about 50 ms, which is a tape delay's behaviour
 and is worth having on purpose; a host moving the tempo under a synced delay
-does the same thing.
+does the same thing. Mix, Feedback and Width glide as every other knob does,
+and Enable off fades the repeats out over the same few milliseconds instead of
+cutting them.
 
 ### Output
 
