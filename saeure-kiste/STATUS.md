@@ -1,11 +1,16 @@
 # SäureKiste -- status
 
-Version 0.15.0. Linux and Windows, CLAP and VST3. 65 parameters, 30 presets,
+Version 0.15.1. Linux and Windows, CLAP and VST3. 65 parameters, 30 presets,
 builds clean, self-test passes with no failures across 304 checks, and
 `tools/check-instances.sh` passes with two editors open at once.
 
 Six of seven fixes were confirmed by backing the bug out and watching the suite
 fail; the seventh has no contract to assert. See `TODO.md` §3.
+
+0.15.1 gives the help line a fixed three-line area under the controls. In
+0.15.0 a long tip or preset description wrapped upward over the controls
+above it; now it wraps downward into its own space and is cut with an ellipsis
+after the third line. The window is 26 px taller, collapsed and expanded.
 
 0.15.0 makes CHAIN and REPEAT per pattern, adds a semitone transpose, and wraps
 the help line.

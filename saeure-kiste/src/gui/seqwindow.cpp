@@ -1464,12 +1464,13 @@ private:
                     "control. Click a menu to pick from the list. Drag MIDI into the host to "
                     "take the pattern with you.";
 
-      // Wrapped at the window's width. The last line sits where a one-line
-      // message always has, and a longer one grows upward over whatever is
-      // above it, on the window's own background, rather than making the
-      // window taller for the few tips that need it.
+      // Wrapped at the window's width into the help area under the controls,
+      // which has room for kHelpLines lines. The first sits where a one-line
+      // message always has; anything past the last line is cut with an
+      // ellipsis rather than drawn over the controls above.
       std::vector<std::string> lines;
       std::string line;
+      bool cut = false;
       for (const char *p = msg; *p;) {
          const char *end = p;
          while (*end && *end != ' ')
@@ -1479,25 +1480,30 @@ private:
          if (!line.empty() && textWidth(cr, trial.c_str(), 10, false) > mSpec.contentW) {
             lines.push_back(line);
             line = word;
+            if (static_cast<int>(lines.size()) == kHelpLines) {
+               cut = true;
+               break;
+            }
          } else {
             line = trial;
          }
          p = *end ? end + 1 : end;
       }
-      if (!line.empty())
+      if (!cut && !line.empty())
          lines.push_back(line);
-
-      constexpr double kLineH = 13.0;
-      const double last = mHelpY + kHelpH - 8;
-      const double first = last - kLineH * static_cast<double>(lines.size() - 1);
-      if (lines.size() > 1) {
-         setColor(cr, mSpec.theme.bgBottom);
-         cairo_rectangle(cr, 0, first - 14.0, kMargin * 2 + mSpec.contentW, last - first + 22.0);
-         cairo_fill(cr);
+      if (cut) {
+         std::string &tail = lines.back();
+         while (!tail.empty() && textWidth(cr, (tail + "\u2026").c_str(), 10, false) > mSpec.contentW) {
+            const size_t sp = tail.find_last_of(' ');
+            tail.erase(sp == std::string::npos ? 0 : sp);
+         }
+         tail += "\u2026";
       }
+
+      const double first = mHelpY + kHelpLineY;
       setColor(cr, mSpec.theme.textMute);
       for (size_t i = 0; i < lines.size(); ++i)
-         drawText(cr, kMargin, first + kLineH * static_cast<double>(i), lines[i].c_str(), 10,
+         drawText(cr, kMargin, first + kHelpLineH * static_cast<double>(i), lines[i].c_str(), 10,
                   false, Align::Left);
    }
 

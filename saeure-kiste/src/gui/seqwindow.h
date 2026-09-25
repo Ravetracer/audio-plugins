@@ -106,7 +106,12 @@ constexpr int kMargin = 16;
 constexpr int kGap = 8;
 constexpr int kHeaderH = 66;
 constexpr int kBarH = 32;
-constexpr int kHelpH = 24;
+// The help line under the controls: room for three lines of text, the first
+// at the baseline a single line has always had.
+constexpr int kHelpLines = 3;
+constexpr int kHelpLineH = 13;
+constexpr int kHelpLineY = 16;
+constexpr int kHelpH = 24 + (kHelpLines - 1) * kHelpLineH;
 constexpr double kMenuRowH = 20.0;
 constexpr double kMenuPad = 4.0;
 constexpr double kKnobR = 21.0;
