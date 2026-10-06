@@ -275,6 +275,7 @@ aurum/
 ├── install.sh            configure, build, self-test, install to ~/.clap, ~/.vst3
 ├── README.md
 ├── docs/PLAN.md          design, phases and status — the source of truth
+├── docs/manual.md        the manual's prose, docs/images/ its screenshots
 ├── presets/              factory presets
 ├── src/
 │   ├── aurum.h           identity constants (kPluginId, kPluginVersion, ...)
@@ -286,8 +287,9 @@ aurum/
 │   ├── gui/              X11Window / Win32Window (NativeWindow.h picks one),
 │   │                     Cairo widgets, editor, preset browser, FileDialog
 │   └── util/             SpscQueue, Path.h (UTF-8 paths for std::filesystem)
-└── tests/                geq_test, engine_test, import_test, longrun_test,
-                          gui_snapshot, clap_gui_host
+├── tests/                geq_test, engine_test, import_test, longrun_test,
+│                         gui_snapshot, clap_gui_host
+└── tools/                docgen.cpp, make-manual.sh, make-screenshots.sh
 ```
 
 What differs from the other plugins:
@@ -638,6 +640,16 @@ a style choice.
 plugin's CMake project, because release builds switch the offline tools off and
 the manual still has to build. It needs only the plugin's `params.cpp` and the
 shared parameter code.
+
+**Aurum has its own.** The shared docgen reads a PluginCore `ParamDesc` table,
+which Aurum does not have, so `aurum/tools/docgen.cpp` reads Aurum's
+`ParamTable` and its compiled-in `factoryPresets()` instead, and
+`aurum/tools/make-manual.sh` renders through the shared `manual.py` and
+`manual.css` unchanged. `release.sh` runs a plugin's own
+`tools/make-manual.sh <outdir>` when one exists. Aurum's parameters carry no
+help text, so its manual uses `{{PARAMETER_SUMMARY}}` only. Its screenshots
+come from `aurum/tools/make-screenshots.sh`, which starts a private Xvfb with
+scratch XDG dirs and drives `clap_gui_host` -- never the user's desktop.
 
 **There is no collection logo yet.** `make-manual.sh` looks for
 `_designs/plugincore-logo-horizontal-4000.png` and, not finding it, passes no

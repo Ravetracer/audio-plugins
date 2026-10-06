@@ -70,6 +70,16 @@ The runtime and Cairo are linked in; the binaries need no DLLs beside them.
   `$XDG_CONFIG_HOME/Aurum/settings.ini`; on Windows `%APPDATA%\Aurum\settings.ini`.
 - File dialogs use `zenity` or `kdialog` on Linux, the system dialogs on Windows.
 
+## Manual
+
+`docs/manual.md` is the manual's text; `tools/make-manual.sh [outdir]` builds
+it as HTML and PDF (default `../dist/manuals`), generating the parameter
+appendix and the preset library from the plugin itself with `tools/docgen.cpp`.
+`tools/make-screenshots.sh` regenerates `docs/images/` on a private Xvfb
+display (`AURUM_BUILD=<build dir>`, default `build`); run it after any change to
+the window and look at the result. Needs python3 with `markdown`, wkhtmltopdf,
+Xvfb, xdotool and ImageMagick.
+
 ## Tests
 
 - `build/tests/geq_test` - accuracy of the attenuation filter fit.

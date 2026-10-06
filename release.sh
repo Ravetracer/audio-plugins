@@ -287,7 +287,13 @@ else
          echo "!!  ${plugin} has no docs/manual.md -- shipping it without a manual" >&2
          continue
       fi
-      if ! "${here}/shared/tools/make-manual.sh" "$plugin" "$manual_dir"; then
+      # A plugin not built on shared/ (Aurum) cannot be documented by the
+      # shared docgen and brings its own script, which takes the output folder.
+      manual_cmd=("${here}/shared/tools/make-manual.sh" "$plugin" "$manual_dir")
+      if [ -x "${here}/${plugin}/tools/make-manual.sh" ]; then
+         manual_cmd=("${here}/${plugin}/tools/make-manual.sh" "$manual_dir")
+      fi
+      if ! "${manual_cmd[@]}"; then
          echo "!!  the ${plugin} manual could not be built -- shipping it without one" >&2
       fi
    done
