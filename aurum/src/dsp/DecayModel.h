@@ -33,6 +33,12 @@ struct DecayModel
     double hfMult = 0.6, hfFreq = 4000.0;
     double brightness = 0.5; // 0..1, 0.5 neutral
     std::array<DecayBand, kNumDecayBands> bands{};
+    // Calibration of the style's decay against reference renders, at the
+    // octaves 63 Hz .. 16 kHz (see ReverbEngine::decayModelFor): a log2
+    // multiplier on the decay time, and an absorption in 1/s that limits it
+    // however long Space and Length make it.
+    std::array<double, 9> calib{};
+    std::array<double, 9> absorb{};
     // Internal correction of a reverb structure whose measured decay deviates
     // from its nominal loop lengths (applied to the design, not the display).
     double corrScale = 1.0;   // broadband T60 factor
@@ -109,21 +115,59 @@ struct DecayModel
     {
         const double lw = (lfFreq / f) * (lfFreq / f);
         const double hw = (f / hfFreq) * (f / hfFreq);
-        double s = std::log2(lfMult) * lw / (1.0 + lw) + std::log2(hfMult) * hw / (1.0 + hw);
+        const double s = std::log2(lfMult) * lw / (1.0 + lw) + std::log2(hfMult) * hw / (1.0 + hw);
+        return s + calibLog2(f);
+    }
 
+    // What Brightness does to the decay; most of what it does is a tone
+    // change (EngineControl). Fitted to reference renders of a 2.5 s room at
+    // -100 .. +100 %, and to presets with long decays, which showed that a
+    // darker setting is an absorption in 1/s (it limits a long tail far more
+    // than a short one) while a brighter one only lengthens the highs a
+    // little in any room.
+    double brightnessAbsorption(double f) const
+    {
         const double r = clamp(brightness, 0.0, 1.0) * 2.0 - 1.0;
-        const double bw = (f / 3500.0) * (f / 3500.0);
-        const double hfAmt = r < 0.0 ? 1.8 * r : 0.4 * r;
-        const double lwB = (300.0 / f) * (300.0 / f);
-        s += hfAmt * bw / (1.0 + bw) - 0.15 * r * lwB / (1.0 + lwB);
-        return s;
+        if (r >= 0.0)
+            return 0.0;
+        return 0.33 * std::pow(-r, 1.4) * std::pow(std::min(f / 16000.0, 1.3), 1.05);
+    }
+    double brightnessLog2(double f) const
+    {
+        const double r = clamp(brightness, 0.0, 1.0) * 2.0 - 1.0;
+        if (r <= 0.0)
+            return 0.0;
+        return 0.2 * std::tanh(3.0 * r) / std::tanh(3.0) * std::pow(std::min(f / 16000.0, 1.3), 0.6);
+    }
+    double absorbAt(double f) const
+    {
+        const double pos = std::log2(std::max(f, 1.0) / 62.5);
+        if (pos <= 0.0)
+            return absorb[0];
+        if (pos >= 8.0)
+            return absorb[8];
+        const int i = static_cast<int>(pos);
+        return absorb[static_cast<size_t>(i)] + (absorb[static_cast<size_t>(i + 1)] - absorb[static_cast<size_t>(i)]) * (pos - i);
+    }
+
+    // The calibration curve, linear in log frequency between the octaves.
+    double calibLog2(double f) const
+    {
+        const double pos = std::log2(std::max(f, 1.0) / 62.5);
+        if (pos <= 0.0)
+            return calib[0];
+        if (pos >= 8.0)
+            return calib[8];
+        const int i = static_cast<int>(pos);
+        return calib[static_cast<size_t>(i)] + (calib[static_cast<size_t>(i + 1)] - calib[static_cast<size_t>(i)]) * (pos - i);
     }
 
     double nominalT60() const { return baseT60 * decayRate; }
 
     double t60At(double f) const
     {
-        double t = nominalT60() * std::exp2(roomLog2(f) + userLog2(f));
+        double t = nominalT60() * std::exp2(roomLog2(f) + userLog2(f) + brightnessLog2(f));
+        t = 1.0 / (1.0 / t + absorbAt(f) + brightnessAbsorption(f));
         if (corrScale != 1.0 || corrLfScale != 1.0)
         {
             const double lw = (corrLfFreq / f) * (corrLfFreq / f);

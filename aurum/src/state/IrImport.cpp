@@ -17,12 +17,13 @@ namespace {
 constexpr double kBands[] = {63, 125, 250, 500, 1000, 2000, 4000, 8000, 16000};
 constexpr int kNumBands = 9;
 
-// Energy envelope of one octave band (sum over channels).
-std::vector<double> bandEnergy(const AudioData& ir, double fc, size_t start)
+// Energy envelope of one band around fc (sum over channels): Q sqrt(2) is an
+// octave, Q 4.32 a third of one.
+std::vector<double> bandEnergy(const AudioData& ir, double fc, size_t start, double q)
 {
     const size_t n = ir.frames() - start;
     std::vector<double> e(n, 0.0);
-    const dsp::SvfCoeffs bp = dsp::SvfCoeffs::bandPass(fc, std::sqrt(2.0), ir.sampleRate);
+    const dsp::SvfCoeffs bp = dsp::SvfCoeffs::bandPass(fc, q, ir.sampleRate);
     for (const auto& ch : ir.channels)
     {
         dsp::SvfState a, b;
@@ -250,8 +251,11 @@ bool importImpulseResponse(const AudioData& ir, const std::vector<double>& curre
     {
         if (fc > 0.42 * fs)
             break;
-        const std::vector<double> e = bandEnergy(ir, fc, onset);
-        const double t = decayTime(e, fs);
+        // Levels over the whole octave; the decay time over a third of one,
+        // so that a steep step in the decay (a high shelf, say) is measured
+        // where it is and not smeared from the neighbouring band.
+        const std::vector<double> e = bandEnergy(ir, fc, onset, std::sqrt(2.0));
+        const double t = decayTime(bandEnergy(ir, fc, onset, 4.32), fs);
         const double total = std::accumulate(e.begin(), e.end(), 0.0);
         freqs.push_back(fc);
         t60s.push_back(t);

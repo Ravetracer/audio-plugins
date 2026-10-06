@@ -205,18 +205,21 @@ eighth. A synced pre-delay is never longer than 500 ms.
   modulation that keeps a long tail from sounding static. Beyond half way the
   modulation grows into a chorus: lush, wide and clearly moving — at 100 % it is
   a reverb and a chorus in one.
-- **Air** is the brightness of the space. Turned down, the highs of the
-  reflections and of the tail are damped and the room sounds soft, heavy,
-  furnished; turned up, it is open and glassy. Air also changes how long the
-  highs last, which the Decay Contour shows.
+- **Air** is the brightness of the space. Turned down, the reverb loses its
+  highs — gently at first, then down to a dark, muffled room — and the highs
+  also die away sooner, much more so in a long tail than in a short one, as air
+  and soft surfaces absorb them. Turned up, the reverb opens up: the top
+  becomes airy and glassy, the low end lighter, and the highs last a little
+  longer. The Decay Contour shows what Air does to the decay.
 - **Depth** is how far away the listener stands. Near, the early reflections
   are strong, bright and immediate; far, they arrive later, are more diffuse and
   blend into a tail that builds up slowly.
-- **Density** is how thick the reverb is. Turned down, the reflections thin out
-  into distinct echoes — good for a lively, grainy space. Turned up, the reverb
-  becomes denser and smoother, and above the middle the signal going into the
-  reverb is driven into a soft saturation, which adds warmth and, at the top,
-  audible grit.
+- **Density** is how thick the reverb is, and with it how much reverb there
+  is. Turned down, the reflections thin out into distinct echoes and the
+  reverb steps back — good for a lively, airy space that stays out of the way;
+  at the bottom it is about 14 dB quieter. Turned up, the reverb becomes
+  denser, smoother and fuller, up to about 8 dB louder at the top, and above
+  the middle a subtle saturation adds a little warmth.
 
 ## 6. Output
 
@@ -285,7 +288,9 @@ then change that, up to six of them:
 | **Notch** | Cuts the reverb time sharply in a narrow range — a ringing frequency, a boomy room mode. |
 
 Each band's **Rate** multiplies the reverb time where it acts: 100 % leaves it
-alone, 200 % doubles it, 50 % halves it, from 12.5 % to 800 %. **Q** sets how
+alone, 200 % doubles it, 50 % halves it, from 12.5 % to 800 %. A longer decay
+also carries more energy, as it does in a real room: lengthening a band makes
+the reverb fuller there, shortening it makes it lighter. **Q** sets how
 wide a bell or a notch is, and how steep a shelf.
 
 ### Editing bands
@@ -347,6 +352,11 @@ low end in the middle where it belongs, while the highs stay wide.
 ![The preset browser: folders on the left, presets in the middle, the selected preset's details on the right.](images/preset-browser.png)
 
 Click the preset name to open the browser.
+
+Loading a preset starts it from silence: the reverb that was still ringing
+fades out within 10 ms instead of carrying over into the new sound. The dry
+signal plays on undisturbed. Undo, redo and A/B, by contrast, change the
+settings under the running tail.
 
 - **Folders** on the left; **All Presets** shows everything.
 - **Search**: just start typing. The list narrows to presets whose name, folder

@@ -155,6 +155,9 @@ private:
     // Audio thread copy used for DSP.
     std::vector<double> audio_;
     std::atomic<bool> reloadFromShared_{true};
+    // A whole new sound arrived (preset, IR import, host state): the audio
+    // thread cuts the old tail instead of gliding it into the new settings.
+    std::atomic<bool> cutTail_{false};
     SpscQueue<GuiEvent> guiEvents_{1024};
     // MIDI learn: CC number -> parameter index (-1 = none).
     std::array<std::atomic<int>, 128> ccMap_{};

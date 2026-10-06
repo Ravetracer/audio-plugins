@@ -54,7 +54,7 @@ audio-plugins/
 |---|--------|--------|--------|-----------|---------|------------|
 | 1 | **SäureKiste** | `saeure-kiste/` | 0.15.2 | Linux, Windows | CLAP, VST3 | a Roland TB-303 model, from the 1982 service notes, plus Robin Whittle's Devil Fish modification |
 | 2 | **RumpelKiste** | `rumpel-kiste/` | 0.2.1 | Linux, Windows | CLAP, VST3 | a Roland TR-909 model, from the 1984 service notes, with SäureKiste's sequencer and drive stage |
-| 3 | **Aurum** | `aurum/` | 0.2.0, unreleased | Linux, Windows | CLAP, VST3 | a clean-room algorithmic reverb (FDN, allpass ring, plate) with a per-frequency decay contour; own DSP and GUI, see *Aurum* below |
+| 3 | **Aurum** | `aurum/` | 0.3.0 | Linux, Windows | CLAP, VST3 | a clean-room algorithmic reverb (FDN, allpass ring, plate) with a per-frequency decay contour; own DSP and GUI, see *Aurum* below |
 
 Naming follows the plugin, not a pattern: the CMake project, the installed
 artifact and the display name are CamelCase (`SaeureKiste`), the folder is
@@ -331,6 +331,25 @@ What differs from the other plugins:
 - **Tested under wine only.** Tests, `gui_snapshot` and `clap_gui_host` (which
   has a win32 path) all cross-build and run under wine; no Windows DAW has
   loaded Aurum yet.
+- **The sound is calibrated against reference renders** (0.3.0). The user
+  rendered a single-sample impulse (0.5 at exactly 1.000 s, 48 kHz) through
+  the reference reverb for one-control sweeps (Thickness, Distance,
+  Brightness, Style, a long room) and for presets in every style; they live in
+  `Documents/aurum-reference/` (gitignored, never commit) with a `.ffp` beside
+  every render, so each case imports exactly. What came out of it, all in
+  `dsp/ReverbEngine.cpp` and `dsp/DecayModel.h` with the numbers in comments:
+  Natural's early reflections -12.5 - 10 x Distance dB; Brightness as two
+  shelves plus a level (tone) and an absorption in 1/s for darker settings
+  (decay); Thickness as a level curve with only subtle saturation; wet level
+  +2 dB per doubling of room time; a per-style voicing (two shelves and a
+  level); per-style decay calibration as a log2 multiplier and an absorption
+  per octave; no level compensation for Decay Rate EQ bands. Sweeps match
+  within about 1.5 dB per octave and 10 % in decay time. Open: Classic and
+  Plate respond to Brightness differently from Natural, which was the only
+  style swept, and their lows still differ by about 15 % between short and
+  long rooms. To redo a comparison, render the same `.ffp` through Aurum's
+  engine with the impulse at the same place and compare octave levels and
+  third-octave decay times (the analysis scripts were scratch; rewrite them).
 
 Build and test:
 

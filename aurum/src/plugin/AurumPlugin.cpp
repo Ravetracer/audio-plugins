@@ -244,6 +244,8 @@ std::vector<double> AurumPlugin::currentValues() const
 
 void AurumPlugin::applyValues(const std::vector<double>& values)
 {
+    // Before the values: the audio thread must not glide into them first.
+    cutTail_.store(true);
     for (int i = 0; i < table_.count() && i < static_cast<int>(values.size()); ++i)
         setShared(i, std::clamp(values[static_cast<size_t>(i)], table_.minValue(i), table_.maxValue(i)));
     reloadFromShared_.store(true);
@@ -749,6 +751,7 @@ bool AurumPlugin::stateLoad(const clap_istream_t* stream)
     StateDocument doc;
     if (!parseState(text, doc))
         return false;
+    cutTail_.store(true);
     for (int i = 0; i < table_.count(); ++i)
         setShared(i, doc.values[static_cast<size_t>(i)]);
     reloadFromShared_.store(true);
@@ -781,6 +784,8 @@ clap_process_status AurumPlugin::process(const clap_process_t* process)
 {
     ScopedFtz ftz;
     currentOut_ = process->out_events;
+    if (cutTail_.exchange(false))
+        engine_.cut();
     syncFromShared();
     drainGuiEvents(process->out_events);
 

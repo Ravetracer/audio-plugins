@@ -58,7 +58,10 @@ struct EngineControl
     double lateDiffusion = 0.6, lateDiffScale = 1.0;
     double satDrive = 1.0;
     double crossfeed = 0.0, sideGain = 1.0;
-    double toneHiDb = 0.0, toneLoDb = 0.0;
+    // Brightness: a high and a low shelf on the wet signal.
+    double toneHiHz = 5000.0, toneHiDb = 0.0, toneLoHz = 300.0, toneLoDb = 0.0;
+    // Wet level from Brightness, Thickness and the room size.
+    double wetLevelDb = 0.0;
     static EngineControl compute(const EngineParams& p, double space);
 };
 
@@ -72,6 +75,13 @@ public:
     void release();
     void reset();
     void setOffline(bool offline) { offline_ = offline; }
+
+    // Silences the reverb for a preset change: the wet signal fades out over
+    // 10 ms on the settings it had, every tank and delay is cleared, and the
+    // next block starts from the settings it is given with nothing gliding.
+    // The dry path follows the new settings throughout, so it never jumps.
+    // Audio thread, like process().
+    void cut() { cutRequested_ = true; }
 
     // inL/inR may alias outL/outR.
     void process(const float* inL, const float* inR, float* outL, float* outR, int n, const EngineParams& p);
@@ -94,6 +104,7 @@ private:
     int gatherSegments(double* delays) const;
     void applyCoeffs(const DecayCoeffSet& set);
     void switchStyle(Style s);
+    void settle(const EngineParams& p);
 
     double fs_ = 48000.0;
     bool prepared_ = false;
@@ -104,6 +115,10 @@ private:
     float styleGain_ = 1.0f;
     float styleStep_ = 0.0f;
     int styleTag_ = 1;
+    bool cutRequested_ = false;
+    bool cutting_ = false;      // fading out for cut()
+    EngineParams lastParams_{}; // what the previous process() call ran on
+    EngineParams cutParams_{};  // the settings the fade-out runs on
 
     DecayDesigner designer_;
     std::unique_ptr<DecayCoeffSet> syncSet_;
@@ -134,13 +149,14 @@ private:
     DelayLine chorusL_, chorusR_;
     std::array<OnePoleState, 2> chorusSplit_{};
     OnePoleCoeffs chorusSplitC_{};
-    std::array<SvfCoeffs, kNumDecayBands> comp_{};
-    std::array<std::array<SvfState, 2>, kNumDecayBands> compS_{};
-    int numComp_ = 0, lastNumComp_ = 0;
     double chorusPhase_ = 0.0;
 
     SvfCoeffs toneHi_, toneLo_;
-    std::array<SvfState, 2> toneHiS_{}, toneLoS_{};
+
+    // Per-style voicing, measured against reference renders.
+
+    SvfCoeffs voiceHi_, voiceLo_;
+    std::array<SvfState, 2> toneHiS_{}, toneLoS_{}, voiceHiS_{}, voiceLoS_{};
 
     PostEq postEq_;
     Ducker ducker_;

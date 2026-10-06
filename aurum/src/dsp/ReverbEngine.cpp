@@ -16,12 +16,73 @@ constexpr float kLateDiffMs[4] = {1.31f, 2.07f, 3.43f, 5.29f};
 constexpr double kChorusBaseMs[2] = {9.0, 13.5};
 
 // Loudness calibration of the late tail per style (keeps styles comparable).
-constexpr float kStyleWet[3] = {1.0f, 0.9f, 0.85f};
+// Tone and level of each style at default settings, fitted (within 0.5 dB rms
+// per octave) to reference renders of a 2.5 s and a 10 s room. Replaces the
+// former per-style wet factors (1.0, 0.9, 0.85), which are folded in here.
+struct Voicing
+{
+    double hiHz, hiDb, loHz, loDb, levelDb;
+};
+constexpr Voicing kVoicing[3] = {
+    {5460.0, -5.0, 400.0, 2.0, 0.5},      // Natural
+    {14288.0, 9.75, 400.0, 1.75, -6.68},  // Classic
+    {13502.0, -6.75, 400.0, 0.75, -8.49}, // Plate
+};
 
 float panGain(double pan, int channel)
 {
     const double p = clamp(pan, -1.0, 1.0);
     return static_cast<float>(channel == 0 ? std::min(1.0, 1.0 - p) : std::min(1.0, 1.0 + p));
+}
+
+} // namespace
+
+namespace {
+
+// Brightness as a tone change, fitted to reference renders of a 2.5 s hall at
+// Brightness -100 .. +100 % in 25 % steps (+50 % interpolated): one high and
+// one low shelf (Q 0.5) and a level, matching every octave from 63 Hz to
+// 16 kHz within 0.4 dB. What Brightness does to the decay time is in
+// DecayModel; the energy that change adds or removes is already taken out of
+// these gains.
+struct ToneStep
+{
+    double hiHz, hiDb, loHz, loDb, levelDb;
+};
+constexpr ToneStep kBrightnessTone[9] = {
+    {2362.0, -25.5, 400.0, 5.5, -3.1}, // -100 %
+    {2849.0, -20.0, 400.0, 3.5, -1.4}, //  -75 %
+    {3228.0, -14.5, 400.0, 1.0, 0.4},  //  -50 %
+    {4145.0, -7.5, 400.0, 0.0, 0.5},   //  -25 %
+    {5500.0, 0.0, 300.0, 0.0, 0.0},    //    0
+    {6836.0, 7.5, 250.0, 0.0, -0.6},   //  +25 %
+    {7541.0, 10.0, 250.0, -1.75, -0.75},
+    {8246.0, 12.5, 250.0, -3.5, -0.9}, //  +75 %
+    {7747.0, 12.5, 250.0, -6.0, -1.1}, // +100 %
+};
+
+ToneStep brightnessTone(double r)
+{
+    const double pos = (clamp(r, -1.0, 1.0) + 1.0) * 4.0;
+    const int i = std::min(static_cast<int>(pos), 7);
+    const double t = pos - i;
+    const ToneStep& a = kBrightnessTone[i];
+    const ToneStep& b = kBrightnessTone[i + 1];
+    auto mix = [t](double x, double y) { return x + (y - x) * t; };
+    return {std::exp(mix(std::log(a.hiHz), std::log(b.hiHz))), mix(a.hiDb, b.hiDb),
+            std::exp(mix(std::log(a.loHz), std::log(b.loHz))), mix(a.loDb, b.loDb), mix(a.levelDb, b.levelDb)};
+}
+
+// Thickness is mostly density, heard as level: reference renders measured
+// -14.4, -7.4, 0, +5.1 and +6.6 dB at -100, -50, 0, +50 and +100 %, the same
+// in every octave and with the decay time unchanged. The top two steps are
+// raised by what the saturation above +50 % takes off a full-scale impulse.
+double thicknessLevelDb(double t)
+{
+    constexpr double kDb[5] = {-14.4, -7.4, 0.0, 6.0, 8.2};
+    const double pos = (clamp(t, -1.0, 1.0) + 1.0) * 2.0;
+    const int i = std::min(static_cast<int>(pos), 3);
+    return kDb[i] + (kDb[i + 1] - kDb[i]) * (pos - i);
 }
 
 } // namespace
@@ -49,6 +110,13 @@ EngineControl EngineControl::compute(const EngineParams& p, double space)
 
     // Distance: near = strong bright reflections, far = diffuse slow build-up.
     c.erLevelDb = c.room.erLevel + 5.0 * (1.0 - di) - 8.0 * di + 3.5 * lowPart - 2.0 * highPart;
+    // The Natural tank builds up smoothly on its own, and reflections much
+    // louder than it are heard as a hard early burst in front of a thin tail.
+    // Fitted to reference renders of a Distance sweep (0 .. 100 %, build-up
+    // shape over the first 320 ms) and confirmed by three presets at 0.70 to
+    // 0.81, which needed 17 to 23 dB less than the line above.
+    if (p.style == Style::Natural)
+        c.erLevelDb -= 12.5 + 10.0 * di;
     c.erStartMs = c.room.erStart * (0.6 + 1.4 * di);
     c.erLengthMs = c.room.erLength * (0.85 + 0.35 * di);
     c.erSparsity = clamp(0.55 * (1.0 - th) + 0.25 * echo - 0.2 * di, 0.0, 0.9);
@@ -59,9 +127,9 @@ EngineControl EngineControl::compute(const EngineParams& p, double space)
     c.lateDiffusion = clamp(c.room.diffusion * (0.7 + 0.45 * th) - 0.12 * echo, 0.3, 0.82);
     c.lateDiffScale = (0.7 + 0.8 * di) * std::sqrt(c.room.size / 30.0);
 
-    // Thickness above 50 % adds saturation in front of the tank.
+    // Thickness above 50 % adds a subtle saturation in front of the tank.
     const double sat = std::max(th - 0.5, 0.0) / 0.5;
-    c.satDrive = 1.0 + 5.0 * sat * sat;
+    c.satDrive = 1.0 + 1.0 * sat * sat;
 
     // Width: 0 .. 0.5 mono to full cross-feed, 0.5 .. 1 to multi-mono, above
     // 1 the side signal is boosted.
@@ -69,10 +137,17 @@ EngineControl EngineControl::compute(const EngineParams& p, double space)
     c.crossfeed = w <= 0.5 ? 1.0 : clamp(1.0 - (w - 0.5) / 0.5, 0.0, 1.0);
     c.sideGain = w <= 0.5 ? w / 0.5 : (w <= 1.0 ? 1.0 : 1.0 + (w - 1.0) * 2.0);
 
-    // Brightness also tilts the wet tone a little.
-    const double r = br * 2.0 - 1.0;
-    c.toneHiDb = r < 0.0 ? 9.0 * r : 2.0 * r;
-    c.toneLoDb = -0.75 * r;
+    const ToneStep tone = brightnessTone(br * 2.0 - 1.0);
+    c.toneHiHz = tone.hiHz;
+    c.toneHiDb = tone.hiDb;
+    c.toneLoHz = tone.loHz;
+    c.toneLoDb = tone.loDb;
+
+    // A bigger room holds more energy: reference renders are 4.1 dB louder for
+    // a 10 s room than for a 2.5 s one at the same settings. Kept within
+    // +-4 dB until shorter and longer rooms have been measured too.
+    const double roomDb = clamp(2.05 * std::log2(c.room.t60 / 2.5), -4.0, 4.0);
+    c.wetLevelDb = tone.levelDb + thicknessLevelDb(th * 2.0 - 1.0) + roomDb;
     return c;
 }
 
@@ -148,14 +223,15 @@ void ReverbEngine::reset()
     chorusR_.clear();
     for (auto& c : chorusSplit_)
         c.reset();
-    for (auto& st : compS_)
-        for (auto& x : st)
-            x.reset();
     satL_.reset();
     satR_.reset();
     for (auto& s : toneHiS_)
         s.reset();
     for (auto& s : toneLoS_)
+        s.reset();
+    for (auto& s : voiceHiS_)
+        s.reset();
+    for (auto& s : voiceLoS_)
         s.reset();
     postEq_.reset();
     ducker_.reset();
@@ -164,6 +240,7 @@ void ReverbEngine::reset()
     samplesSinceRequest_ = 1 << 20;
     styleFadeDir_ = 0;
     styleGain_ = 1.0f;
+    cutting_ = false;
 }
 
 DecayModel ReverbEngine::decayModelFor(const EngineParams& p) { return decayModelFor(p, roomAt(p.space), p.style); }
@@ -190,6 +267,26 @@ DecayModel ReverbEngine::decayModelFor(const EngineParams& p, const Room& room, 
         m.hfMult = std::min(1.0, m.hfMult * 1.45);
         m.lfMult = 0.85;
         m.hfFreq *= 1.6;
+    }
+    // Measured correction on top of the curves above, per octave 63 Hz ..
+    // 16 kHz: a log2 multiplier and an absorption in 1/s, solved exactly from
+    // reference renders of a 2.5 s and a 10 s room at default settings. The
+    // absorption is what keeps the highs from growing with Length, as they do
+    // not in the references.
+    static constexpr double kCalib[3][9] = {
+        {-0.214, 0.067, 0.061, 0.064, 0.152, 0.340, 0.478, 0.426, 0.310},     // Natural
+        {-0.734, -0.479, -0.330, -0.037, 0.023, 0.389, 0.865, 1.496, 1.886},  // Classic
+        {0.890, 0.768, 0.655, 0.382, 0.160, 0.234, 0.219, 0.118, 0.194},     // Plate
+    };
+    static constexpr double kAbsorb[3][9] = {
+        {0.0153, 0.0256, 0.0146, 0.0051, 0.0, 0.0, 0.0, 0.0, 0.0095},
+        {0.0, 0.0, 0.0, 0.0, 0.0, 0.0453, 0.1259, 0.2740, 0.3702},
+        {0.0, 0.0, 0.0, 0.0, 0.0174, 0.0764, 0.0405, 0.0441, 0.1998},
+    };
+    for (size_t k = 0; k < m.calib.size(); ++k)
+    {
+        m.calib[k] = kCalib[static_cast<int>(style)][k];
+        m.absorb[k] = kAbsorb[static_cast<int>(style)][k];
     }
     return m;
 }
@@ -373,33 +470,16 @@ void ReverbEngine::updateControl(const EngineParams& p, bool snap)
     if (snap)
         predelay_ = predelayTarget_;
 
-    // Level compensation for the Decay Rate EQ: tail energy is proportional
-    // to T60, so a band that scales T60 by 2^r gets -3 dB * r.
-    numComp_ = 0;
-    for (const DecayBand& b : p.decayBands)
-    {
-        if (!b.used || !b.enabled || std::fabs(b.rateLog2) < 1e-4)
-            continue;
-        const double g = clamp(-3.0103 * b.rateLog2, -12.0, 12.0);
-        SvfCoeffs c;
-        switch (b.shape)
-        {
-        case DecayShape::LowShelf: c = SvfCoeffs::lowShelf(b.freq, b.q * kShelfQScale, g, fs_); break;
-        case DecayShape::HighShelf: c = SvfCoeffs::highShelf(b.freq, b.q * kShelfQScale, g, fs_); break;
-        default: c = SvfCoeffs::bell(b.freq, b.q, g, fs_); break;
-        }
-        comp_[static_cast<size_t>(numComp_++)] = c;
-    }
-    if (numComp_ != lastNumComp_)
-    {
-        for (auto& st : compS_)
-            for (auto& x : st)
-                x.reset();
-        lastNumComp_ = numComp_;
-    }
+    // No level compensation for the Decay Rate EQ: a band that lengthens the
+    // decay also makes the tail louder there, as a longer decay does. The
+    // former -3 dB per doubling left presets that shorten their lows with up
+    // to 11 dB too much bass against reference renders.
 
-    toneHi_ = SvfCoeffs::highShelf(5000.0, 0.6, ctl_.toneHiDb, fs_);
-    toneLo_ = SvfCoeffs::lowShelf(220.0, 0.6, ctl_.toneLoDb, fs_);
+    toneHi_ = SvfCoeffs::highShelf(ctl_.toneHiHz, 0.5, ctl_.toneHiDb, fs_);
+    toneLo_ = SvfCoeffs::lowShelf(ctl_.toneLoHz, 0.5, ctl_.toneLoDb, fs_);
+    const Voicing& v = kVoicing[static_cast<int>(style_)];
+    voiceHi_ = SvfCoeffs::highShelf(v.hiHz, 0.5, v.hiDb, fs_);
+    voiceLo_ = SvfCoeffs::lowShelf(v.loHz, 0.5, v.loDb, fs_);
     postEq_.setBands(p.postBands);
     ducker_.setAmount(static_cast<float>(p.ducking));
     gate_.setEnabled(p.gateOn);
@@ -415,7 +495,7 @@ void ReverbEngine::updateControl(const EngineParams& p, bool snap)
     float dry, wet;
     equalPower(static_cast<float>(clamp(p.mix, 0.0, 1.0)), dry, wet);
     dryGain_.setTarget(dry, ramp);
-    wetGain_.setTarget(wet * kStyleWet[static_cast<int>(style_)], ramp);
+    wetGain_.setTarget(wet * static_cast<float>(dbToGain(ctl_.wetLevelDb + v.levelDb)), ramp);
     erGain_.setTarget(static_cast<float>(dbToGain(ctl_.erLevelDb)), ramp);
     lateFeed_.setTarget(static_cast<float>(ctl_.lateFeed), ramp);
     erFeed_.setTarget(static_cast<float>(ctl_.erFeed), ramp);
@@ -436,36 +516,75 @@ void ReverbEngine::process(const float* inL, const float* inR, float* outL, floa
         std::copy(inR, inR + n, outR);
         return;
     }
-    if (lastLanes_ == 0)
+    if (cutRequested_)
     {
-        // First block after (re)activation: settle everything immediately.
-        if (p.style != style_)
-            switchStyle(p.style);
-        requestedStyle_ = p.style;
-        updateControl(p, true);
-        maybeRequestDesign(p, true);
+        cutRequested_ = false;
+        // Nothing has played since the last reset: there is no tail to cut.
+        if (lastLanes_ != 0 && !cutting_)
+        {
+            cutting_ = true;
+            cutParams_ = lastParams_;
+            styleFadeDir_ = -1;
+            styleStep_ = static_cast<float>(1.0 / (0.010 * fs_));
+        }
     }
+    if (lastLanes_ == 0)
+        settle(p);
 
     int done = 0;
     while (done < n)
     {
+        if (cutting_ && styleGain_ <= 0.0f)
+        {
+            // Silent now: drop everything and start over from the new settings.
+            cutting_ = false;
+            reset();
+            settle(p);
+        }
         const int len = std::min(kBlock, n - done);
-        processBlock(inL + done, inR + done, outL + done, outR + done, len, p);
+        if (cutting_)
+        {
+            // The reverb fades out as it was; the levels and the mix already
+            // follow the new settings, so the dry signal does not jump when
+            // the fade ends.
+            cutParams_.mix = p.mix;
+            cutParams_.inGainDb = p.inGainDb;
+            cutParams_.inPan = p.inPan;
+            cutParams_.outGainDb = p.outGainDb;
+            cutParams_.outPan = p.outPan;
+            cutParams_.bypass = p.bypass;
+            processBlock(inL + done, inR + done, outL + done, outR + done, len, cutParams_);
+        }
+        else
+            processBlock(inL + done, inR + done, outL + done, outR + done, len, p);
         done += len;
     }
+    lastParams_ = p;
+}
+
+// Everything at its target at once: the first block after (re)activation,
+// and the first after a cut.
+void ReverbEngine::settle(const EngineParams& p)
+{
+    if (p.style != style_)
+        switchStyle(p.style);
+    requestedStyle_ = p.style;
+    updateControl(p, true);
+    maybeRequestDesign(p, true);
 }
 
 void ReverbEngine::processBlock(const float* inL, const float* inR, float* outL, float* outR, int n,
                                 const EngineParams& p)
 {
     // Style changes fade the wet signal out, swap structures, fade back in.
-    if (p.style != requestedStyle_ && styleFadeDir_ == 0)
+    // A cut owns the fade while it runs.
+    if (!cutting_ && p.style != requestedStyle_ && styleFadeDir_ == 0)
     {
         requestedStyle_ = p.style;
         styleFadeDir_ = -1;
         styleStep_ = static_cast<float>(1.0 / (0.015 * fs_));
     }
-    if (styleFadeDir_ < 0 && styleGain_ <= 0.0f)
+    if (!cutting_ && styleFadeDir_ < 0 && styleGain_ <= 0.0f)
     {
         switchStyle(requestedStyle_);
         updateControl(p, false);
@@ -594,12 +713,6 @@ void ReverbEngine::processBlock(const float* inL, const float* inR, float* outL,
         const float c = cOut;
         float l = (tankL[0][s] + c * tankL[1][s] + (1.0f - c) * tankR[0][s]) * kNorm;
         float r = (tankR[1][s] + c * tankR[0][s] + (1.0f - c) * tankL[1][s]) * kNorm;
-        // Decay Rate EQ changes the decay time, not the level of the tail.
-        for (int k = 0; k < numComp_; ++k)
-        {
-            l = compS_[static_cast<size_t>(k)][0].process(l, comp_[static_cast<size_t>(k)]);
-            r = compS_[static_cast<size_t>(k)][1].process(r, comp_[static_cast<size_t>(k)]);
-        }
         if (styleFadeDir_ != 0)
         {
             styleGain_ = clamp(styleGain_ + styleStep_ * static_cast<float>(styleFadeDir_), 0.0f, 1.0f);
@@ -649,6 +762,8 @@ void ReverbEngine::processBlock(const float* inL, const float* inR, float* outL,
     {
         wetL[s] = toneLoS_[0].process(toneHiS_[0].process(wetL[s], toneHi_), toneLo_);
         wetR[s] = toneLoS_[1].process(toneHiS_[1].process(wetR[s], toneHi_), toneLo_);
+        wetL[s] = voiceLoS_[0].process(voiceHiS_[0].process(wetL[s], voiceHi_), voiceLo_);
+        wetR[s] = voiceLoS_[1].process(voiceHiS_[1].process(wetR[s], voiceHi_), voiceLo_);
     }
     postEq_.process(wetL, wetR, n);
 

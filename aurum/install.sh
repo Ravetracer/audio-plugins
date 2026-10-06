@@ -36,6 +36,7 @@ if [ "$selftest" = 1 ]; then
    echo "==> verifying"
    "${build_dir}/tests/geq_test"
    "${build_dir}/tests/engine_test" stability
+   "${build_dir}/tests/engine_test" cut
 fi
 
 echo "==> installing"

@@ -12,7 +12,7 @@ constexpr char kPluginName[] = "Aurum Reverb";
 // %APPDATA% on Windows).
 constexpr char kPluginDirName[] = "Aurum";
 constexpr char kPluginVendor[] = "Ravetracer";
-constexpr char kPluginVersion[] = "0.2.0";
+constexpr char kPluginVersion[] = "0.3.0";
 constexpr char kPluginUrl[] = "https://github.com/Ravetracer/audio-plugins";
 constexpr char kPluginDescription[] = "Algorithmic reverb with a frequency-dependent decay contour";
 

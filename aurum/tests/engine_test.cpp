@@ -52,10 +52,12 @@ Ir renderImpulse(const EngineParams& p, double seconds)
 }
 
 // T60 from Schroeder backward integration (T20 fit, -5..-25 dB) of an
-// octave-filtered response.
+// third-octave-filtered response.
 double measureT60(const std::vector<float>& x, double fc)
 {
-    SvfCoeffs bp = SvfCoeffs::bandPass(fc, 1.4, kFs);
+    // A third of an octave: an octave band smears a steep step in the decay
+    // (a high shelf) into the neighbouring band and reports it too long.
+    SvfCoeffs bp = SvfCoeffs::bandPass(fc, 4.32, kFs);
     SvfState s1, s2, s3;
     std::vector<double> y(x.size());
     for (size_t i = 0; i < x.size(); ++i)
@@ -285,6 +287,67 @@ int cpuTest()
     return 0;
 }
 
+// A preset change cuts the old tail instead of gliding it into the new
+// settings: 30 ms after the cut the output must be silent (the input is), and
+// the fade-out must not click.
+int cutTest()
+{
+    ReverbEngine e;
+    e.prepare(kFs, 512);
+    EngineParams a;
+    a.space = 1.0; // Cathedral: a tail that would ring for seconds
+    a.mix = 1.0;
+    a.character = 0.4;
+    EngineParams b = a;
+    b.space = 0.3;
+    b.style = Style::Plate;
+    b.brightness = 0.2;
+
+    const int block = 256;
+    std::vector<float> l(block), r(block);
+    Rng rng(7);
+    auto run = [&](int blocks, const EngineParams& p, bool noise, std::vector<float>* capture) {
+        for (int k = 0; k < blocks; ++k)
+        {
+            for (int i = 0; i < block; ++i)
+            {
+                l[i] = noise ? 0.3f * rng.bipolar() : 0.0f;
+                r[i] = noise ? 0.3f * rng.bipolar() : 0.0f;
+            }
+            e.process(l.data(), r.data(), l.data(), r.data(), block, p);
+            if (capture)
+                capture->insert(capture->end(), l.begin(), l.end());
+        }
+    };
+    run(static_cast<int>(0.5 * kFs / block), a, true, nullptr);
+    std::vector<float> before, after;
+    run(static_cast<int>(0.1 * kFs / block), a, false, &before);
+    e.cut();
+    run(static_cast<int>(0.2 * kFs / block), b, false, &after);
+
+    double tail = 0.0, maxStepBefore = 0.0, maxStepFade = 0.0, left = 0.0;
+    for (size_t i = 1; i < before.size(); ++i)
+    {
+        tail = std::max(tail, static_cast<double>(std::fabs(before[i])));
+        maxStepBefore = std::max(maxStepBefore, static_cast<double>(std::fabs(before[i] - before[i - 1])));
+    }
+    const size_t fadeEnd = static_cast<size_t>(0.015 * kFs), quiet = static_cast<size_t>(0.030 * kFs);
+    float prev = before.back();
+    for (size_t i = 0; i < fadeEnd; ++i)
+    {
+        maxStepFade = std::max(maxStepFade, static_cast<double>(std::fabs(after[i] - prev)));
+        prev = after[i];
+    }
+    for (size_t i = quiet; i < after.size(); ++i)
+        left = std::max(left, static_cast<double>(std::fabs(after[i])));
+    const double leftDb = 20.0 * std::log10(std::max(left, 1e-12) / tail);
+    const bool silent = leftDb < -100.0;
+    const bool smooth = maxStepFade <= maxStepBefore * 1.05;
+    printf("cut: tail peak %.3f, after 30 ms %.1f dB re tail (%s), largest step in the fade %.4f vs %.4f before (%s)\n",
+           tail, leftDb, silent ? "silent" : "STILL RINGING", maxStepFade, maxStepBefore, smooth ? "no click" : "CLICK");
+    return silent && smooth ? 0 : 1;
+}
+
 } // namespace
 
 int main(int argc, char** argv)
@@ -297,6 +360,8 @@ int main(int argc, char** argv)
         rc |= stabilityTest(false, 0);
     if (mode == "stability-offline")
         rc |= stabilityTest(true, argc > 2 ? atoi(argv[2]) : 0);
+    if (mode == "cut" || mode == "all")
+        rc |= cutTest();
     if (mode == "cpu" || mode == "all")
         rc |= cpuTest();
     return rc;
