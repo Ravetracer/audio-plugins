@@ -1,14 +1,18 @@
-// Minimal CLAP host for automated GUI tests (run under Xvfb).
-// Loads a .clap, embeds its X11 GUI into a top-level window, processes noise
-// bursts on an audio thread and services timer/fd callbacks on the main
-// thread. Prints parameter events emitted by the plugin.
+// Minimal CLAP host for automated GUI tests (run under Xvfb, or under wine
+// for the Windows build). Loads a .clap, embeds its GUI into a top-level
+// window, processes noise bursts on an audio thread and services timer/fd
+// callbacks on the main thread. Prints parameter events emitted by the plugin.
 //
 // usage: clap_gui_host <plugin.clap> [seconds] [state-out-file]
 
-#include <X11/Xlib.h>
 #include <clap/clap.h>
+#if defined(_WIN32)
+#include <windows.h>
+#else
+#include <X11/Xlib.h>
 #include <dlfcn.h>
 #include <poll.h>
+#endif
 
 #include <atomic>
 #include <chrono>
@@ -225,6 +229,15 @@ int main(int argc, char** argv)
         return 1;
     }
     const double seconds = argc > 2 ? std::atof(argv[2]) : 5.0;
+#if defined(_WIN32)
+    HMODULE lib = LoadLibraryA(argv[1]);
+    if (!lib)
+    {
+        std::fprintf(stderr, "LoadLibrary failed: %lu\n", GetLastError());
+        return 1;
+    }
+    auto* entry = reinterpret_cast<const clap_plugin_entry_t*>(GetProcAddress(lib, "clap_entry"));
+#else
     void* lib = dlopen(argv[1], RTLD_NOW | RTLD_LOCAL);
     if (!lib)
     {
@@ -232,6 +245,12 @@ int main(int argc, char** argv)
         return 1;
     }
     auto* entry = static_cast<const clap_plugin_entry_t*>(dlsym(lib, "clap_entry"));
+#endif
+    if (!entry)
+    {
+        std::fprintf(stderr, "no clap_entry\n");
+        return 1;
+    }
     entry->init(argv[1]);
     auto* factory = static_cast<const clap_plugin_factory_t*>(entry->get_factory(CLAP_PLUGIN_FACTORY_ID));
     const clap_plugin_descriptor_t* desc = factory->get_plugin_descriptor(factory, 0);
@@ -244,6 +263,29 @@ int main(int argc, char** argv)
     auto* fdx = static_cast<const clap_plugin_posix_fd_support_t*>(g_plugin->get_extension(g_plugin, CLAP_EXT_POSIX_FD_SUPPORT));
     auto* params = static_cast<const clap_plugin_params_t*>(g_plugin->get_extension(g_plugin, CLAP_EXT_PARAMS));
 
+#if defined(_WIN32)
+    if (!gui)
+    {
+        std::fprintf(stderr, "no gui\n");
+        return 1;
+    }
+    gui->create(g_plugin, CLAP_WINDOW_API_WIN32, false);
+    gui->set_scale(g_plugin, 1.0);
+    uint32_t w = 0, h = 0;
+    gui->get_size(g_plugin, &w, &h);
+    WNDCLASSW wc{};
+    wc.lpfnWndProc = DefWindowProcW;
+    wc.hInstance = GetModuleHandleW(nullptr);
+    wc.lpszClassName = L"AurumTestHost";
+    RegisterClassW(&wc);
+    RECT frame{0, 0, static_cast<LONG>(w), static_cast<LONG>(h)};
+    AdjustWindowRect(&frame, WS_OVERLAPPEDWINDOW, FALSE);
+    HWND top = CreateWindowW(L"AurumTestHost", L"Aurum test host", WS_OVERLAPPEDWINDOW | WS_CLIPCHILDREN | WS_VISIBLE,
+                             0, 0, frame.right - frame.left, frame.bottom - frame.top, nullptr, nullptr,
+                             wc.hInstance, nullptr);
+    clap_window_t win{CLAP_WINDOW_API_WIN32, {}};
+    win.win32 = top;
+#else
     Display* dpy = XOpenDisplay(nullptr);
     if (!dpy || !gui)
     {
@@ -261,6 +303,7 @@ int main(int argc, char** argv)
     XFlush(dpy);
     clap_window_t win{CLAP_WINDOW_API_X11, {}};
     win.x11 = top;
+#endif
     gui->set_parent(g_plugin, &win);
     gui->show(g_plugin);
     std::printf("gui: %ux%u, timers %zu, fds %zu\n", w, h, g_timers.size(), g_fds.size());
@@ -270,6 +313,16 @@ int main(int argc, char** argv)
     const auto end = std::chrono::steady_clock::now() + std::chrono::milliseconds(static_cast<int>(seconds * 1000));
     while (std::chrono::steady_clock::now() < end)
     {
+#if defined(_WIN32)
+        MsgWaitForMultipleObjects(0, nullptr, FALSE, 5, QS_ALLINPUT);
+        MSG msg;
+        while (PeekMessageW(&msg, nullptr, 0, 0, PM_REMOVE))
+        {
+            TranslateMessage(&msg);
+            DispatchMessageW(&msg);
+        }
+        (void)fdx;
+#else
         std::vector<pollfd> pfds;
         for (int fd : g_fds)
             pfds.push_back({fd, POLLIN, 0});
@@ -277,6 +330,7 @@ int main(int argc, char** argv)
         for (auto& p : pfds)
             if (p.revents & POLLIN)
                 fdx->on_fd(g_plugin, p.fd, CLAP_POSIX_FD_READ);
+#endif
         const auto now = std::chrono::steady_clock::now();
         for (auto& t : g_timers)
             if (now >= t.next)
@@ -286,15 +340,23 @@ int main(int argc, char** argv)
             }
         if (g_resizeRequested.exchange(false))
         {
+#if defined(_WIN32)
+            RECT r{0, 0, static_cast<LONG>(g_reqW), static_cast<LONG>(g_reqH)};
+            AdjustWindowRect(&r, WS_OVERLAPPEDWINDOW, FALSE);
+            SetWindowPos(top, nullptr, 0, 0, r.right - r.left, r.bottom - r.top, SWP_NOMOVE | SWP_NOZORDER);
+#else
             XResizeWindow(dpy, top, g_reqW, g_reqH);
+#endif
             gui->set_size(g_plugin, g_reqW, g_reqH);
             std::printf("resize: %ux%u\n", g_reqW, g_reqH);
         }
+#if !defined(_WIN32)
         while (XPending(dpy))
         {
             XEvent ev;
             XNextEvent(dpy, &ev);
         }
+#endif
     }
     g_running = false;
     audio.join();
@@ -312,8 +374,12 @@ int main(int argc, char** argv)
     g_plugin->deactivate(g_plugin);
     g_plugin->destroy(g_plugin);
     entry->deinit();
+#if defined(_WIN32)
+    DestroyWindow(top);
+#else
     XDestroyWindow(dpy, top);
     XCloseDisplay(dpy);
+#endif
     std::printf("done\n");
     return 0;
 }

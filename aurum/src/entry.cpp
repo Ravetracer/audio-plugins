@@ -10,12 +10,8 @@ const void* getFactory(const char* id) { return aurum::entryGetFactory(id); }
 } // namespace
 
 extern "C" {
-#ifdef __GNUC__
-#pragma GCC diagnostic push
-#pragma GCC diagnostic ignored "-Wattributes"
-#endif
-CLAP_EXPORT const clap_plugin_entry_t clap_entry = {CLAP_VERSION_INIT, init, deinit, getFactory};
-#ifdef __GNUC__
-#pragma GCC diagnostic pop
-#endif
+// clap/entry.h already declares this with CLAP_EXPORT, so the definition must
+// not repeat the attribute: mingw rejects a second dllexport on a const object
+// it then sees as having internal linkage.
+const clap_plugin_entry_t clap_entry = {CLAP_VERSION_INIT, init, deinit, getFactory};
 }

@@ -276,6 +276,10 @@ void lock(cairo_t* cr, const Rect& r, const Color& c, bool closed);
 void menu(cairo_t* cr, const Rect& r, const Color& c);
 void close(cairo_t* cr, const Rect& r, const Color& c);
 void sync(cairo_t* cr, const Rect& r, const Color& c);
+// Five-pointed star of outer radius `radius`, filled or outlined. Drawn rather
+// than set as a glyph: Cairo has no per-glyph font fallback, and the Windows UI
+// font has no star.
+void star(cairo_t* cr, const Rect& r, float radius, const Color& c, bool filled);
 } // namespace icons
 
 } // namespace aurum::gui

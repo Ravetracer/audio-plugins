@@ -1,14 +1,18 @@
 # Aurum Reverb – Implementation Plan
 
-Native Linux algorithmic reverb (CLAP first, VST3 via clap-wrapper). Original
+Native algorithmic reverb for Linux and Windows (CLAP first, VST3 via
+clap-wrapper). Original
 design based on public reverb literature (Schroeder, Moorer, Jot, Dattorro).
 No third-party code, assets or data are used.
 
 ## Targets
 
-- Formats: CLAP (native), VST3 (clap-wrapper). Linux x86-64, X11.
+- Formats: CLAP (native), VST3 (clap-wrapper). Linux x86-64 (X11) and
+  Windows x86-64 (win32, cross-built with mingw-w64).
 - Channels: mono and stereo.
-- GUI: own widget toolkit on X11 + Cairo, HiDPI aware, resizable.
+- GUI: own widget toolkit on Cairo, with an X11 and a win32 window backend
+  (`gui/X11Window`, `gui/Win32Window`, selected by `gui/NativeWindow.h`),
+  HiDPI aware, resizable.
 
 ## Signal flow
 
@@ -57,7 +61,10 @@ in ─ input level/pan ─┬─────────────────
 
 ## Status
 
-Phases 1-7 implemented and tested (see README "Tests"). Open: sound tuning
+Phases 1-7 implemented and tested (see README "Tests"). Windows builds since
+0.2.0: tests, offscreen render and the embedded window (mouse, keyboard, file
+dialog, IR import) verified under wine; no Windows DAW has loaded it yet, and
+drag-and-drop of an IR onto the window is untested there. Open: sound tuning
 by ear (phase 8), VST3 build not yet verified in a host, surround out of
 scope.
 

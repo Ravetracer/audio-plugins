@@ -40,9 +40,9 @@ fi
 
 echo "==> installing"
 mkdir -p "${HOME}/.clap" "${HOME}/.vst3"
-cp -f "${build_dir}/plugins/Aurum.clap" "${HOME}/.clap/"
+cp -f "${build_dir}/Aurum.clap" "${HOME}/.clap/"
 rm -rf "${HOME}/.vst3/Aurum.vst3"
-cp -r "${build_dir}/plugins/Aurum.vst3" "${HOME}/.vst3/"
+cp -r "${build_dir}/vst3/Aurum.vst3" "${HOME}/.vst3/"
 
 cat <<TXT
 

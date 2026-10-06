@@ -7,7 +7,8 @@ namespace aurum {
 
 // Global user preferences shared by all instances (GUI size,
 // lock mix, MIDI map, preset folder...). Stored in
-// $XDG_CONFIG_HOME/Aurum/settings.ini. Main thread only.
+// $XDG_CONFIG_HOME/Aurum/settings.ini, or %APPDATA%\Aurum\settings.ini on
+// Windows. Main thread only.
 class Settings
 {
 public:

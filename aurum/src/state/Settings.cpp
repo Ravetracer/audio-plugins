@@ -6,7 +6,25 @@
 #include <fstream>
 #include <sstream>
 
+#include "util/Path.h"
+
 namespace aurum {
+
+#if defined(_WIN32)
+
+// %APPDATA%\Aurum for both: settings.ini and the Presets folder beside it.
+// Read as UTF-16 so a user name outside the ANSI code page still works.
+std::string Settings::configDir()
+{
+    const wchar_t* appData = _wgetenv(L"APPDATA");
+    if (!appData || !*appData)
+        return "Aurum";
+    return fromPath(std::filesystem::path(appData) / "Aurum");
+}
+
+std::string Settings::dataDir() { return configDir(); }
+
+#else
 
 namespace {
 std::string homeDir()
@@ -28,6 +46,8 @@ std::string Settings::dataDir()
     return (x && *x ? std::string(x) : homeDir() + "/.local/share") + "/Aurum";
 }
 
+#endif
+
 Settings& Settings::get()
 {
     static Settings s;
@@ -38,7 +58,7 @@ Settings::Settings() : path_(configDir() + "/settings.ini") { load(); }
 
 void Settings::load()
 {
-    std::ifstream in(path_);
+    std::ifstream in(toPath(path_));
     std::string line;
     while (std::getline(in, line))
     {
@@ -52,16 +72,16 @@ void Settings::load()
 void Settings::save()
 {
     std::error_code ec;
-    std::filesystem::create_directories(configDir(), ec);
+    std::filesystem::create_directories(toPath(configDir()), ec);
     const std::string tmp = path_ + ".tmp";
     {
-        std::ofstream out(tmp, std::ios::trunc);
+        std::ofstream out(toPath(tmp), std::ios::trunc);
         if (!out)
             return;
         for (const auto& [k, v] : values_)
             out << k << '=' << v << '\n';
     }
-    std::filesystem::rename(tmp, path_, ec);
+    std::filesystem::rename(toPath(tmp), toPath(path_), ec);
 }
 
 std::string Settings::getString(const std::string& key, const std::string& def) const

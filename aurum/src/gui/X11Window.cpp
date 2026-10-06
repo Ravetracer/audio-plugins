@@ -10,6 +10,7 @@
 #include <algorithm>
 #include <cstdlib>
 #include <cstring>
+#include <vector>
 
 namespace aurum::gui {
 
@@ -34,6 +35,37 @@ enum AtomIndex
 const char* const kAtomNames[A_Count] = {"XdndAware",      "XdndEnter",       "XdndPosition", "XdndStatus",
                                          "XdndDrop",       "XdndFinished",    "XdndActionCopy",
                                          "XdndSelection",  "XdndLeave",       "text/uri-list", "AURUM_DND"};
+
+// The local paths in a text/uri-list; anything that is not a file:// URI is
+// skipped.
+std::vector<std::string> pathsFromUriList(const std::string& uris)
+{
+    std::vector<std::string> paths;
+    size_t start = 0;
+    while (start < uris.size())
+    {
+        size_t end = uris.find_first_of("\r\n", start);
+        if (end == std::string::npos)
+            end = uris.size();
+        const std::string line = uris.substr(start, end - start);
+        start = end + 1;
+        if (line.rfind("file://", 0) != 0)
+            continue;
+        std::string path;
+        for (size_t i = 7; i < line.size(); ++i)
+        {
+            if (line[i] == '%' && i + 2 < line.size())
+            {
+                path += static_cast<char>(std::stoi(line.substr(i + 1, 2), nullptr, 16));
+                i += 2;
+            }
+            else
+                path += line[i];
+        }
+        paths.push_back(path);
+    }
+    return paths;
+}
 
 unsigned modsFromState(unsigned state)
 {
@@ -78,7 +110,7 @@ double X11Window::systemScale()
     return std::clamp(scale, 1.0, 4.0);
 }
 
-bool X11Window::attach(unsigned long parent, int physW, int physH)
+bool X11Window::attach(uintptr_t parent, int physW, int physH)
 {
     destroy();
     display_ = XOpenDisplay(nullptr);
@@ -95,7 +127,7 @@ bool X11Window::attach(unsigned long parent, int physW, int physH)
     attr.border_pixel = 0;
     const int screen = DefaultScreen(display_);
     Visual* visual = DefaultVisual(display_, screen);
-    window_ = XCreateWindow(display_, parent, 0, 0, static_cast<unsigned>(physW), static_cast<unsigned>(physH), 0,
+    window_ = XCreateWindow(display_, static_cast<Window>(parent), 0, 0, static_cast<unsigned>(physW), static_cast<unsigned>(physH), 0,
                             CopyFromParent, InputOutput, visual, CWEventMask | CWBackPixel | CWBorderPixel, &attr);
     if (!window_)
         return false;
@@ -333,7 +365,7 @@ void X11Window::handleSelectionNotify(void* xevent)
     {
         const std::string uris(reinterpret_cast<char*>(data), count);
         XFree(data);
-        listener_->onFilesDropped(uris);
+        listener_->onFilesDropped(pathsFromUriList(uris));
     }
     if (xdndSource_)
     {

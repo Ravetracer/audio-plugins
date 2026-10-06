@@ -1,7 +1,7 @@
 # Aurum Reverb
 
-Algorithmic reverb for Linux as a native CLAP plugin (plus VST3 through
-clap-wrapper), with a native X11/Cairo interface.
+Algorithmic reverb for Linux and Windows as a native CLAP plugin (plus VST3
+through clap-wrapper), with its own Cairo interface on X11 and win32.
 
 ## Features
 
@@ -45,15 +45,30 @@ cmake -S . -B build -G Ninja
 ninja -C build
 ```
 
-The default target architecture is x86-64-v3 (AVX2/FMA). For older CPUs use
-`-DAURUM_ARCH_FLAGS=-march=x86-64-v2`.
+The default target architecture is x86-64-v3 (AVX2/FMA), on Windows as well.
+For older CPUs use `-DAURUM_ARCH_FLAGS=-march=x86-64-v2`.
+
+### Windows
+
+Cross-compiled from Linux with mingw-w64, against the Cairo that
+`../setup-winbuild.sh` builds into `../winbuild/cairo-mingw` (override with
+`-DAURUM_WIN_CAIRO=...`):
+
+```sh
+cmake -S . -B build-win -G Ninja -DCMAKE_TOOLCHAIN_FILE=../shared/cmake/mingw-w64-x86_64.cmake
+ninja -C build-win          # build-win/Aurum.clap, build-win/vst3/Aurum.vst3
+```
+
+The runtime and Cairo are linked in; the binaries need no DLLs beside them.
+`../release.sh` builds both platforms and both formats.
 
 ## Files
 
-- Presets: `$XDG_DATA_HOME/Aurum/Presets` (default `~/.local/share/Aurum/Presets`).
+- Presets: `$XDG_DATA_HOME/Aurum/Presets` (default `~/.local/share/Aurum/Presets`);
+  on Windows `%APPDATA%\Aurum\Presets`.
 - Settings (GUI size, lock mix, MIDI map, favourites):
-  `$XDG_CONFIG_HOME/Aurum/settings.ini`.
-- File dialogs use `zenity` or `kdialog`.
+  `$XDG_CONFIG_HOME/Aurum/settings.ini`; on Windows `%APPDATA%\Aurum\settings.ini`.
+- File dialogs use `zenity` or `kdialog` on Linux, the system dialogs on Windows.
 
 ## Tests
 
@@ -62,7 +77,11 @@ The default target architecture is x86-64-v3 (AVX2/FMA). For older CPUs use
   octave against the model, random parameter stress test, CPU use.
 - `build/import_test <tmpdir> [ffp-preset-dir]` - IR import round trip and
   preset conversion.
-- `build/gui_snapshot out.png [scale]` - renders the editor offscreen.
+- `build/gui_snapshot out.png [scale]` - renders the editor offscreen (a PPM
+  on Windows, whose Cairo has no PNG support).
 - `build/clap_gui_host Aurum.clap [seconds]` - minimal CLAP host for GUI tests
   (e.g. under Xvfb with xdotool).
-- `clap-validator validate build/plugins/Aurum.clap`
+- `clap-validator validate build/Aurum.clap`
+
+The Windows build of every test runs under wine. Use a scratch `WINEPREFIX`:
+the plugin writes its presets and settings to `%APPDATA%` inside the prefix.

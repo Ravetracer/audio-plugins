@@ -2,6 +2,7 @@
 #include <chrono>
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
 #include <vector>
 
 #include "dsp/ReverbEngine.h"
@@ -62,7 +63,28 @@ int main(int argc, char** argv)
     cairo_scale(cr, scale, scale);
     ed.renderTo(cr);
     cairo_destroy(cr);
+#ifdef CAIRO_HAS_PNG_FUNCTIONS
     cairo_surface_write_to_png(s, out);
+#else
+    // The Windows Cairo is built without libpng: write a binary PPM instead.
+    if (FILE* f = fopen(out, "wb"))
+    {
+        cairo_surface_flush(s);
+        fprintf(f, "P6\n%d %d\n255\n", w, h);
+        const unsigned char* data = cairo_image_surface_get_data(s);
+        const int stride = cairo_image_surface_get_stride(s);
+        for (int y = 0; y < h; ++y)
+            for (int x = 0; x < w; ++x)
+            {
+                uint32_t px;
+                memcpy(&px, data + y * stride + x * 4, 4);
+                const unsigned char rgb[3] = {static_cast<unsigned char>(px >> 16), static_cast<unsigned char>(px >> 8),
+                                              static_cast<unsigned char>(px)};
+                fwrite(rgb, 1, 3, f);
+            }
+        fclose(f);
+    }
+#endif
     // Frame cost of a full redraw (static layer invalidated each time).
     auto timeIt = [&](const char* what, auto fn) {
         const auto a = std::chrono::steady_clock::now();

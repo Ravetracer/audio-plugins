@@ -4,6 +4,7 @@
 
 #include "Params.h"
 #include "state/Settings.h"
+#include "util/Path.h"
 
 namespace aurum {
 
@@ -51,7 +52,7 @@ bool PresetSession::load(const std::string& path)
     StateDocument doc;
     if (!PresetManager::get().load(path, doc))
         return false;
-    return applyDocument(doc, std::filesystem::path(path).stem().string(), path);
+    return applyDocument(doc, fromPath(toPath(path).stem()), path);
 }
 
 bool PresetSession::saveAs(const std::string& path)
@@ -60,7 +61,7 @@ bool PresetSession::saveAs(const std::string& path)
     if (!PresetManager::get().save(path, doc))
         return false;
     path_ = path;
-    name_ = std::filesystem::path(path).stem().string();
+    name_ = fromPath(toPath(path).stem());
     loaded_ = doc.values;
     return true;
 }

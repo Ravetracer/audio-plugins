@@ -52,7 +52,14 @@ inline constexpr Color postEq = Color::hex(0xc9a66b);     // Tone EQ (brass)
 inline constexpr Color plot = Color::hex(0x121212);       // graph background
 inline constexpr Color red = Color::hex(0xd9614f);
 inline constexpr Color green = Color::hex(0x7fb37c);
+#if defined(_WIN32)
+// Inter is not part of Windows, and Cairo's DirectWrite backend renders a
+// missing family with clipped glyphs rather than substituting cleanly. Segoe UI
+// ships with every Windows version Aurum runs on.
+inline const char* const fontFamily = "Segoe UI";
+#else
 inline const char* const fontFamily = "Inter";
+#endif
 } // namespace theme
 
 enum class Align { Left, Center, Right };

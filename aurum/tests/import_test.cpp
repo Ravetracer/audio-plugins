@@ -144,7 +144,7 @@ int main(int argc, char** argv)
             }
             if (!finite || peak > 4)
             {
-                printf("preset %s: unstable (peak %.2f)\n", f.path().filename().c_str(), peak);
+                printf("preset %s: unstable (peak %.2f)\n", f.path().filename().string().c_str(), peak);
                 ++bad;
             }
         }

@@ -1,6 +1,6 @@
 #include "Widgets.h"
 
-#include <X11/keysym.h>
+#include "Keys.h"
 
 #include <algorithm>
 #include <cmath>
@@ -98,8 +98,8 @@ bool TextEditor::keyDown(const KeyEvent& e)
 {
     switch (e.keysym)
     {
-    case XK_Return:
-    case XK_KP_Enter:
+    case key::Return:
+    case key::KP_Enter:
     {
         auto cb = onCommit_;
         const std::string t = text_;
@@ -108,8 +108,8 @@ bool TextEditor::keyDown(const KeyEvent& e)
             cb(t);
         return true;
     }
-    case XK_Escape: close(); return true;
-    case XK_Tab:
+    case key::Escape: close(); return true;
+    case key::Tab:
     {
         auto commit = onCommit_;
         auto tab = onTab_;
@@ -121,7 +121,7 @@ bool TextEditor::keyDown(const KeyEvent& e)
             tab();
         return true;
     }
-    case XK_BackSpace:
+    case key::BackSpace:
         if (selectAll_)
             text_.clear();
         else if (!text_.empty())
@@ -359,14 +359,14 @@ bool PopupMenu::keyDown(const KeyEvent& e)
     };
     switch (e.keysym)
     {
-    case XK_Down: step(1); return true;
-    case XK_Up: step(-1); return true;
-    case XK_Return:
-    case XK_KP_Enter:
+    case key::Down: step(1); return true;
+    case key::Up: step(-1); return true;
+    case key::Return:
+    case key::KP_Enter:
         if (hover_ >= 0)
             activate(hover_);
         return true;
-    case XK_Escape: closeChain(); return true;
+    case key::Escape: closeChain(); return true;
     default: return true;
     }
 }
@@ -805,6 +805,32 @@ void sync(cairo_t* cr, const Rect& r, const Color& c)
     cairo_line_to(cr, r.cx() + 0.7, r.cy() - 5);
     cairo_line_to(cr, r.cx() + 3.5, r.cy() - 3);
     stroke(cr, c, 1.2f);
+}
+
+void star(cairo_t* cr, const Rect& r, float radius, const Color& c, bool filled)
+{
+    const double inner = radius * 0.42;
+    const double cy = r.cy() + radius * 0.08; // optical centre: the points sit high
+    for (int i = 0; i < 10; ++i)
+    {
+        const double a = -M_PI / 2 + i * M_PI / 5;
+        const double rad = (i % 2) ? inner : radius;
+        const double x = r.cx() + std::cos(a) * rad, y = cy + std::sin(a) * rad;
+        if (i == 0)
+            cairo_move_to(cr, x, y);
+        else
+            cairo_line_to(cr, x, y);
+    }
+    cairo_close_path(cr);
+    setColor(cr, c);
+    if (filled)
+        cairo_fill(cr);
+    else
+    {
+        cairo_set_line_join(cr, CAIRO_LINE_JOIN_ROUND);
+        cairo_set_line_width(cr, 1.1);
+        cairo_stroke(cr);
+    }
 }
 
 } // namespace icons

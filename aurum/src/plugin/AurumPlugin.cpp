@@ -15,6 +15,7 @@
 #include "state/PresetManager.h"
 #include "state/Settings.h"
 #include "state/StateIO.h"
+#include "util/Path.h"
 
 namespace aurum {
 
@@ -37,6 +38,13 @@ const clap_plugin_descriptor_t kDescriptor = {
 };
 
 AurumPlugin* self(const clap_plugin_t* p) { return static_cast<AurumPlugin*>(p->plugin_data); }
+
+// The one window API each platform's editor is written against.
+#if defined(_WIN32)
+constexpr const char* kWindowApi = CLAP_WINDOW_API_WIN32;
+#else
+constexpr const char* kWindowApi = CLAP_WINDOW_API_X11;
+#endif
 
 struct PortsConfig
 {
@@ -112,11 +120,11 @@ struct PluginGlue
 
     static bool guiApiSupported(const clap_plugin_t*, const char* api, bool floating)
     {
-        return !floating && !std::strcmp(api, CLAP_WINDOW_API_X11);
+        return !floating && !std::strcmp(api, kWindowApi);
     }
     static bool guiPreferredApi(const clap_plugin_t*, const char** api, bool* floating)
     {
-        *api = CLAP_WINDOW_API_X11;
+        *api = kWindowApi;
         *floating = false;
         return true;
     }
@@ -260,7 +268,7 @@ void AurumPlugin::importIr(const std::string& path)
             editor_->notify("IR import failed: " + err);
         return;
     }
-    const std::string name = std::filesystem::path(path).stem().string();
+    const std::string name = fromPath(toPath(path).stem());
     session_.applyDocument(doc, "IR: " + name, "");
     if (editor_)
     {
@@ -932,7 +940,12 @@ bool AurumPlugin::guiSetParent(const clap_window_t* window)
 {
     if (!editor_ || !window)
         return false;
-    if (!editor_->attach(static_cast<unsigned long>(window->x11)))
+#if defined(_WIN32)
+    const auto parent = reinterpret_cast<uintptr_t>(window->win32);
+#else
+    const auto parent = static_cast<uintptr_t>(window->x11);
+#endif
+    if (!editor_->attach(parent))
         return false;
     const int fd = editor_->fd();
     if (hostFd_ && fd >= 0 && hostFd_->register_fd(host_, fd, CLAP_POSIX_FD_READ))

@@ -85,8 +85,10 @@ for d in "${here}"/*/; do
       CLAP|dist|shared|winbuild|_designs) continue ;;
    esac
    [ -f "${d}/CMakeLists.txt" ] || continue
-   # What actually makes it a plugin: a CLAP entry point of its own.
-   [ -f "${d}/src/plugin.cpp" ] || continue
+   # What actually makes it a plugin: a CLAP entry point of its own. The
+   # PluginCore plugins keep it in src/plugin.cpp; Aurum, which is not built on
+   # shared/, has src/entry.cpp and its CLAP glue elsewhere.
+   [ -f "${d}/src/plugin.cpp" ] || [ -f "${d}/src/entry.cpp" ] || continue
    # A release ships what is in the repository. A plugin folder git does not
    # track is work in progress living beside the suite -- another branch
    # checked out here, or something under .git/info/exclude -- and discovering

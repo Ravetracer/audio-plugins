@@ -8,10 +8,11 @@ constexpr char kPluginId[] = "de.ravetracer.aurum";
 // What the host shows.
 constexpr char kPluginName[] = "Aurum Reverb";
 // The name for anything on disk: the CMake project, the bundles and the
-// settings/preset folders under XDG_CONFIG_HOME and XDG_DATA_HOME.
+// settings/preset folders (XDG_CONFIG_HOME and XDG_DATA_HOME on Linux,
+// %APPDATA% on Windows).
 constexpr char kPluginDirName[] = "Aurum";
 constexpr char kPluginVendor[] = "Ravetracer";
-constexpr char kPluginVersion[] = "0.1.0";
+constexpr char kPluginVersion[] = "0.2.0";
 constexpr char kPluginUrl[] = "https://github.com/Ravetracer/audio-plugins";
 constexpr char kPluginDescription[] = "Algorithmic reverb with a frequency-dependent decay contour";
 

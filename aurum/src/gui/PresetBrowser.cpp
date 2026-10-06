@@ -1,6 +1,6 @@
 #include "PresetBrowser.h"
 
-#include <X11/keysym.h>
+#include "Keys.h"
 
 #include <algorithm>
 #include <cctype>
@@ -8,6 +8,7 @@
 
 #include "Editor.h"
 #include "state/Settings.h"
+#include "util/Path.h"
 
 namespace aurum::gui {
 
@@ -25,7 +26,7 @@ std::string lower(std::string s)
 // Folder names may carry an ordering prefix ("02 Halls"); hide it.
 std::string displayFolder(const std::string& f)
 {
-    std::string leaf = std::filesystem::path(f).filename().string();
+    std::string leaf = fromPath(toPath(f).filename());
     if (leaf.size() > 3 && std::isdigit(static_cast<unsigned char>(leaf[0])) &&
         std::isdigit(static_cast<unsigned char>(leaf[1])) && leaf[2] == ' ')
         leaf = leaf.substr(3);
@@ -207,9 +208,7 @@ void PresetBrowser::paint(cairo_t* cr)
     else
         drawText(cr, search_ + "|", searchRect_.reduced(10, 0), Align::Left, theme::text);
     fillRounded(cr, favRect_, 5, favoritesOnly_ ? theme::gold.withAlpha(0.25f) : theme::panel);
-    setFont(cr, 15);
-    drawText(cr, favoritesOnly_ ? "★" : "☆", favRect_, Align::Center,
-             favoritesOnly_ ? theme::goldBright : theme::textDim);
+    icons::star(cr, favRect_, 6.5f, favoritesOnly_ ? theme::goldBright : theme::textDim, favoritesOnly_);
     icons::close(cr, closeRect_, theme::textDim);
 
     // Folders
@@ -249,10 +248,7 @@ void PresetBrowser::paint(cairo_t* cr)
         setFont(cr, 12, isCur);
         drawText(cr, p.name, {row.x + 10, row.y, row.w - 40, row.h}, Align::Left, isCur ? theme::goldBright : theme::text);
         if (PresetManager::get().isFavorite(p.relPath))
-        {
-            setFont(cr, 11);
-            drawText(cr, "★", {row.right() - 22, row.y, 16, row.h}, Align::Center, theme::gold);
-        }
+            icons::star(cr, {row.right() - 22, row.y, 16, row.h}, 5.0f, theme::gold, true);
         if (!search_.empty() || folder_ == 0)
         {
             setFont(cr, 10);
@@ -281,8 +277,7 @@ void PresetBrowser::paintDetails(cairo_t* cr, const Rect& r)
     drawText(cr, p->name, {r.x + 12, y, r.w - 48, 22}, Align::Left, theme::text);
     starRect_ = {r.right() - 34, y, 24, 22};
     const bool fav = PresetManager::get().isFavorite(p->relPath);
-    setFont(cr, 16);
-    drawText(cr, fav ? "★" : "☆", starRect_, Align::Center, fav ? theme::goldBright : theme::textDim);
+    icons::star(cr, starRect_, 7.0f, fav ? theme::goldBright : theme::textDim, fav);
     y += 26;
     setFont(cr, 10.5f);
     drawText(cr, displayFolder(p->folder), {r.x + 12, y, r.w - 24, 14}, Align::Left, theme::textFaint);
@@ -454,35 +449,35 @@ bool PresetBrowser::keyDown(const KeyEvent& e)
     };
     switch (e.keysym)
     {
-    case XK_Escape: close(); return true;
-    case XK_Down:
+    case key::Escape: close(); return true;
+    case key::Down:
         cursor_ = std::min(cursor_ + 1, static_cast<int>(rows_.size()) - 1);
         ensureVisible();
         repaint();
         return true;
-    case XK_Up:
+    case key::Up:
         cursor_ = std::max(cursor_ - 1, 0);
         ensureVisible();
         repaint();
         return true;
-    case XK_Return:
-    case XK_KP_Enter: loadRow(cursor_, true); return true;
-    case XK_Right: loadRow(cursor_, false); return true;
-    case XK_BackSpace:
+    case key::Return:
+    case key::KP_Enter: loadRow(cursor_, true); return true;
+    case key::Right: loadRow(cursor_, false); return true;
+    case key::BackSpace:
         if (!search_.empty())
         {
             search_.pop_back();
             refresh();
         }
         return true;
-    case XK_bracketleft:
+    case key::BracketLeft:
         if (search_.empty())
         {
             session_.step(-1);
             return true;
         }
         break;
-    case XK_bracketright:
+    case key::BracketRight:
         if (search_.empty())
         {
             session_.step(1);

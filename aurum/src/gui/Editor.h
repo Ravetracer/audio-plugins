@@ -7,7 +7,7 @@
 #include "FileDialog.h"
 #include "EqPanel.h"
 #include "Widgets.h"
-#include "X11Window.h"
+#include "NativeWindow.h"
 
 namespace aurum {
 class PresetSession;
@@ -48,7 +48,7 @@ public:
     ~Editor() override;
 
     // Window management (called by the plugin's GUI extension).
-    bool attach(unsigned long parentWindow);
+    bool attach(uintptr_t parentWindow);
     void detach();
     void setScale(double s);
     double scale() const { return scale_; }
@@ -74,7 +74,7 @@ public:
     void onMouseWheel(const MouseEvent& e) override { handleWheel(e); }
     void onMouseLeave() override { handleMouseLeave(); }
     bool onKey(const KeyEvent& e) override { return handleKey(e); }
-    void onFilesDropped(const std::string& uris) override;
+    void onFilesDropped(const std::vector<std::string>& paths) override;
 
     void layout() override;
     void paint(cairo_t* cr) override;
@@ -117,7 +117,7 @@ private:
 
     Controller& controller_;
     ParamContext ctx_;
-    X11Window window_;
+    NativeWindow window_;
     double scale_ = 1.0;
     float logicalW_ = kBaseW, logicalH_ = kBaseH;
 

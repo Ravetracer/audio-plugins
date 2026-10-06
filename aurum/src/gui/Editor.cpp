@@ -1,6 +1,6 @@
 #include "Editor.h"
 
-#include <X11/keysym.h>
+#include "Keys.h"
 
 #include <algorithm>
 #include <cmath>
@@ -12,6 +12,7 @@
 #include "dsp/RoomModel.h"
 #include "plugin/PresetSession.h"
 #include "state/Settings.h"
+#include "util/Path.h"
 
 namespace aurum::gui {
 
@@ -298,7 +299,7 @@ public:
     bool mouseDown(const MouseEvent&) override { return true; }
     bool keyDown(const KeyEvent& e) override
     {
-        if (e.keysym == XK_Escape)
+        if (e.keysym == key::Escape)
         {
             if (RootWidget* r = root())
                 r->closeOverlay(this);
@@ -318,7 +319,7 @@ Editor::Editor(Controller& controller) : controller_(controller), ctx_(controlle
     logicalH_ = static_cast<float>(s.getDouble("gui_height", kBaseH));
     logicalW_ = std::max(logicalW_, kMinW);
     logicalH_ = std::max(logicalH_, kMinH);
-    scale_ = X11Window::systemScale() * s.getDouble("gui_scaling", 1.0);
+    scale_ = NativeWindow::systemScale() * s.getDouble("gui_scaling", 1.0);
 
     buildTopBar();
     buildControls();
@@ -736,7 +737,7 @@ MenuItem Editor::scalingMenu()
         scaling.submenu.push_back({buf, [this, f] {
                                        Settings::get().set("gui_scaling", f);
                                        Settings::get().save();
-                                       setScale(X11Window::systemScale() * f);
+                                       setScale(NativeWindow::systemScale() * f);
                                        if (requestResize)
                                            requestResize(static_cast<int>(logicalW_ * scale_),
                                                          static_cast<int>(logicalH_ * scale_));
@@ -844,7 +845,7 @@ bool Editor::keyDown(const KeyEvent& e)
 {
     if (decayEq_->keyDown(e) || toneEq_->keyDown(e))
         return true;
-    if ((e.mods & ModCtrl) && (e.keysym == XK_z || e.keysym == XK_Z))
+    if ((e.mods & ModCtrl) && (e.keysym == 'z' || e.keysym == 'Z'))
     {
         if (e.mods & ModShift)
             redo();
@@ -852,7 +853,7 @@ bool Editor::keyDown(const KeyEvent& e)
             undo();
         return true;
     }
-    if (e.keysym == XK_Escape)
+    if (e.keysym == key::Escape)
     {
         closeAllOverlays();
         return true;
@@ -860,39 +861,15 @@ bool Editor::keyDown(const KeyEvent& e)
     return false;
 }
 
-void Editor::onFilesDropped(const std::string& uris)
+void Editor::onFilesDropped(const std::vector<std::string>& paths)
 {
-    // First file:// entry of a text/uri-list.
-    size_t start = 0;
-    while (start < uris.size())
-    {
-        size_t end = uris.find_first_of("\r\n", start);
-        if (end == std::string::npos)
-            end = uris.size();
-        std::string line = uris.substr(start, end - start);
-        start = end + 1;
-        if (line.rfind("file://", 0) != 0)
-            continue;
-        std::string path;
-        for (size_t i = 7; i < line.size(); ++i)
-        {
-            if (line[i] == '%' && i + 2 < line.size())
-            {
-                path += static_cast<char>(std::stoi(line.substr(i + 1, 2), nullptr, 16));
-                i += 2;
-            }
-            else
-                path += line[i];
-        }
-        if (onImportIr)
-            onImportIr(path);
-        return;
-    }
+    if (!paths.empty() && onImportIr)
+        onImportIr(paths.front());
 }
 
 // ------------------------------------------------------------ window
 
-bool Editor::attach(unsigned long parentWindow)
+bool Editor::attach(uintptr_t parentWindow)
 {
     int w, h;
     physicalSize(w, h);
@@ -1003,7 +980,7 @@ void Editor::runFileDialog(FileDialog::Mode mode, const std::string& title, cons
         return;
     }
     dialogDone_ = [done = std::move(done)](const std::string& path) {
-        Settings::get().set("last_dir", std::filesystem::path(path).parent_path().string());
+        Settings::get().set("last_dir", fromPath(toPath(path).parent_path()));
         Settings::get().save();
         done(path);
     };

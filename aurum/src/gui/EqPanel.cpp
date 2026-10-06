@@ -1,6 +1,6 @@
 #include "EqPanel.h"
 
-#include <X11/keysym.h>
+#include "Keys.h"
 
 #include <algorithm>
 #include <cmath>
@@ -759,7 +759,7 @@ bool EqPanel::mouseWheel(const MouseEvent& e)
 
 bool EqPanel::keyDown(const KeyEvent& e)
 {
-    if ((e.keysym == XK_Delete || e.keysym == XK_BackSpace) && selected_ >= 0 && hoverInside())
+    if ((e.keysym == key::Delete || e.keysym == key::BackSpace) && selected_ >= 0 && hoverInside())
     {
         deleteBand(selected_);
         return true;

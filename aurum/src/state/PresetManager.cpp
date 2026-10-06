@@ -7,6 +7,7 @@
 
 #include "FfpImport.h"
 #include "Settings.h"
+#include "util/Path.h"
 
 namespace fs = std::filesystem;
 
@@ -16,7 +17,7 @@ namespace {
 
 bool readFile(const std::string& path, std::string& out)
 {
-    std::ifstream in(path, std::ios::binary);
+    std::ifstream in(toPath(path), std::ios::binary);
     if (!in)
         return false;
     std::ostringstream ss;
@@ -28,17 +29,17 @@ bool readFile(const std::string& path, std::string& out)
 bool writeFileAtomic(const std::string& path, const std::string& text)
 {
     std::error_code ec;
-    fs::create_directories(fs::path(path).parent_path(), ec);
+    fs::create_directories(toPath(path).parent_path(), ec);
     const std::string tmp = path + ".tmp";
     {
-        std::ofstream out(tmp, std::ios::binary | std::ios::trunc);
+        std::ofstream out(toPath(tmp), std::ios::binary | std::ios::trunc);
         if (!out)
             return false;
         out << text;
         if (!out)
             return false;
     }
-    fs::rename(tmp, path, ec);
+    fs::rename(toPath(tmp), toPath(path), ec);
     return !ec;
 }
 
@@ -58,13 +59,13 @@ PresetManager::PresetManager()
     std::error_code ec;
     // Version 2: cut filters use Q 1 = Butterworth. Version 3: shelf Q scale. Version 4: predelay taper.
     // Version 5: room/predelay scales, default preset renamed to "Init".
-    if (!fs::exists(root_, ec) || Settings::get().getDouble("factory_installed", 0) < 5)
+    if (!fs::exists(toPath(root_), ec) || Settings::get().getDouble("factory_installed", 0) < 5)
     {
         // Factory files that were renamed in version 5.
-        fs::remove(root_ + "/Default Setting" + kExtension, ec);
+        fs::remove(toPath(root_ + "/Default Setting" + kExtension), ec);
         for (const char* n : {"Vintage Hall", "Digital Chamber", "Shimmer Wash", "Lo-Fi Room"})
-            fs::remove(root_ + "/05 Vintage/" + n + kExtension, ec);
-        fs::remove(root_ + "/05 Vintage", ec); // only succeeds when empty
+            fs::remove(toPath(root_ + "/05 Vintage/" + n + kExtension), ec);
+        fs::remove(toPath(root_ + "/05 Vintage"), ec); // only succeeds when empty
         restoreFactory();
         s.set("factory_installed", 5.0);
         s.save();
@@ -120,19 +121,21 @@ void PresetManager::rescan()
 {
     presets_.clear();
     std::error_code ec;
-    if (!fs::exists(root_, ec))
+    const fs::path root = toPath(root_);
+    if (!fs::exists(root, ec))
         return;
-    for (auto it = fs::recursive_directory_iterator(root_, fs::directory_options::skip_permission_denied, ec);
+    for (auto it = fs::recursive_directory_iterator(root, fs::directory_options::skip_permission_denied, ec);
          it != fs::recursive_directory_iterator(); it.increment(ec))
     {
         if (ec || !it->is_regular_file(ec) || it->path().extension() != kExtension)
             continue;
         PresetInfo p;
-        p.path = it->path().string();
-        fs::path rel = fs::relative(it->path(), root_, ec);
-        p.relPath = rel.replace_extension().string();
-        p.folder = fs::path(p.relPath).parent_path().string();
-        p.name = it->path().stem().string();
+        p.path = fromPath(it->path());
+        fs::path rel = fs::relative(it->path(), root, ec);
+        rel.replace_extension();
+        p.relPath = fromPathGeneric(rel);
+        p.folder = fromPathGeneric(rel.parent_path());
+        p.name = fromPath(it->path().stem());
         std::string text;
         if (readFile(p.path, text))
         {
@@ -229,10 +232,11 @@ int PresetManager::importFfp(const std::string& fileOrDir, std::string* lastPath
     std::error_code ec;
     std::vector<fs::path> files;
     fs::path base;
-    if (fs::is_directory(fileOrDir, ec))
+    const fs::path source = toPath(fileOrDir);
+    if (fs::is_directory(source, ec))
     {
-        base = fs::path(fileOrDir);
-        for (auto it = fs::recursive_directory_iterator(fileOrDir, fs::directory_options::skip_permission_denied, ec);
+        base = source;
+        for (auto it = fs::recursive_directory_iterator(source, fs::directory_options::skip_permission_denied, ec);
              it != fs::recursive_directory_iterator(); it.increment(ec))
             if (!ec && it->is_regular_file(ec) && it->path().extension() == ".ffp")
                 files.push_back(it->path());
@@ -240,21 +244,21 @@ int PresetManager::importFfp(const std::string& fileOrDir, std::string* lastPath
     }
     else
     {
-        files.push_back(fileOrDir);
-        base = fs::path(fileOrDir).parent_path().parent_path();
+        files.push_back(source);
+        base = source.parent_path().parent_path();
     }
     int count = 0;
     for (const auto& f : files)
     {
         std::string text;
         StateDocument doc;
-        if (!readFile(f.string(), text) || !importFfpPreset(text, doc))
+        if (!readFile(fromPath(f), text) || !importFfpPreset(text, doc))
             continue;
         fs::path rel = fs::relative(f, base, ec);
         if (ec || rel.empty())
             rel = f.filename();
         rel.replace_extension(kExtension);
-        const std::string out = root_ + "/Imported/" + rel.string();
+        const std::string out = root_ + "/Imported/" + fromPathGeneric(rel);
         if (writeFileAtomic(out, serializeState(doc)))
         {
             ++count;

@@ -5,27 +5,11 @@
 
 #include <cairo/cairo.h>
 
-#include "Widget.h"
+#include "WindowListener.h"
 
 typedef struct _XDisplay Display;
 
 namespace aurum::gui {
-
-// Receives window-system events (logical coordinates are computed by the
-// window from its scale factor).
-class WindowListener
-{
-public:
-    virtual ~WindowListener() = default;
-    virtual void onPaint(cairo_t* cr, int physW, int physH) = 0;
-    virtual void onMouseDown(const MouseEvent& e) = 0;
-    virtual void onMouseUp(const MouseEvent& e) = 0;
-    virtual void onMouseMove(const MouseEvent& e) = 0;
-    virtual void onMouseWheel(const MouseEvent& e) = 0;
-    virtual void onMouseLeave() = 0;
-    virtual bool onKey(const KeyEvent& e) = 0;
-    virtual void onFilesDropped(const std::string& uriList) {}
-};
 
 // X11 child window embedded into a host window, rendered with Cairo.
 class X11Window
@@ -34,7 +18,7 @@ public:
     explicit X11Window(WindowListener* listener) : listener_(listener) {}
     ~X11Window();
 
-    bool attach(unsigned long parent, int physW, int physH);
+    bool attach(uintptr_t parent, int physW, int physH);
     void destroy();
     bool isOpen() const { return window_ != 0; }
 

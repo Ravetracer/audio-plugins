@@ -6,6 +6,8 @@
 #include <fstream>
 #include <iterator>
 
+#include "util/Path.h"
+
 namespace aurum {
 
 namespace {
@@ -170,7 +172,7 @@ bool readAiff(const std::vector<uint8_t>& b, AudioData& out, std::string* err)
 
 bool readAudioFile(const std::string& path, AudioData& out, std::string* error)
 {
-    std::ifstream in(path, std::ios::binary);
+    std::ifstream in(toPath(path), std::ios::binary);
     if (!in)
     {
         if (error)
