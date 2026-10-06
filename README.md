@@ -15,6 +15,7 @@ Vibe coded with Claude.
 |--------|---------|-----------|---------|------------|
 | **[SäureKiste](saeure-kiste/)** | 0.15.2 | Linux, Windows | CLAP, VST3 | a monophonic acid bass synthesiser modelled on the Roland TB-303's main board, from the February 1982 service notes, with Robin Whittle's Devil Fish modification |
 | **[RumpelKiste](rumpel-kiste/)** | 0.2.1 | Linux, Windows | CLAP, VST3 | a rhythm composer modelled on the Roland TR-909's voicing board, from the June 1984 service notes, with a 64-pattern step sequencer and a drive bus |
+| **[Aurum](aurum/)** | 0.1.0 (in development) | Linux | CLAP, VST3 | an algorithmic reverb with three engines (feedback delay network, allpass ring, plate), a per-frequency decay contour and a tone EQ; built on its own DSP and window rather than `shared/` |
 
 ## Build
 
@@ -45,6 +46,7 @@ audio-plugins/
 ├── shared/            the PluginCore library every plugin is built on
 ├── saeure-kiste/     SaeureKiste
 ├── rumpel-kiste/     RumpelKiste
+├── aurum/            Aurum
 ├── release.sh         builds every plugin and packs the archives
 ├── setup-winbuild.sh  one-time Windows cross-build setup
 └── CLAP/              CLAP SDK checkouts — gitignored, fetched locally

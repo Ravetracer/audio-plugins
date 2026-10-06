@@ -42,8 +42,10 @@ audio-plugins/
 ├── CLAP/              CLAP SDK checkouts       — GITIGNORED, see below
 ├── winbuild/          meson venv + Windows Cairo — GITIGNORED
 ├── dist/              release archives         — GITIGNORED
+├── Documents/         reference books and presets — GITIGNORED, see below
 ├── saeure-kiste/     SaeureKiste — a TB-303 model
-└── rumpel-kiste/     RumpelKiste — a TR-909 model
+├── rumpel-kiste/     RumpelKiste — a TR-909 model
+└── aurum/            Aurum — an algorithmic reverb, NOT built on shared/
 ```
 
 ## The plugins
@@ -52,6 +54,7 @@ audio-plugins/
 |---|--------|--------|--------|-----------|---------|------------|
 | 1 | **SäureKiste** | `saeure-kiste/` | 0.15.2 | Linux, Windows | CLAP, VST3 | a Roland TB-303 model, from the 1982 service notes, plus Robin Whittle's Devil Fish modification |
 | 2 | **RumpelKiste** | `rumpel-kiste/` | 0.2.1 | Linux, Windows | CLAP, VST3 | a Roland TR-909 model, from the 1984 service notes, with SäureKiste's sequencer and drive stage |
+| 3 | **Aurum** | `aurum/` | 0.1.0, unreleased | Linux | CLAP, VST3 | a clean-room algorithmic reverb (FDN, allpass ring, plate) with a per-frequency decay contour; own DSP and GUI, see *Aurum* below |
 
 Naming follows the plugin, not a pattern: the CMake project, the installed
 artifact and the display name are CamelCase (`SaeureKiste`), the folder is
@@ -249,6 +252,97 @@ the consistency is what makes the shared components possible.
 and `src/gui/seqwindow.*` for its sequencer, which nothing else has, and that is
 the point of this repository — the skeleton is a starting shape, not a
 constraint.
+
+## Aurum
+
+`aurum/` is the one plugin here that is **not built on `shared/`**. It has its
+own DSP, its own X11/Cairo window and widgets, its own preset manager and its
+own parameter model. That is deliberate and stays that way: do not port it onto
+`plugincore`, do not move its code into `shared/`, and do not change `shared/`
+for its sake. The *Rule for a shared change* covers SäureKiste and
+RumpelKiste, not Aurum — and a change in `aurum/` never needs checking against
+the other plugins.
+
+It is a clean-room algorithmic reverb, written from public literature, with a
+commercial reverb's user manual (in `Documents/`) used only as a feature
+reference. It was developed in a separate repository and moved here without its
+history.
+
+```
+aurum/
+├── CMakeLists.txt        C++20, -march=x86-64-v3 (AURUM_ARCH_FLAGS to lower it)
+├── cmake/plugin.cmake    CLAP + VST3 through make_clapfirst_plugins
+├── install.sh            configure, build, self-test, install to ~/.clap, ~/.vst3
+├── README.md
+├── docs/PLAN.md          design, phases and status — the source of truth
+├── presets/              factory presets
+├── src/
+│   ├── aurum.h           identity constants (kPluginId, kPluginVersion, ...)
+│   ├── entry.cpp         CLAP entry, compiled once per format by clap-wrapper
+│   ├── dsp/              engine: FDN (Natural), allpass ring (Classic), plate,
+│   │                     early reflections, decay designer, post EQ — static lib aurum-dsp
+│   ├── plugin/           CLAP glue, params, preset session (undo/redo, A/B)
+│   ├── state/            state I/O, settings, presets, IR import, .ffp import
+│   ├── gui/              X11 window, Cairo widgets, editor, preset browser
+│   └── util/
+└── tests/                geq_test, engine_test, import_test, longrun_test,
+                          gui_snapshot, clap_gui_host
+```
+
+What differs from the other plugins:
+
+- **Identity** follows the repository convention (`de.ravetracer.aurum`,
+  vendor `Ravetracer`), but lives in `src/aurum.h`. The version is in
+  `project()` and `kPluginVersion`, and a `static_assert` (via
+  `AURUM_CMAKE_VERSION`) fails the build when they disagree. The host display
+  name is "Aurum Reverb"; everything on disk is "Aurum".
+- **State on disk:** presets in `$XDG_DATA_HOME/Aurum/Presets`, settings (GUI
+  size, MIDI map, favourites) in `$XDG_CONFIG_HOME/Aurum/settings.ini`.
+- **No `STATUS.md`/`TODO.md`.** `docs/PLAN.md` carries the phases and their
+  status. Phases 1-7 are done (DSP, CLAP+VST3, GUI, presets and browser,
+  undo/A-B, MIDI learn, IR import, `.ffp` import); phase 8, tuning the sound by
+  ear, is open. The VST3 has only been smoke-tested.
+- **Not in a release yet, and not Windows-capable.** `release.sh` discovers
+  plugins by `src/plugin.cpp`, which Aurum does not have, so it is skipped.
+  Joining a release needs: a win32 backend beside `src/gui/X11Window.cpp`
+  (the GUI is X11-only), the mingw/Cairo/static-link setup described under
+  *Windows and VST3*, `install()` rules, an `AURUM_BUILD_TOOLS` option and a
+  `<Project>-vst3` target with the bundle under `build/vst3/` as `release.sh`
+  expects (Aurum's wrapper target is `aurum_vst3` and its bundles land in
+  `build/plugins/`).
+
+Build and test:
+
+```sh
+cd aurum
+./install.sh                                   # or: cmake -S . -B build -G Ninja && ninja -C build
+build/tests/geq_test                           # attenuation filter fit accuracy
+build/tests/engine_test [t60|stability|cpu|wav]
+build/import_test <tmpdir> ../Documents/<ffp-folder>   # IR round trip + .ffp conversion
+build/gui_snapshot out.png [scale]             # offscreen render + frame timing
+build/clap_gui_host build/plugins/Aurum.clap [seconds]   # minimal host, under Xvfb
+clap-validator validate build/plugins/Aurum.clap
+```
+
+Rules specific to Aurum:
+
+- **Never name the reference product or its vendor** anywhere in the
+  repository — code, comments, docs, UI, commit messages. Aurum is meant for a
+  free public release. The importer is "Import .ffp Preset Folder"
+  (`state/FfpImport.*`); parameter names are Aurum's own (Room, Length,
+  Pre-Delay, Motion, Air, Depth, Density, Width, Ducking, Gate, Freeze, Mix;
+  algorithms Natural/Classic/Plate; Decay Contour and Tone EQ). Parameter IDs
+  must not change — saved state depends on them.
+- Never copy code, assets, presets or visual design from the reference product.
+  The look is Aurum's own: graphite and brass, signal-flow panels.
+- The third-party `.ffp` presets in `Documents/` are for testing the importer
+  and for the user's own use. Never bundle them as factory presets and never
+  commit them.
+- **Function over visuals.** No analyser, meters or decorative animation; keep
+  `gui_snapshot` frame cost well under ~4 ms at 1x.
+- **GUI tests must point `XDG_CONFIG_HOME` and `XDG_DATA_HOME` at scratch
+  directories** and run under Xvfb. A test once wrote a MIDI mapping into the
+  user's real `~/.config/Aurum/settings.ini`.
 
 ## Build and install
 
