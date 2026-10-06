@@ -20,6 +20,7 @@
 # Local reference material inside a plugin (recordings, papers, renders).
 # The leading "!" has to be escaped or git reads it as a negation.
 */\!dev/
+*/\!references/
 
 # Python bytecode
 __pycache__/

@@ -45,7 +45,8 @@ audio-plugins/
 ├── Documents/         reference books and presets — GITIGNORED, see below
 ├── saeure-kiste/     SaeureKiste — a TB-303 model
 ├── rumpel-kiste/     RumpelKiste — a TR-909 model
-└── aurum/            Aurum — an algorithmic reverb, NOT built on shared/
+├── aurum/            Aurum — an algorithmic reverb, NOT built on shared/
+└── substrike/        Substrike — a kick drum designer, NOT built on shared/
 ```
 
 ## The plugins
@@ -55,6 +56,7 @@ audio-plugins/
 | 1 | **SäureKiste** | `saeure-kiste/` | 0.15.2 | Linux, Windows | CLAP, VST3 | a Roland TB-303 model, from the 1982 service notes, plus Robin Whittle's Devil Fish modification |
 | 2 | **RumpelKiste** | `rumpel-kiste/` | 0.2.1 | Linux, Windows | CLAP, VST3 | a Roland TR-909 model, from the 1984 service notes, with SäureKiste's sequencer and drive stage |
 | 3 | **Aurum** | `aurum/` | 0.3.0 | Linux, Windows | CLAP, VST3 | a clean-room algorithmic reverb (FDN, allpass ring, plate) with a per-frequency decay contour; own DSP and GUI, see *Aurum* below |
+| 4 | **Substrike** | `substrike/` | 0.1.0 | Linux, Windows | CLAP, VST3 | a layered kick drum designer for every style; standalone like Aurum, see *Substrike* below |
 
 Naming follows the plugin, not a pattern: the CMake project, the installed
 artifact and the display name are CamelCase (`SaeureKiste`), the folder is
@@ -390,6 +392,41 @@ Rules specific to Aurum:
   `WINEPREFIX`: use a scratch prefix, never the one in `winetest.env`, or the
   plugin's `%APPDATA%\Aurum` lands in the user's real Bottles prefix.
 
+## Substrike
+
+`substrike/` is the second plugin **not built on `shared/`**, for the same
+reasons as Aurum: lanes, a reorderable effect chain and a breakpoint curve
+editor do not fit `WindowSpec`. The *Rule for a shared change* does not cover
+it. Code is *copied* in where it helps (SäureKiste's drive models, Aurum's
+window backends) and belongs to Substrike from then on; nothing is linked
+across plugin folders.
+
+`docs/PLAN.md` is the source of truth: the design (8 lanes x 6 effect slots
+plus a master chain, per-slot band select, Bus lanes and a transient guard for
+rumble, per-lane aux outputs, hit export with drag-and-drop, a violet theme)
+and the eight phases. Phase 1 is done as of 0.1.0: the CLAP and VST3 build, one
+lane with the Body source, plain-text state, the offline renderer and
+self-test. No editor yet.
+
+What to know before working there:
+
+- **Parameter ids are allocated in blocks** (`src/plugin/Params.h`): global
+  1-999, lane L at `1000 * (L + 1)` with fixed offsets for the lane, each
+  source and each effect slot, master chain 9000+, modulation 10000+. Never
+  renumber; add inside the block.
+- **State stores plain units** (Hz, ms, dB, enum labels), not knob positions,
+  so ranges can be widened without breaking saved projects.
+- **Breakpoint curves are state, macros are parameters.** Every curve is
+  scaled by automatable macro parameters (start, end, time, curvature), so a
+  drawn curve stays automatable.
+- **The renderer is the test harness.** `build/substrike-render --selftest`
+  loads the built `.clap` through the CLAP API; `install.sh` runs it. It also
+  runs the Windows build under wine -- with a scratch `WINEPREFIX`, never the
+  one in `winetest.env`.
+- `substrike/!references/` holds third-party kick samples used to measure the
+  ranges the engine must reach (the table in PLAN.md). Gitignored via
+  `*/\!references/`; never commit, never ship, never name the packs.
+
 ## Build and install
 
 From inside a plugin folder:
@@ -514,7 +551,9 @@ Three things to carry over, all easy to undo by accident:
 finds Aurum), **and skips any that git does not
 track**, so an unrelated checkout or a branch parked beside the repository does
 not end up in an archive by accident. A new plugin joins a release simply by
-existing and being committed — there is no list to update.
+existing and being committed — there is no list to update. A committed plugin
+that is not ready to ship carries a `NO-RELEASE` file saying why, and
+`release.sh` skips it; Substrike does as of 0.1.0.
 
 It reads each plugin's display name and version from its `project()` line,
 builds Release, installs into a staging tree, and writes `BUILD-INFO.txt`

@@ -98,6 +98,12 @@ for d in "${here}"/*/; do
       echo "    skipping ${name}: not tracked by git"
       continue
    fi
+   # A committed plugin that is not ready to ship carries a NO-RELEASE file
+   # saying why. Delete the file to let the plugin into the next release.
+   if [ -f "${d}/NO-RELEASE" ]; then
+      echo "    skipping ${name}: NO-RELEASE"
+      continue
+   fi
    plugins+=("$name")
 done
 
