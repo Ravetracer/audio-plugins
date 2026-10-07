@@ -55,7 +55,7 @@ audio-plugins/
 |---|--------|--------|--------|-----------|---------|------------|
 | 1 | **SäureKiste** | `saeure-kiste/` | 0.15.2 | Linux, Windows | CLAP, VST3 | a Roland TB-303 model, from the 1982 service notes, plus Robin Whittle's Devil Fish modification |
 | 2 | **RumpelKiste** | `rumpel-kiste/` | 0.2.1 | Linux, Windows | CLAP, VST3 | a Roland TR-909 model, from the 1984 service notes, with SäureKiste's sequencer and drive stage |
-| 3 | **Aurum** | `aurum/` | 0.3.0 | Linux, Windows | CLAP, VST3 | a clean-room algorithmic reverb (FDN, allpass ring, plate) with a per-frequency decay contour; own DSP and GUI, see *Aurum* below |
+| 3 | **Aurum** | `aurum/` | 0.3.1 | Linux, Windows | CLAP, VST3 | a clean-room algorithmic reverb (FDN, allpass ring, plate) with a per-frequency decay contour; own DSP and GUI, see *Aurum* below |
 | 4 | **Substrike** | `substrike/` | 0.3.0 | Linux, Windows | CLAP, VST3 | a layered kick drum designer for every style; standalone like Aurum, see *Substrike* below |
 
 Naming follows the plugin, not a pattern: the CMake project, the installed
@@ -338,7 +338,9 @@ What differs from the other plugins:
   the reference reverb for one-control sweeps (Thickness, Distance,
   Brightness, Style, a long room) and for presets in every style; they live in
   `Documents/aurum-reference/` (gitignored, never commit) with a `.ffp` beside
-  every render, so each case imports exactly. What came out of it, all in
+  every render, so each case imports exactly, sorted into `natural/`,
+  `plate/`, `vintage/` (one-control sweeps and long rooms per style) and
+  `presets/`; `impulse-48k.wav` stays at the top. What came out of it, all in
   `dsp/ReverbEngine.cpp` and `dsp/DecayModel.h` with the numbers in comments:
   Natural's early reflections -12.5 - 10 x Distance dB; Brightness as two
   shelves plus a level (tone) and an absorption in 1/s for darker settings
@@ -346,12 +348,36 @@ What differs from the other plugins:
   +2 dB per doubling of room time; a per-style voicing (two shelves and a
   level); per-style decay calibration as a log2 multiplier and an absorption
   per octave; no level compensation for Decay Rate EQ bands. Sweeps match
-  within about 1.5 dB per octave and 10 % in decay time. Open: Classic and
-  Plate respond to Brightness differently from Natural, which was the only
-  style swept, and their lows still differ by about 15 % between short and
-  long rooms. To redo a comparison, render the same `.ffp` through Aurum's
-  engine with the impulse at the same place and compare octave levels and
-  third-octave decay times (the analysis scripts were scratch; rewrite them).
+  within about 1.5 dB per octave and 10 % in decay time. In 0.3.1 Brightness
+  was swept on Plate and Vintage too (`brightness_plate_*`,
+  `brightness_vintage_*`, and `long_plate_b-*`/`long_vintage_-*` at -75/-100,
+  those four at Mix 22.5 %): the brightness tone table is now per style, with
+  a lowpass (Q 0.4) for the dark side, and `DecayModel` scales the brightness
+  decay effect per style. Plate does not change its decay with Brightness at
+  all; it is a lowpass whose corner falls about 1.5 octaves per 25 %. Classic
+  is mostly a decay change with little tone. Both now match within about 1 dB
+  per octave up to 8 kHz. Plate was also swept for Thickness, Distance and
+  Decay Rate (`plate/thickness_plate_*`, `distance_plate_*`, `decay_plate_*`;
+  **rendered 6.02 dB hot** -- the Bitwig track was at 0 dB instead of its
+  -6 dB default -- so halve them before comparing). From those: Plate's
+  level falls 3.3 dB less over the Distance range, Thickness has a small
+  per-style correction, the voicing level is +0.4 dB, and Decay Rate
+  lengthens the plate as rate^0.905 above 100 % with a soft floor at 0.38 x
+  the room's time below. Every Plate sweep matches within about 0.5 dB in
+  total level, and Dark Grotto (`plate/dark_grotto_pro_r2.wav`, a real Plate
+  render) within 0.1 dB. Open: Classic at -100 % cuts the 16 kHz octave
+  almost completely, which the lowpass does not follow; Plate and Classic
+  lows still decay about 25 % short in long rooms; Additive and Cloud
+  Chamber II (small rooms) are 2-4 dB too loud in every style, probably the
+  room-size level, which has only been measured at 2.5 s and 10 s; and
+  `presets/DarkGrotto_Plate.wav` and `presets/OlanchaFarewell_Plate.wav` were
+  rendered in Vintage by mistake (their early responses correlate at 1.0 with
+  the Vintage files). Thickness, Distance and Decay Rate have not been swept
+  on Vintage. To redo a comparison,
+  render the same `.ffp` through Aurum's engine with the impulse at the same
+  place and compare octave levels and octave decay times (the analysis
+  scripts were scratch; rewrite them). Blank the dry sample at 1.000 s when a
+  render was made below 100 % mix.
 
 Build and test:
 

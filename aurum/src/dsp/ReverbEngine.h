@@ -58,8 +58,10 @@ struct EngineControl
     double lateDiffusion = 0.6, lateDiffScale = 1.0;
     double satDrive = 1.0;
     double crossfeed = 0.0, sideGain = 1.0;
-    // Brightness: a high and a low shelf on the wet signal.
+    // Brightness: a high and a low shelf on the wet signal, and a lowpass
+    // for the darkest Plate and Classic settings (0 = off).
     double toneHiHz = 5000.0, toneHiDb = 0.0, toneLoHz = 300.0, toneLoDb = 0.0;
+    double toneLpHz = 0.0;
     // Wet level from Brightness, Thickness and the room size.
     double wetLevelDb = 0.0;
     static EngineControl compute(const EngineParams& p, double space);
@@ -151,12 +153,13 @@ private:
     OnePoleCoeffs chorusSplitC_{};
     double chorusPhase_ = 0.0;
 
-    SvfCoeffs toneHi_, toneLo_;
+    SvfCoeffs toneHi_, toneLo_, toneLp_;
+    bool toneLpOn_ = false;
 
     // Per-style voicing, measured against reference renders.
 
     SvfCoeffs voiceHi_, voiceLo_;
-    std::array<SvfState, 2> toneHiS_{}, toneLoS_{}, voiceHiS_{}, voiceLoS_{};
+    std::array<SvfState, 2> toneHiS_{}, toneLoS_{}, toneLpS_{}, voiceHiS_{}, voiceLoS_{};
 
     PostEq postEq_;
     Ducker ducker_;

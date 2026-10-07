@@ -14,6 +14,11 @@ constexpr double kMaxSpread = 3.7;
 constexpr double kMaxPredelayMs = 500.0;
 constexpr float kLateDiffMs[4] = {1.31f, 2.07f, 3.43f, 5.29f};
 constexpr double kChorusBaseMs[2] = {9.0, 13.5};
+constexpr double kToneLpQ = 0.4;
+// Plate calibration, see decayModelFor and EngineControl::compute.
+constexpr double kPlateRateExp = 0.905;
+constexpr double kPlateFloor = 0.38;
+constexpr double kPlateDistanceDb = 3.3;
 
 // Loudness calibration of the late tail per style (keeps styles comparable).
 // Tone and level of each style at default settings, fitted (within 0.5 dB rms
@@ -26,7 +31,7 @@ struct Voicing
 constexpr Voicing kVoicing[3] = {
     {5460.0, -5.0, 400.0, 2.0, 0.5},      // Natural
     {14288.0, 9.75, 400.0, 1.75, -6.68},  // Classic
-    {13502.0, -6.75, 400.0, 0.75, -8.49}, // Plate
+    {13502.0, -6.75, 400.0, 0.75, -8.09}, // Plate
 };
 
 float panGain(double pan, int channel)
@@ -39,50 +44,102 @@ float panGain(double pan, int channel)
 
 namespace {
 
-// Brightness as a tone change, fitted to reference renders of a 2.5 s hall at
-// Brightness -100 .. +100 % in 25 % steps (+50 % interpolated): one high and
-// one low shelf (Q 0.5) and a level, matching every octave from 63 Hz to
-// 16 kHz within 0.4 dB. What Brightness does to the decay time is in
-// DecayModel; the energy that change adds or removes is already taken out of
-// these gains.
+// Brightness as a tone change, per style, fitted to reference renders of a
+// 2.5 s hall at Brightness -100 .. +100 % in 25 % steps: one high and one low
+// shelf (Q 0.5), a lowpass (Q 0.4) and a level. Natural (+50 % interpolated)
+// matches every octave from 63 Hz to 16 kHz within 0.4 dB. Plate and Classic
+// match 63 Hz .. 8 kHz within 1.8 dB, mostly within 0.5 dB; at 16 kHz the
+// darkest Plate settings reach the references' noise floor, and Classic at
+// -100 % cuts that octave almost completely, which a lowpass this gentle
+// does not follow (about 20 dB short there). What Brightness does to the
+// decay time is in DecayModel; the energy that change adds or removes is
+// already taken out of these gains.
 struct ToneStep
 {
     double hiHz, hiDb, loHz, loDb, levelDb;
+    double lpHz = 0.0; // 0 = no lowpass
 };
-constexpr ToneStep kBrightnessTone[9] = {
-    {2362.0, -25.5, 400.0, 5.5, -3.1}, // -100 %
-    {2849.0, -20.0, 400.0, 3.5, -1.4}, //  -75 %
-    {3228.0, -14.5, 400.0, 1.0, 0.4},  //  -50 %
-    {4145.0, -7.5, 400.0, 0.0, 0.5},   //  -25 %
-    {5500.0, 0.0, 300.0, 0.0, 0.0},    //    0
-    {6836.0, 7.5, 250.0, 0.0, -0.6},   //  +25 %
-    {7541.0, 10.0, 250.0, -1.75, -0.75},
-    {8246.0, 12.5, 250.0, -3.5, -0.9}, //  +75 %
-    {7747.0, 12.5, 250.0, -6.0, -1.1}, // +100 %
+constexpr ToneStep kBrightnessTone[3][9] = {
+    {
+        // Natural
+        {2362.0, -25.5, 400.0, 5.5, -3.1}, // -100 %
+        {2849.0, -20.0, 400.0, 3.5, -1.4}, //  -75 %
+        {3228.0, -14.5, 400.0, 1.0, 0.4},  //  -50 %
+        {4145.0, -7.5, 400.0, 0.0, 0.5},   //  -25 %
+        {5500.0, 0.0, 300.0, 0.0, 0.0},    //    0
+        {6836.0, 7.5, 250.0, 0.0, -0.6},   //  +25 %
+        {7541.0, 10.0, 250.0, -1.75, -0.75},
+        {8246.0, 12.5, 250.0, -3.5, -0.9}, //  +75 %
+        {7747.0, 12.5, 250.0, -6.0, -1.1}, // +100 %
+    },
+    {
+        // Classic: a lowpass that closes in only towards -100 %, a gentle
+        // high shelf above 0; most of the darkening is in the decay.
+        {5500.0, 0.0, 400.0, 0.0, -0.01, 10106.0}, // -100 %
+        {5500.0, 0.0, 400.0, 0.0, -0.25, 14007.0}, //  -75 %
+        {5500.0, 0.0, 400.0, 0.0, -0.20, 15640.0}, //  -50 %
+        {5500.0, 0.0, 400.0, 0.0, -0.22},          //  -25 %
+        {5500.0, 0.0, 300.0, 0.0, 0.0},            //    0
+        {4000.0, 0.16, 250.0, -0.08, 0.01},        //  +25 %
+        {4000.0, 0.58, 250.0, -0.08, -0.01},
+        {4000.0, 1.19, 250.0, -0.10, -0.04},       //  +75 %
+        {4000.0, 2.03, 250.0, -0.04, -0.12},       // +100 %
+    },
+    {
+        // Plate: a lowpass whose corner falls about an octave and a half
+        // per 25 % below 0, with the level made up; above 0 a high shelf
+        // rises and the lows are taken down.
+        {5500.0, 0.0, 400.0, 0.0, 7.03, 267.0},  // -100 %
+        {5500.0, 0.0, 400.0, 0.0, 3.92, 748.0},  //  -75 %
+        {5500.0, 0.0, 400.0, 0.0, 2.31, 2156.0}, //  -50 %
+        {5500.0, 0.0, 400.0, 0.0, 1.14, 6740.0}, //  -25 %
+        {5500.0, 0.0, 300.0, 0.0, 0.0},          //    0
+        {8000.0, 3.09, 250.0, 0.20, -0.12},      //  +25 %
+        {8000.0, 5.15, 250.0, 0.30, -0.24},
+        {8000.0, 11.55, 250.0, -5.08, 0.32},     //  +75 %
+        {8000.0, 17.43, 250.0, -10.43, 0.86},    // +100 %
+    },
 };
+// The lowpass is faded in from far above the audio band, so a step without
+// one blends smoothly into a step with one.
+constexpr double kToneLpOffHz = 40000.0;
 
-ToneStep brightnessTone(double r)
+ToneStep brightnessTone(Style style, double r)
 {
+    const ToneStep* table = kBrightnessTone[static_cast<int>(style)];
     const double pos = (clamp(r, -1.0, 1.0) + 1.0) * 4.0;
     const int i = std::min(static_cast<int>(pos), 7);
     const double t = pos - i;
-    const ToneStep& a = kBrightnessTone[i];
-    const ToneStep& b = kBrightnessTone[i + 1];
+    const ToneStep& a = table[i];
+    const ToneStep& b = table[i + 1];
     auto mix = [t](double x, double y) { return x + (y - x) * t; };
-    return {std::exp(mix(std::log(a.hiHz), std::log(b.hiHz))), mix(a.hiDb, b.hiDb),
-            std::exp(mix(std::log(a.loHz), std::log(b.loHz))), mix(a.loDb, b.loDb), mix(a.levelDb, b.levelDb)};
+    auto mixLog = [&](double x, double y) { return std::exp(mix(std::log(x), std::log(y))); };
+    ToneStep out{mixLog(a.hiHz, b.hiHz), mix(a.hiDb, b.hiDb), mixLog(a.loHz, b.loHz), mix(a.loDb, b.loDb),
+                 mix(a.levelDb, b.levelDb)};
+    if (a.lpHz > 0.0 || b.lpHz > 0.0)
+    {
+        const double lp = mixLog(a.lpHz > 0.0 ? a.lpHz : kToneLpOffHz, b.lpHz > 0.0 ? b.lpHz : kToneLpOffHz);
+        out.lpHz = lp < kToneLpOffHz * 0.999 ? lp : 0.0;
+    }
+    return out;
 }
 
 // Thickness is mostly density, heard as level: reference renders measured
 // -14.4, -7.4, 0, +5.1 and +6.6 dB at -100, -50, 0, +50 and +100 %, the same
 // in every octave and with the decay time unchanged. The top two steps are
 // raised by what the saturation above +50 % takes off a full-scale impulse.
-double thicknessLevelDb(double t)
+// The plate follows the same curve within a dB; the second row is what
+// reference renders of Plate at -100 .. +100 % add to it.
+double thicknessLevelDb(Style style, double t)
 {
     constexpr double kDb[5] = {-14.4, -7.4, 0.0, 6.0, 8.2};
+    constexpr double kPlateDb[5] = {0.4, 0.5, 0.0, -0.25, -1.2};
     const double pos = (clamp(t, -1.0, 1.0) + 1.0) * 2.0;
     const int i = std::min(static_cast<int>(pos), 3);
-    return kDb[i] + (kDb[i + 1] - kDb[i]) * (pos - i);
+    double db = kDb[i] + (kDb[i + 1] - kDb[i]) * (pos - i);
+    if (style == Style::Plate)
+        db += kPlateDb[i] + (kPlateDb[i + 1] - kPlateDb[i]) * (pos - i);
+    return db;
 }
 
 } // namespace
@@ -137,7 +194,8 @@ EngineControl EngineControl::compute(const EngineParams& p, double space)
     c.crossfeed = w <= 0.5 ? 1.0 : clamp(1.0 - (w - 0.5) / 0.5, 0.0, 1.0);
     c.sideGain = w <= 0.5 ? w / 0.5 : (w <= 1.0 ? 1.0 : 1.0 + (w - 1.0) * 2.0);
 
-    const ToneStep tone = brightnessTone(br * 2.0 - 1.0);
+    const ToneStep tone = brightnessTone(p.style, br * 2.0 - 1.0);
+    c.toneLpHz = tone.lpHz;
     c.toneHiHz = tone.hiHz;
     c.toneHiDb = tone.hiDb;
     c.toneLoHz = tone.loHz;
@@ -147,7 +205,12 @@ EngineControl EngineControl::compute(const EngineParams& p, double space)
     // a 10 s room than for a 2.5 s one at the same settings. Kept within
     // +-4 dB until shorter and longer rooms have been measured too.
     const double roomDb = clamp(2.05 * std::log2(c.room.t60 / 2.5), -4.0, 4.0);
-    c.wetLevelDb = tone.levelDb + thicknessLevelDb(th * 2.0 - 1.0) + roomDb;
+    c.wetLevelDb = tone.levelDb + thicknessLevelDb(p.style, th * 2.0 - 1.0) + roomDb;
+    // The plate loses less level towards a far Distance than the feeds above
+    // take off: reference renders at 0 .. 100 % span 3.1 dB, against 6.4 dB
+    // without this.
+    if (p.style == Style::Plate)
+        c.wetLevelDb += kPlateDistanceDb * (di - 0.5);
     return c;
 }
 
@@ -229,6 +292,8 @@ void ReverbEngine::reset()
         s.reset();
     for (auto& s : toneLoS_)
         s.reset();
+    for (auto& s : toneLpS_)
+        s.reset();
     for (auto& s : voiceHiS_)
         s.reset();
     for (auto& s : voiceLoS_)
@@ -283,6 +348,29 @@ DecayModel ReverbEngine::decayModelFor(const EngineParams& p, const Room& room, 
         {0.0, 0.0, 0.0, 0.0, 0.0, 0.0453, 0.1259, 0.2740, 0.3702},
         {0.0, 0.0, 0.0, 0.0, 0.0174, 0.0764, 0.0405, 0.0441, 0.1998},
     };
+    // Brightness and the decay, per style, from reference renders of a 2.5 s
+    // and a long room at -100 .. +100 %. Natural is what DecayModel's curves
+    // were fitted to. Classic darkens its decay the same way, a little less at
+    // the top (within 6 % per octave, 500 Hz .. 8 kHz). Plate does not change
+    // its decay at all, in a short room or a long one: there Brightness is a
+    // tone control only.
+    if (style == Style::Classic)
+    {
+        m.brightAbsScale = 1.08;
+        m.brightAbsExp = 0.85;
+    }
+    else if (style == Style::Plate)
+    {
+        m.brightAbsScale = 0.0;
+        m.brightLog2Scale = 0.0;
+        // Decay Rate, from reference renders at 25 .. 400 % of a 2.5 s room:
+        // longer settings lengthen the plate less than in proportion, and
+        // shorter ones run into a floor near 40 % of the room's time, flat
+        // across the octaves.
+        if (m.decayRate > 1.0)
+            m.decayRate = std::pow(m.decayRate, kPlateRateExp);
+        m.floorT60 = kPlateFloor * room.t60;
+    }
     for (size_t k = 0; k < m.calib.size(); ++k)
     {
         m.calib[k] = kCalib[static_cast<int>(style)][k];
@@ -477,6 +565,10 @@ void ReverbEngine::updateControl(const EngineParams& p, bool snap)
 
     toneHi_ = SvfCoeffs::highShelf(ctl_.toneHiHz, 0.5, ctl_.toneHiDb, fs_);
     toneLo_ = SvfCoeffs::lowShelf(ctl_.toneLoHz, 0.5, ctl_.toneLoDb, fs_);
+    // Close to Nyquist the lowpass is left out rather than pushed against it.
+    toneLpOn_ = ctl_.toneLpHz > 0.0 && ctl_.toneLpHz < 0.45 * fs_;
+    if (toneLpOn_)
+        toneLp_ = SvfCoeffs::lowPass(ctl_.toneLpHz, kToneLpQ, fs_);
     const Voicing& v = kVoicing[static_cast<int>(style_)];
     voiceHi_ = SvfCoeffs::highShelf(v.hiHz, 0.5, v.hiDb, fs_);
     voiceLo_ = SvfCoeffs::lowShelf(v.loHz, 0.5, v.loDb, fs_);
@@ -758,6 +850,12 @@ void ReverbEngine::processBlock(const float* inL, const float* inR, float* outL,
         }
     }
 
+    if (toneLpOn_)
+        for (int s = 0; s < n; ++s)
+        {
+            wetL[s] = toneLpS_[0].process(wetL[s], toneLp_);
+            wetR[s] = toneLpS_[1].process(wetR[s], toneLp_);
+        }
     for (int s = 0; s < n; ++s)
     {
         wetL[s] = toneLoS_[0].process(toneHiS_[0].process(wetL[s], toneHi_), toneLo_);

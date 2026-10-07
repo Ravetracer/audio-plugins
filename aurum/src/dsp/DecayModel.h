@@ -32,6 +32,15 @@ struct DecayModel
     double lfMult = 1.2, lfFreq = 250.0;
     double hfMult = 0.6, hfFreq = 4000.0;
     double brightness = 0.5; // 0..1, 0.5 neutral
+    // How much of Brightness reaches the decay, per style (ReverbEngine::
+    // decayModelFor): a scale on the absorption of darker settings and the
+    // exponent of its rise with frequency, and a scale on the lengthening of
+    // brighter ones.
+    double brightAbsScale = 1.0, brightAbsExp = 1.05;
+    double brightLog2Scale = 1.0;
+    // A decay time the style does not go below however short Decay Rate
+    // makes it, joined softly (0 = none); see ReverbEngine::decayModelFor.
+    double floorT60 = 0.0;
     std::array<DecayBand, kNumDecayBands> bands{};
     // Calibration of the style's decay against reference renders, at the
     // octaves 63 Hz .. 16 kHz (see ReverbEngine::decayModelFor): a log2
@@ -128,16 +137,16 @@ struct DecayModel
     double brightnessAbsorption(double f) const
     {
         const double r = clamp(brightness, 0.0, 1.0) * 2.0 - 1.0;
-        if (r >= 0.0)
+        if (r >= 0.0 || brightAbsScale <= 0.0)
             return 0.0;
-        return 0.33 * std::pow(-r, 1.4) * std::pow(std::min(f / 16000.0, 1.3), 1.05);
+        return brightAbsScale * 0.33 * std::pow(-r, 1.4) * std::pow(std::min(f / 16000.0, 1.3), brightAbsExp);
     }
     double brightnessLog2(double f) const
     {
         const double r = clamp(brightness, 0.0, 1.0) * 2.0 - 1.0;
         if (r <= 0.0)
             return 0.0;
-        return 0.2 * std::tanh(3.0 * r) / std::tanh(3.0) * std::pow(std::min(f / 16000.0, 1.3), 0.6);
+        return brightLog2Scale * 0.2 * std::tanh(3.0 * r) / std::tanh(3.0) * std::pow(std::min(f / 16000.0, 1.3), 0.6);
     }
     double absorbAt(double f) const
     {
@@ -168,6 +177,11 @@ struct DecayModel
     {
         double t = nominalT60() * std::exp2(roomLog2(f) + userLog2(f) + brightnessLog2(f));
         t = 1.0 / (1.0 / t + absorbAt(f) + brightnessAbsorption(f));
+        if (floorT60 > 0.0)
+        {
+            const double t2 = t * t, f2 = floorT60 * floorT60;
+            t = std::sqrt(std::sqrt(t2 * t2 + f2 * f2));
+        }
         if (corrScale != 1.0 || corrLfScale != 1.0)
         {
             const double lw = (corrLfFreq / f) * (corrLfFreq / f);

@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.21)
-project(Aurum VERSION 0.3.0 LANGUAGES C CXX)
+project(Aurum VERSION 0.3.1 LANGUAGES C CXX)
 
 # Aurum builds as a CLAP and, through the clap-wrapper, as a VST3, for Linux
 # (X11 + Cairo) and for Windows (win32 + Cairo, cross-compiled with mingw-w64).
