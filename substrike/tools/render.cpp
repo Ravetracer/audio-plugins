@@ -4,7 +4,8 @@
 // checks exactly what gets installed.
 //
 //   substrike-render --plugin build/Substrike.clap --out kick.wav
-//   substrike-render --param "L1 Pitch Start=1.2 kHz" --param "L1 Decay=1.5 s"
+//   substrike-render --param "L1 Pitch Start=1.2 kHz" --param "L1 Body Decay=1.5 s"
+//   substrike-render --param "L2 On=On" --param "L2 Output=Aux" --aux 2
 //   substrike-render --hits 4 --bpm 140 --seconds 2 --key 38
 //   substrike-render --list-params
 //   substrike-render --selftest
@@ -214,9 +215,27 @@ void flushParams(const clap_plugin_t* p, const EventList& events)
     paramsOf(p)->flush(p, &in, &kOutEvents);
 }
 
+constexpr int kLanes = 8;
+
+// Creates a plugin and sets "Name=text" parameters on it.
+const clap_plugin_t* configured(const Module& m, const std::vector<std::string>& specs)
+{
+    const clap_plugin_t* p = createPlugin(m);
+    EventList set;
+    if (!p || !resolveParams(p, specs, set))
+    {
+        std::fprintf(stderr, "configuration failed\n");
+        std::exit(1);
+    }
+    flushParams(p, set);
+    return p;
+}
+
+// Main output plus one stereo aux port per lane, as the plugin declares them.
 struct Render
 {
     std::vector<float> left, right;
+    std::vector<float> auxL[kLanes], auxR[kLanes];
     bool sawNonFinite = false;
     bool sleptAtEnd = false;
     float peak = 0.0f;
@@ -229,6 +248,11 @@ Render render(const clap_plugin_t* p, double rate, uint32_t block, uint32_t fram
     Render r;
     r.left.assign(frames, 0.0f);
     r.right.assign(frames, 0.0f);
+    for (int a = 0; a < kLanes; ++a)
+    {
+        r.auxL[a].assign(frames, 0.0f);
+        r.auxR[a].assign(frames, 0.0f);
+    }
     if (!p->activate(p, rate, 1, block) || !p->start_processing(p))
     {
         std::fprintf(stderr, "activate failed\n");
@@ -246,15 +270,20 @@ Render render(const clap_plugin_t* p, double rate, uint32_t block, uint32_t fram
             reinterpret_cast<clap_event_header_t*>(copy.data())->time -= pos;
             blockEvents.events.push_back(std::move(copy));
         }
-        float* chans[2] = {r.left.data() + pos, r.right.data() + pos};
-        clap_audio_buffer_t out{};
-        out.data32 = chans;
-        out.channel_count = 2;
+        float* chans[1 + kLanes][2];
+        clap_audio_buffer_t out[1 + kLanes]{};
+        for (int b = 0; b <= kLanes; ++b)
+        {
+            chans[b][0] = (b ? r.auxL[b - 1].data() : r.left.data()) + pos;
+            chans[b][1] = (b ? r.auxR[b - 1].data() : r.right.data()) + pos;
+            out[b].data32 = chans[b];
+            out[b].channel_count = 2;
+        }
         clap_process_t proc{};
         proc.steady_time = pos;
         proc.frames_count = n;
-        proc.audio_outputs = &out;
-        proc.audio_outputs_count = 1;
+        proc.audio_outputs = out;
+        proc.audio_outputs_count = 1 + kLanes;
         const clap_input_events_t in = blockEvents.input();
         proc.in_events = &in;
         proc.out_events = &kOutEvents;
@@ -274,13 +303,16 @@ Render render(const clap_plugin_t* p, double rate, uint32_t block, uint32_t fram
             r.sawNonFinite = true;
         else
             r.peak = std::max({r.peak, std::fabs(r.left[i]), std::fabs(r.right[i])});
+        for (int a = 0; a < kLanes; ++a)
+            if (!std::isfinite(r.auxL[a][i]) || !std::isfinite(r.auxR[a][i]))
+                r.sawNonFinite = true;
     }
     return r;
 }
 
 // ------------------------------------------------------------------- WAV
 
-bool writeWav(const std::string& path, const Render& r, uint32_t rate)
+bool writeWav(const std::string& path, const std::vector<float>& left, const std::vector<float>& right, uint32_t rate)
 {
     FILE* f = std::fopen(path.c_str(), "wb");
     if (!f)
@@ -288,7 +320,7 @@ bool writeWav(const std::string& path, const Render& r, uint32_t rate)
         std::fprintf(stderr, "cannot write %s\n", path.c_str());
         return false;
     }
-    const uint32_t frames = static_cast<uint32_t>(r.left.size());
+    const uint32_t frames = static_cast<uint32_t>(left.size());
     const uint32_t dataBytes = frames * 2 * 4;
     auto u32 = [&](uint32_t v) { std::fwrite(&v, 4, 1, f); };
     auto u16 = [&](uint16_t v) { std::fwrite(&v, 2, 1, f); };
@@ -307,8 +339,8 @@ bool writeWav(const std::string& path, const Render& r, uint32_t rate)
     u32(dataBytes);
     for (uint32_t i = 0; i < frames; ++i)
     {
-        std::fwrite(&r.left[i], 4, 1, f);
-        std::fwrite(&r.right[i], 4, 1, f);
+        std::fwrite(&left[i], 4, 1, f);
+        std::fwrite(&right[i], 4, 1, f);
     }
     std::fclose(f);
     return true;
@@ -565,6 +597,268 @@ int runSelfTest(const Module& m)
         p->destroy(p);
     }
 
+
+    // --- 0.1.0 compatibility: its ids are still there, and its state loads
+    {
+        p = createPlugin(m);
+        params = paramsOf(p);
+        const clap_id old[] = {1, 2, 1000, 1001, 1002, 1003, 1100, 1101, 1102, 1103, 1104, 1110, 1111, 1112, 1113, 1120};
+        bool all = true;
+        for (clap_id id : old)
+        {
+            double v;
+            all &= params->get_value(p, id, &v);
+        }
+        check(all, "every 0.1.0 parameter id still exists");
+        const std::string v010 = "[Substrike]\nformat=1\n[Parameters]\noutput=-6\nroot_note=D1\nl1.on=On\n"
+                                 "l1.body.pitch_end=60\nl1.body.decay=900\n";
+        struct Reader
+        {
+            const std::string* s;
+            size_t pos;
+        } reader{&v010, 0};
+        clap_istream_t is{&reader, [](const clap_istream_t* st, void* buf, uint64_t size) -> int64_t {
+                              auto* r = static_cast<Reader*>(st->ctx);
+                              const size_t n = std::min<size_t>(size, r->s->size() - r->pos);
+                              std::memcpy(buf, r->s->data() + r->pos, n);
+                              r->pos += n;
+                              return static_cast<int64_t>(n);
+                          }};
+        const auto* state = static_cast<const clap_plugin_state_t*>(p->get_extension(p, CLAP_EXT_STATE));
+        char end[64] = "", decay[64] = "";
+        double v = 0.0;
+        const bool loaded = state->load(p, &is);
+        params->get_value(p, 1101, &v);
+        params->value_to_text(p, 1101, v, end, sizeof(end));
+        params->get_value(p, 1112, &v);
+        params->value_to_text(p, 1112, v, decay, sizeof(decay));
+        check(loaded && std::string(end) == "60.0 Hz" && std::string(decay) == "900 ms",
+              std::string("a 0.1.0 state loads (") + end + ", " + decay + ")");
+        p->destroy(p);
+    }
+
+    // --- ports: main plus one aux per lane
+    {
+        p = createPlugin(m);
+        const auto* ports = static_cast<const clap_plugin_audio_ports_t*>(p->get_extension(p, CLAP_EXT_AUDIO_PORTS));
+        bool ok = ports && ports->count(p, false) == 1 + kLanes && ports->count(p, true) == 0;
+        for (uint32_t i = 0; ok && i < 1 + kLanes; ++i)
+        {
+            clap_audio_port_info_t info{};
+            ok &= ports->get(p, i, false, &info) && info.channel_count == 2 && info.id == i &&
+                  ((i == 0) == ((info.flags & CLAP_AUDIO_PORT_IS_MAIN) != 0));
+        }
+        check(ok, "a stereo main output and eight stereo lane outputs");
+        p->destroy(p);
+    }
+
+    auto silent = [](const std::vector<float>& x) {
+        return std::all_of(x.begin(), x.end(), [](float v) { return v == 0.0f; });
+    };
+    auto auxSilent = [&](const Render& r, int except) {
+        bool ok = true;
+        for (int a = 0; a < kLanes; ++a)
+            if (a != except)
+                ok &= silent(r.auxL[a]) && silent(r.auxR[a]);
+        return ok;
+    };
+    auto rendered = [&](const std::vector<std::string>& specs, const EventList& ev, double seconds = 1.0,
+                        uint32_t block = 512) {
+        const clap_plugin_t* q = configured(m, specs);
+        Render r = render(q, rate, block, static_cast<uint32_t>(seconds * rate), ev);
+        q->destroy(q);
+        return r;
+    };
+
+    // --- every source and every variant of it: finite, audible, and asleep
+    //     once it has died away
+    {
+        std::vector<std::vector<std::string>> variants;
+        for (const char* w : {"Sine", "Triangle", "Saw", "Square", "Additive"})
+            variants.push_back({std::string("L1 Wave=") + w, "L1 FM Amount=80", "L1 Feedback=100", "L1 Shape=60",
+                                "L1 Drift=100", "L1 Pitch Start=9k", "L1 Stretch=100", "L1 Tilt=100"});
+        for (const char* t : {"Impulse", "Noise", "Blip", "Zap"})
+            for (const char* f : {"Off", "Low Pass", "Band Pass", "High Pass"})
+                variants.push_back({"L1 Source=Click", std::string("L1 Click Type=") + t,
+                                    std::string("L1 Click Filter=") + f, "L1 Click Reso=100", "L1 Click Sweep=8"});
+        for (const char* c : {"White", "Pink", "Brown", "Crackle"})
+            variants.push_back({"L1 Source=Noise", std::string("L1 Noise Color=") + c, "L1 Noise Filter Env=8",
+                                "L1 Noise Reso=100", "L1 Noise Width=100"});
+        for (const char* e : {"Impulse", "Mallet", "Noise"})
+            for (const char* md : {"Membrane", "Harmonic", "Odd", "Bar"})
+                variants.push_back({"L1 Source=Resonator", std::string("L1 Resonator Exciter=") + e,
+                                    std::string("L1 Resonator Model=") + md, "L1 Resonator Modes=8",
+                                    "L1 Resonator Brightness=100", "L1 Resonator Drop=24", "L1 Resonator Tune=400"});
+        int bad = 0;
+        for (const auto& v : variants)
+        {
+            const Render r = rendered(v, hit, 3.0);
+            // Noise through a resonant filter may peak past full scale; what
+            // this looks for is a blow-up.
+            if (r.sawNonFinite || r.peak < 0.01f || r.peak > 2.0f || !r.sleptAtEnd || !silent(r.auxL[0]))
+            {
+                ++bad;
+                std::string what;
+                for (const std::string& s : v)
+                    what += s + " ";
+                std::printf("    %s-> peak %g%s%s\n", what.c_str(), r.peak, r.sawNonFinite ? ", non-finite" : "",
+                            r.sleptAtEnd ? "" : ", never sleeps");
+            }
+        }
+        check(bad == 0, std::to_string(variants.size()) + " source variants finite, under +6 dBFS and asleep");
+    }
+
+    // The default hit, with the output at unity so lanes and aux ports compare.
+    const Render unity = rendered({"Output=0"}, hit);
+
+    // --- note filter
+    {
+        EventList c1, d1;
+        c1.add(noteOn(lead, 36, 1.0));
+        d1.add(noteOn(lead, 38, 1.0));
+        // MIDI 36 and 38, named with C4 = 60.
+        const Render other = rendered({"Output=0", "L1 Note=D2"}, c1);
+        const Render own = rendered({"Output=0", "L1 Note=D2"}, d1);
+        check(silent(other.left) && other.sleptAtEnd, "a lane set to D2 ignores C2");
+        check(own.left == unity.left, "a lane set to D2 plays D2");
+    }
+
+    // --- trigger delay and polarity
+    {
+        const uint32_t d = static_cast<uint32_t>(0.010 * rate);
+        bool exact = true;
+        for (uint32_t blk : {512u, 37u})
+        {
+            const Render late = rendered({"Output=0", "L1 Delay=10"}, hit, 1.0, blk);
+            for (size_t i = 0; i < late.left.size(); ++i)
+                exact &= late.left[i] == (i < d ? 0.0f : unity.left[i - d]);
+        }
+        check(exact, "a 10 ms delay moves the hit by exactly 480 samples");
+        // And in absolute terms: started at 90 degrees, a hit's first sample
+        // is its peak, on the note's sample or exactly 480 later.
+        auto onset = [&](const Render& r) {
+            for (size_t i = 0; i < r.left.size(); ++i)
+                if (r.left[i] != 0.0f)
+                    return static_cast<long>(i);
+            return -1L;
+        };
+        const long now = onset(rendered({"L1 Body Phase=90"}, hit));
+        const long later = onset(rendered({"L1 Body Phase=90", "L1 Delay=10"}, hit));
+        check(now == lead && later == lead + d,
+              "the hit starts on the note's sample (" + std::to_string(now) + "), delayed on sample " +
+                  std::to_string(later));
+        const Render inv = rendered({"Output=0", "L1 Invert=On"}, hit);
+        bool negated = true;
+        for (size_t i = 0; i < inv.left.size(); ++i)
+            negated &= inv.left[i] == -unity.left[i];
+        check(negated, "invert negates the lane exactly");
+    }
+
+    // --- output routing
+    {
+        const Render toAux = rendered({"Output=0", "L1 Output=Aux"}, hit);
+        check(silent(toAux.left) && toAux.auxL[0] == unity.left && auxSilent(toAux, 0),
+              "Output Aux: only lane 1's port carries the hit");
+        const Render both = rendered({"Output=0", "L1 Output=Main+Aux"}, hit);
+        check(both.left == unity.left && both.auxL[0] == unity.left && auxSilent(both, 0),
+              "Output Main+Aux: main and lane 1's port carry the same hit");
+        check(auxSilent(unity, -1), "Output Main: every aux port is silent");
+        const Render lane3 = rendered({"Output=0", "L3 On=On", "L3 Output=Aux"}, hit);
+        check(lane3.left == unity.left && !silent(lane3.auxL[2]) && auxSilent(lane3, 2),
+              "lane 3 reaches the third aux port and leaves the main output alone");
+        const Render quiet = rendered({"Output=-12", "L1 Output=Main+Aux"}, hit);
+        check(quiet.auxL[0] == unity.left, "the master level does not touch the aux ports");
+    }
+
+    // --- pitch link and transpose
+    {
+        auto settles = [&](const std::vector<std::string>& specs, double expect, const std::string& what) {
+            const Render r = rendered(specs, hit);
+            const double f = measureFrequency(r.left, rate, 0.30, 0.45);
+            check(std::fabs(f / expect - 1.0) < 0.015, what + ": " + std::to_string(f) + " Hz");
+        };
+        const std::vector<std::string> l2 = {"L1 On=Off", "L2 On=On", "L2 Source=Body", "L2 Pitch End=200",
+                                             "L2 Transpose=12"};
+        auto with = [&](std::vector<std::string> v, const std::string& extra) {
+            v.push_back(extra);
+            return v;
+        };
+        settles(l2, 400.0, "own pitch, an octave up");
+        settles(with(l2, "L2 Pitch Link=Lane 1"), 96.0, "linked to lane 1 (48 Hz), an octave up");
+        auto linked = with(with(l2, "L2 Pitch Link=Lane 1"), "L1 Transpose=7");
+        settles(linked, 96.0 * std::exp2(7.0 / 12.0), "and lane 1 transposed by a fifth");
+        settles(with(l2, "L2 Pitch Link=Lane 2"), 400.0, "a link to itself is its own pitch");
+    }
+
+    // --- resonator tuning: key tracking and pitch link
+    {
+        const std::vector<std::string> res = {"L1 Source=Resonator",     "L1 Resonator Model=Harmonic",
+                                              "L1 Resonator Modes=2",    "L1 Resonator Brightness=0",
+                                              "L1 Resonator Damping=100", "L1 Resonator Tune=100",
+                                              "L1 Resonator Decay=2 s",  "L1 Resonator Key Track=100"};
+        Render r = rendered(res, hit);
+        double f = measureFrequency(r.left, rate, 0.30, 0.45);
+        check(std::fabs(f / 100.0 - 1.0) < 0.01, "resonator rings at Tune: " + std::to_string(f) + " Hz");
+        EventList up;
+        up.add(noteOn(lead, 48, 1.0));
+        r = rendered(res, up);
+        f = measureFrequency(r.left, rate, 0.30, 0.45);
+        check(std::fabs(f / 200.0 - 1.0) < 0.01, "an octave up with full key tracking: " + std::to_string(f) + " Hz");
+        r = rendered({"L1 On=Off", "L4 On=On", "L4 Resonator Model=Harmonic", "L4 Resonator Modes=2",
+                      "L4 Resonator Brightness=0", "L4 Resonator Damping=100", "L4 Resonator Decay=2 s",
+                      "L4 Pitch Link=Lane 1"},
+                     hit);
+        f = measureFrequency(r.left, rate, 0.30, 0.45);
+        check(std::fabs(f / 48.0 - 1.0) < 0.01, "linked to lane 1, it rings at its Pitch End: " + std::to_string(f) +
+                                                    " Hz");
+        r = rendered({"L1 Source=Resonator", "L1 Resonator Drop=12", "L1 Resonator Drop Time=200",
+                      "L1 Resonator Model=Harmonic", "L1 Resonator Modes=2", "L1 Resonator Brightness=0",
+                      "L1 Resonator Damping=100", "L1 Resonator Tune=100", "L1 Resonator Decay=2 s"},
+                     hit);
+        const double early = measureFrequency(r.left, rate, lead / rate, lead / rate + 0.02);
+        f = measureFrequency(r.left, rate, 0.30, 0.45);
+        check(early > 150.0 && std::fabs(f / 100.0 - 1.0) < 0.01,
+              "a drop starts high (" + std::to_string(early) + " Hz) and lands on Tune");
+    }
+
+    // --- variation: off repeats every hit exactly, on does not
+    {
+        const uint32_t gap = static_cast<uint32_t>(0.5 * rate);
+        EventList two;
+        two.add(noteOn(lead, 36, 1.0));
+        two.add(noteOn(lead + gap, 36, 1.0));
+        auto repeats = [&](const Render& r) {
+            for (uint32_t i = 0; i < gap; ++i)
+                if (r.left[lead + i] != r.left[lead + gap + i] || r.right[lead + i] != r.right[lead + gap + i])
+                    return false;
+            return true;
+        };
+        for (const char* src : {"Noise", "Click"})
+        {
+            const std::vector<std::string> base = {std::string("L1 Source=") + src};
+            check(repeats(rendered(base, two, 1.5)), std::string(src) + " without variation repeats bit for bit");
+            check(!repeats(rendered({base[0], "L1 Variation=50"}, two, 1.5)),
+                  std::string(src) + " with variation does not");
+        }
+        check(repeats(rendered({"L1 Drift=100"}, two, 1.5)), "a drifting body without variation repeats bit for bit");
+    }
+
+    // --- every lane at once: block size still changes nothing
+    {
+        const std::vector<std::string> all = {"L2 On=On",       "L3 On=On",       "L4 On=On",     "L2 Delay=3",
+                                              "L3 Delay=17",    "L4 Delay=0.5",   "L3 Variation=40",
+                                              "L4 Variation=40", "L1 Drift=50",   "L5 On=On",     "L5 Pitch Link=Lane 1",
+                                              "L5 Transpose=19", "L5 Wave=Saw",   "L5 Level=-20", "L3 Output=Main+Aux",
+                                              "L3 Noise Filter Env=5"};
+        EventList many;
+        for (int h = 0; h < 6; ++h)
+            many.add(noteOn(lead + static_cast<uint32_t>(h * 0.071 * rate), static_cast<int16_t>(36 + h), 0.9));
+        const Render a = rendered(all, many, 1.5, 512);
+        const Render b = rendered(all, many, 1.5, 37);
+        check(!a.sawNonFinite && a.left == b.left && a.right == b.right && a.auxL[2] == b.auxL[2],
+              "five lanes with delays and variation: bit-identical with a block size of 37");
+    }
+
     std::printf("\nselftest: %d failure(s)\n", failures);
     return failures == 0 ? 0 : 1;
 }
@@ -575,7 +869,7 @@ int main(int argc, char** argv)
 {
     std::string pluginPath = "./Substrike.clap", outPath = "kick.wav";
     double seconds = 1.5, bpm = 128.0, rate = 48000.0, velocity = 1.0;
-    int hits = 1, key = 36;
+    int hits = 1, key = 36, aux = 0;
     uint32_t block = 512;
     bool selfTest = false, listParams = false;
     std::vector<std::string> specs;
@@ -602,6 +896,8 @@ int main(int argc, char** argv)
             rate = std::atof(next().c_str());
         else if (a == "--block")
             block = static_cast<uint32_t>(std::max(1, std::atoi(next().c_str())));
+        else if (a == "--aux")
+            aux = std::clamp(std::atoi(next().c_str()), 0, kLanes);
         else if (a == "--param")
             specs.push_back(next());
         else if (a == "--list-params")
@@ -661,7 +957,9 @@ int main(int argc, char** argv)
             for (int h = 0; h < hits; ++h)
                 notes.add(noteOn(static_cast<uint32_t>(h * step * rate), static_cast<int16_t>(key), velocity));
             const Render r = render(p, rate, block, static_cast<uint32_t>(seconds * rate), notes);
-            if (!writeWav(outPath, r, static_cast<uint32_t>(rate)))
+            const std::vector<float>& wl = aux ? r.auxL[aux - 1] : r.left;
+            const std::vector<float>& wr = aux ? r.auxR[aux - 1] : r.right;
+            if (!writeWav(outPath, wl, wr, static_cast<uint32_t>(rate)))
                 rc = 1;
             std::printf("peak %.3f (%+.1f dBFS)%s -> %s\n", r.peak, 20.0 * std::log10(std::max(r.peak, 1e-9f)),
                         r.sawNonFinite ? "  !! NON-FINITE OUTPUT" : "", outPath.c_str());

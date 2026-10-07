@@ -1,5 +1,6 @@
 #pragma once
 
+#include <array>
 #include <atomic>
 #include <memory>
 #include <vector>
@@ -65,6 +66,10 @@ private:
     std::atomic<bool> chokeRequested_{false};
 
     dsp::Engine engine_;
+    // Render target for ports the host did not connect, and for the right
+    // channel of a mono one.
+    static constexpr uint32_t kScratch = 256;
+    std::array<std::array<std::array<float, kScratch>, 2>, dsp::Engine::kNumBuses> scratch_{};
     dsp::EngineParams engineParams_{};
     bool engineParamsDirty_ = true;
     double sampleRate_ = 48000.0;

@@ -174,15 +174,22 @@ const void* SubstrikePlugin::getExtension(const char* id)
 
 // ---------------------------------------------------------------- ports
 
-uint32_t SubstrikePlugin::audioPortsCount(bool isInput) const { return isInput ? 0 : 1; }
+// The main output, then one aux output per lane carrying that lane alone.
+uint32_t SubstrikePlugin::audioPortsCount(bool isInput) const
+{
+    return isInput ? 0 : static_cast<uint32_t>(dsp::Engine::kNumBuses);
+}
 
 bool SubstrikePlugin::audioPortsGet(uint32_t index, bool isInput, clap_audio_port_info_t* info) const
 {
-    if (isInput || index != 0)
+    if (isInput || index >= static_cast<uint32_t>(dsp::Engine::kNumBuses))
         return false;
-    info->id = 0;
-    std::snprintf(info->name, sizeof(info->name), "Main");
-    info->flags = CLAP_AUDIO_PORT_IS_MAIN;
+    info->id = index;
+    if (index == 0)
+        std::snprintf(info->name, sizeof(info->name), "Main");
+    else
+        std::snprintf(info->name, sizeof(info->name), "Lane %u", index);
+    info->flags = index == 0 ? CLAP_AUDIO_PORT_IS_MAIN : 0;
     info->channel_count = 2;
     info->port_type = CLAP_PORT_STEREO;
     info->in_place_pair = CLAP_INVALID_ID;
@@ -393,31 +400,55 @@ clap_process_status SubstrikePlugin::process(const clap_process_t* process)
     syncFromShared();
 
     const uint32_t frames = process->frames_count;
-    if (process->audio_outputs_count < 1)
-        return CLAP_PROCESS_CONTINUE;
-    clap_audio_buffer_t& outBuf = process->audio_outputs[0];
-    if (!outBuf.data32 || outBuf.channel_count == 0)
-        return CLAP_PROCESS_CONTINUE;
-    float* outL = outBuf.data32[0];
-    float* outR = outBuf.channel_count > 1 ? outBuf.data32[1] : nullptr;
-
     const clap_input_events_t* in = process->in_events;
     const uint32_t numEvents = in ? in->size(in) : 0;
+
+    // The ports the host connected; a missing one renders into scratch and is
+    // dropped, a mono one gets the right channel folded in.
+    const int ports = static_cast<int>(std::min<uint32_t>(process->audio_outputs_count, dsp::Engine::kNumBuses));
+    auto portChannels = [&](int b) -> uint32_t {
+        if (b >= ports)
+            return 0;
+        const clap_audio_buffer_t& o = process->audio_outputs[b];
+        return o.data32 ? o.channel_count : 0;
+    };
 
     // Nothing sounding and nothing arriving: write silence and let the host
     // put the plugin to sleep until the next event.
     if (numEvents == 0 && engine_.idle())
     {
-        std::fill(outL, outL + frames, 0.0f);
-        if (outR)
-            std::fill(outR, outR + frames, 0.0f);
-        outBuf.constant_mask = outR ? 3 : 1;
+        for (int b = 0; b < ports; ++b)
+        {
+            clap_audio_buffer_t& o = process->audio_outputs[b];
+            for (uint32_t c = 0; c < portChannels(b); ++c)
+                std::fill(o.data32[c], o.data32[c] + frames, 0.0f);
+            o.constant_mask = (1ull << o.channel_count) - 1;
+        }
         return CLAP_PROCESS_SLEEP;
     }
-    outBuf.constant_mask = 0;
+    for (int b = 0; b < ports; ++b)
+        process->audio_outputs[b].constant_mask = 0;
 
-    // Mono output: the right channel goes to a scratch buffer and is folded in.
-    float scratch[256];
+    auto renderSpan = [&](uint32_t from, uint32_t to) {
+        for (uint32_t p = from; p < to; p += kScratch)
+        {
+            const uint32_t n = std::min<uint32_t>(kScratch, to - p);
+            dsp::Bus buses[dsp::Engine::kNumBuses];
+            for (int b = 0; b < dsp::Engine::kNumBuses; ++b)
+            {
+                const uint32_t ch = portChannels(b);
+                float* const* data = ch ? process->audio_outputs[b].data32 : nullptr;
+                buses[b].l = ch >= 1 ? data[0] + p : scratch_[b][0].data();
+                buses[b].r = ch >= 2 ? data[1] + p : scratch_[b][1].data();
+            }
+            engine_.process(buses, static_cast<int>(n), engineParams_);
+            for (int b = 0; b < ports; ++b)
+                if (portChannels(b) == 1)
+                    for (uint32_t i = 0; i < n; ++i)
+                        buses[b].l[i] = 0.5f * (buses[b].l[i] + buses[b].r[i]);
+        }
+    };
+
     uint32_t nextEvent = 0;
     uint32_t pos = 0;
     while (pos < frames)
@@ -440,18 +471,7 @@ clap_process_status SubstrikePlugin::process(const clap_process_t* process)
             engineParams_ = buildEngineParams(audio_.data());
             engineParamsDirty_ = false;
         }
-        if (outR)
-            engine_.process(outL + pos, outR + pos, static_cast<int>(chunkEnd - pos), engineParams_);
-        else
-        {
-            for (uint32_t p = pos; p < chunkEnd; p += 256)
-            {
-                const uint32_t n = std::min<uint32_t>(256, chunkEnd - p);
-                engine_.process(outL + p, scratch, static_cast<int>(n), engineParams_);
-                for (uint32_t i = 0; i < n; ++i)
-                    outL[p + i] = 0.5f * (outL[p + i] + scratch[i]);
-            }
-        }
+        renderSpan(pos, chunkEnd);
         pos = chunkEnd;
     }
     // Events stamped past the block's end are applied for the next one.

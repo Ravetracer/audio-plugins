@@ -1,3 +1,3 @@
-Substrike is committed but kept out of releases until it is more than a single
-synthesised layer. release.sh skips any plugin folder holding this file; delete
-it to let Substrike into the next release.
+Substrike is committed but kept out of releases until it has its effect chain
+and an editor (phases 3 and 4). release.sh skips any plugin folder holding this
+file; delete it to let Substrike into the next release.

@@ -1,29 +1,28 @@
 #pragma once
 
 #include <array>
+#include <cstdint>
 
 #include "dsp/Curve.h"
+#include "dsp/Sources.h"
 
 namespace substrike::dsp {
 
-// Phase 1 has one lane; the parameter ids already leave room for eight.
-constexpr int kNumLanes = 1;
+constexpr int kNumLanes = 8;
 
-// The tonal oscillator. Its pitch falls from pitchStart to pitchEnd along the
-// pitch curve within sweepMs; its level runs attack, hold and then the amp
-// curve within decayMs. Curvatures are -1..1 and bend the drawn curves.
-struct BodyParams
+enum class Source : int
 {
-    double pitchStart = 350.0; // Hz
-    double pitchEnd = 48.0;    // Hz
-    double sweepMs = 120.0;
-    double sweepCurve = 0.55;
-    double keyTrack = 0.0; // 0..1: share of the note's distance from the root
-    double attackMs = 0.0;
-    double holdMs = 30.0;
-    double decayMs = 450.0;
-    double decayCurve = 0.45;
-    double phase = 0.0; // start phase in turns, latched per hit
+    Body = 0,
+    Click,
+    Noise,
+    Resonator,
+};
+
+enum class Output : int
+{
+    Main = 0,
+    Aux,
+    MainAndAux,
 };
 
 struct LaneParams
@@ -32,7 +31,18 @@ struct LaneParams
     double gain = 1.0;     // linear
     double pan = 0.0;      // -1..1, balance law: unity in the centre
     double velocity = 0.5; // 0..1: how much velocity scales the level
+    Source source = Source::Body;
+    double delayMs = 0.0; // the hit fires this much after the note
+    bool invert = false;
+    int note = -1; // -1: any note triggers the lane; else only this MIDI note
+    Output output = Output::Main;
+    int pitchLink = -1;      // -1: own pitch; else the lane whose Body pitch to follow
+    double transpose = 0.0;  // semitones, every frequency of the source
+    double variation = 0.0;  // 0..1: hit-to-hit randomness; 0 repeats every hit exactly
     BodyParams body;
+    ClickParams click;
+    NoiseParams noise;
+    ResonatorParams resonator;
 };
 
 struct EngineParams
@@ -42,53 +52,71 @@ struct EngineParams
     int rootNote = 36;
 };
 
-class BodyVoice
+// A stereo pair of output buffers.
+struct Bus
 {
-public:
-    void start(int semitones, double velocity, double phase);
-    // Fades the voice out over `samples` (a retrigger or a choke).
-    void fadeOut(int samples);
-    bool active() const { return active_; }
-    bool fading() const { return fadeStep_ > 0.0; }
-    // Adds n samples into out.
-    void render(float* out, int n, double sampleRate, const BodyParams& p, double velSense, const Curve& pitch,
-                const Curve& amp);
-
-private:
-    bool active_ = false;
-    double t_ = 0.0;     // samples since the hit
-    double phase_ = 0.0; // turns
-    double phase0_ = 0.0;
-    double semitones_ = 0.0;
-    double velocity_ = 1.0;
-    double fade_ = 1.0;
-    double fadeStep_ = 0.0;
+    float* l = nullptr;
+    float* r = nullptr;
 };
 
 class Lane
 {
 public:
+    static constexpr int kChunk = 256;
+
+    void prepare(double sampleRate);
     void reset();
-    void noteOn(int semitones, double velocity, const LaneParams& p, int fadeSamples);
+    // Schedules a hit `delay` samples from the next sample processed.
+    void trigger(int semitones, double velocity, int delay);
+    // Fades every voice out and drops the scheduled hits.
     void choke(int fadeSamples);
     bool active() const;
-    // Adds n (<= kChunk) samples into left and right.
-    void process(float* left, float* right, int n, double sampleRate, const LaneParams& p, double smoothCoef);
+
+    struct Context
+    {
+        double sampleRate;
+        double smoothCoef;
+        int fadeSamples;
+        int index;
+        const LaneParams* params;
+        PitchTrack track;
+    };
+    // Adds n (<= kChunk) samples into the buses its Output names.
+    void process(const Bus& main, const Bus& aux, int n, const Context& c);
 
     Curve& pitchCurve() { return pitchCurve_; }
     Curve& ampCurve() { return ampCurve_; }
-
-    static constexpr int kChunk = 256;
+    const Curve& pitchCurve() const { return pitchCurve_; }
 
 private:
+    struct Pending
+    {
+        int at; // samples from the start of the next chunk
+        int semitones;
+        double velocity;
+    };
+
+    void fire(const Pending& p, const Context& c);
+    void renderVoices(int from, int to, const Context& c);
+
+    static constexpr int kMaxPending = 8;
+    std::array<Pending, kMaxPending> pending_{};
+    int pendingCount_ = 0;
+
     // One sounding hit, one fading out under it, and a spare for a third hit
-    // inside the fade time.
-    std::array<BodyVoice, 3> voices_{};
+    // inside the fade time -- per source type, so switching the source lets
+    // the old one fade too.
+    std::array<BodyVoice, 3> body_{};
+    std::array<ClickVoice, 3> click_{};
+    std::array<NoiseVoice, 3> noise_{};
+    std::array<ResonatorVoice, 3> resonator_{};
+
     Curve pitchCurve_;
     Curve ampCurve_;
-    std::array<float, kChunk> mono_{};
+    std::array<float, kChunk> l_{}, r_{};
     double gainL_ = 0.0, gainR_ = 0.0;
     bool primed_ = false;
+    uint64_t hits_ = 0;
 };
 
 class Engine
@@ -98,9 +126,12 @@ public:
     void reset();
     void noteOn(int key, double velocity, const EngineParams& p);
     void choke();
-    // Writes (not adds) n samples.
-    void process(float* left, float* right, int n, const EngineParams& p);
+    // Writes (not adds) n samples into every bus: buses[0] is the main output,
+    // buses[1 + L] lane L's aux output. Every pointer must be valid.
+    void process(const Bus* buses, int n, const EngineParams& p);
     bool idle() const;
+
+    static constexpr int kNumBuses = 1 + kNumLanes;
 
 private:
     double sampleRate_ = 48000.0;

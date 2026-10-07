@@ -164,8 +164,16 @@ ParamTable::ParamTable()
     std::vector<std::string> notes;
     for (int n = 0; n < 128; ++n)
         notes.push_back(noteName(n));
-    // C1: where a kick sits on most drum maps.
+    // MIDI 36, where a kick sits on most drum maps; named C2, with C4 = 60.
     defs_.push_back(enumeration(RootNote, "root_note", "Root Note", "Master", notes, 36));
+
+    std::vector<std::string> laneNotes{"Any"};
+    for (int n = 0; n < 128; ++n)
+        laneNotes.push_back(noteName(n));
+    std::vector<std::string> links{"Own"};
+    for (int l = 0; l < dsp::kNumLanes; ++l)
+        links.push_back("Lane " + std::to_string(l + 1));
+    const std::vector<std::string> filters{"Off", "Low Pass", "Band Pass", "High Pass"};
 
     for (int l = 0; l < dsp::kNumLanes; ++l)
     {
@@ -174,38 +182,145 @@ ParamTable::ParamTable()
         const std::string p = "L" + n + " ";
         const std::string lane = "Lane " + n;
         const std::string body = lane + "/Body";
+        const std::string click = lane + "/Click";
+        const std::string noise = lane + "/Noise";
+        const std::string res = lane + "/Resonator";
+        auto add = [&](ParamDef d) { defs_.push_back(std::move(d)); };
+        auto addDb = [&](ParamDef d) {
+            d.dbFloorIsOff = true;
+            defs_.push_back(std::move(d));
+        };
 
-        defs_.push_back(boolean(pid::lane(l, LEnabled), k + "on", p + "On", lane, l == 0));
-        defs_.push_back(continuous(pid::lane(l, LLevel), k + "level", p + "Level", lane, Scale::Linear, -60.0, 12.0,
-                                   "dB", 0.0));
-        defs_.back().dbFloorIsOff = true;
-        defs_.push_back(continuous(pid::lane(l, LPan), k + "pan", p + "Pan", lane, Scale::Linear, -100.0, 100.0, "pan",
-                                   0.0));
-        defs_.push_back(continuous(pid::lane(l, LVelocity), k + "velocity", p + "Velocity", lane, Scale::Linear, 0.0,
-                                   100.0, "%", 50.0));
+        // Lane 1 starts as the kick's body; lanes 2-4 are set up as a click, a
+        // noise layer and a resonator, and switched off, so turning one on
+        // gives something sensible at a sensible level.
+        static const dsp::Source kSources[dsp::kNumLanes] = {dsp::Source::Body,  dsp::Source::Click,
+                                                             dsp::Source::Noise, dsp::Source::Resonator,
+                                                             dsp::Source::Body,  dsp::Source::Body,
+                                                             dsp::Source::Body,  dsp::Source::Body};
+        static const double kLevels[dsp::kNumLanes] = {0.0, -12.0, -18.0, -6.0, 0.0, 0.0, 0.0, 0.0};
+
+        add(boolean(pid::lane(l, LEnabled), k + "on", p + "On", lane, l == 0));
+        addDb(continuous(pid::lane(l, LLevel), k + "level", p + "Level", lane, Scale::Linear, -60.0, 12.0, "dB",
+                         kLevels[l]));
+        add(continuous(pid::lane(l, LPan), k + "pan", p + "Pan", lane, Scale::Linear, -100.0, 100.0, "pan", 0.0));
+        add(continuous(pid::lane(l, LVelocity), k + "velocity", p + "Velocity", lane, Scale::Linear, 0.0, 100.0, "%",
+                       50.0));
+        add(enumeration(pid::lane(l, LSource), k + "source", p + "Source", lane,
+                        {"Body", "Click", "Noise", "Resonator"}, static_cast<int>(kSources[l])));
+        add(continuous(pid::lane(l, LDelay), k + "delay", p + "Delay", lane, Scale::Cubic, 0.0, 100.0, "ms", 0.0));
+        add(boolean(pid::lane(l, LInvert), k + "invert", p + "Invert", lane, false));
+        add(enumeration(pid::lane(l, LNote), k + "note", p + "Note", lane, laneNotes, 0));
+        add(enumeration(pid::lane(l, LOutput), k + "output", p + "Output", lane, {"Main", "Aux", "Main+Aux"}, 0));
+        add(enumeration(pid::lane(l, LPitchLink), k + "pitch_link", p + "Pitch Link", lane, links, 0));
+        add(continuous(pid::lane(l, LTranspose), k + "transpose", p + "Transpose", lane, Scale::Linear, -24.0, 36.0,
+                       "st", 0.0));
+        add(continuous(pid::lane(l, LVariation), k + "variation", p + "Variation", lane, Scale::Linear, 0.0, 100.0,
+                       "%", 0.0));
 
         // The defaults are a plain, solid club kick: a fast drop from the low
         // mids onto a sub around G0, with a medium tail.
-        defs_.push_back(continuous(pid::lane(l, BodyPitchStart), k + "body.pitch_start", p + "Pitch Start", body,
-                                   Scale::Log, 20.0, 10000.0, "Hz", 350.0));
-        defs_.push_back(continuous(pid::lane(l, BodyPitchEnd), k + "body.pitch_end", p + "Pitch End", body, Scale::Log,
-                                   20.0, 2000.0, "Hz", 48.0));
-        defs_.push_back(continuous(pid::lane(l, BodySweep), k + "body.sweep", p + "Sweep Time", body, Scale::Log, 1.0,
-                                   2000.0, "ms", 120.0));
-        defs_.push_back(continuous(pid::lane(l, BodySweepCurve), k + "body.sweep_curve", p + "Sweep Curve", body,
-                                   Scale::Linear, -100.0, 100.0, "%", 55.0));
-        defs_.push_back(continuous(pid::lane(l, BodyKeyTrack), k + "body.key_track", p + "Key Track", body,
-                                   Scale::Linear, 0.0, 100.0, "%", 0.0));
-        defs_.push_back(continuous(pid::lane(l, BodyAttack), k + "body.attack", p + "Attack", body, Scale::Cubic, 0.0,
-                                   100.0, "ms", 0.0));
-        defs_.push_back(continuous(pid::lane(l, BodyHold), k + "body.hold", p + "Hold", body, Scale::Cubic, 0.0, 2000.0,
-                                   "ms", 30.0));
-        defs_.push_back(continuous(pid::lane(l, BodyDecay), k + "body.decay", p + "Decay", body, Scale::Log, 5.0,
-                                   8000.0, "ms", 450.0));
-        defs_.push_back(continuous(pid::lane(l, BodyDecayCurve), k + "body.decay_curve", p + "Decay Curve", body,
-                                   Scale::Linear, -100.0, 100.0, "%", 45.0));
-        defs_.push_back(continuous(pid::lane(l, BodyPhase), k + "body.phase", p + "Phase", body, Scale::Linear, 0.0,
-                                   360.0, "deg", 0.0));
+        add(continuous(pid::lane(l, BodyPitchStart), k + "body.pitch_start", p + "Pitch Start", body, Scale::Log,
+                       20.0, 10000.0, "Hz", 350.0));
+        add(continuous(pid::lane(l, BodyPitchEnd), k + "body.pitch_end", p + "Pitch End", body, Scale::Log, 20.0,
+                       2000.0, "Hz", 48.0));
+        add(continuous(pid::lane(l, BodySweep), k + "body.sweep", p + "Sweep Time", body, Scale::Log, 1.0, 2000.0,
+                       "ms", 120.0));
+        add(continuous(pid::lane(l, BodySweepCurve), k + "body.sweep_curve", p + "Sweep Curve", body, Scale::Linear,
+                       -100.0, 100.0, "%", 55.0));
+        add(continuous(pid::lane(l, BodyKeyTrack), k + "body.key_track", p + "Key Track", body, Scale::Linear, 0.0,
+                       100.0, "%", 0.0));
+        add(continuous(pid::lane(l, BodyAttack), k + "body.attack", p + "Body Attack", body, Scale::Cubic, 0.0, 100.0,
+                       "ms", 0.0));
+        add(continuous(pid::lane(l, BodyHold), k + "body.hold", p + "Body Hold", body, Scale::Cubic, 0.0, 2000.0, "ms",
+                       30.0));
+        add(continuous(pid::lane(l, BodyDecay), k + "body.decay", p + "Body Decay", body, Scale::Log, 5.0, 8000.0,
+                       "ms", 450.0));
+        add(continuous(pid::lane(l, BodyDecayCurve), k + "body.decay_curve", p + "Body Decay Curve", body,
+                       Scale::Linear, -100.0, 100.0, "%", 45.0));
+        add(continuous(pid::lane(l, BodyPhase), k + "body.phase", p + "Body Phase", body, Scale::Linear, 0.0, 360.0,
+                       "deg", 0.0));
+        add(enumeration(pid::lane(l, BodyWave), k + "body.wave", p + "Wave", body,
+                        {"Sine", "Triangle", "Saw", "Square", "Additive"}, 0));
+        add(continuous(pid::lane(l, BodyShape), k + "body.shape", p + "Shape", body, Scale::Linear, 0.0, 100.0, "%",
+                       0.0));
+        add(continuous(pid::lane(l, BodyTilt), k + "body.tilt", p + "Tilt", body, Scale::Linear, -100.0, 100.0, "%",
+                       0.0));
+        add(continuous(pid::lane(l, BodyEven), k + "body.even", p + "Even", body, Scale::Linear, 0.0, 100.0, "%",
+                       100.0));
+        add(continuous(pid::lane(l, BodyStretch), k + "body.stretch", p + "Stretch", body, Scale::Linear, 0.0, 100.0,
+                       "%", 0.0));
+        add(continuous(pid::lane(l, BodyFmAmount), k + "body.fm_amount", p + "FM Amount", body, Scale::Linear, 0.0,
+                       100.0, "%", 0.0));
+        add(continuous(pid::lane(l, BodyFmRatio), k + "body.fm_ratio", p + "FM Ratio", body, Scale::Log, 0.25, 16.0,
+                       "", 2.0));
+        add(continuous(pid::lane(l, BodyFmDecay), k + "body.fm_decay", p + "FM Decay", body, Scale::Log, 1.0, 2000.0,
+                       "ms", 30.0));
+        add(continuous(pid::lane(l, BodyFeedback), k + "body.feedback", p + "Feedback", body, Scale::Linear, 0.0,
+                       100.0, "%", 0.0));
+        add(continuous(pid::lane(l, BodyDrift), k + "body.drift", p + "Drift", body, Scale::Linear, 0.0, 100.0, "%",
+                       0.0));
+
+        add(enumeration(pid::lane(l, ClickType), k + "click.type", p + "Click Type", click,
+                        {"Impulse", "Noise", "Blip", "Zap"}, 1));
+        add(continuous(pid::lane(l, ClickDecay), k + "click.decay", p + "Click Decay", click, Scale::Log, 0.1, 100.0,
+                       "ms", 6.0));
+        add(enumeration(pid::lane(l, ClickFilter), k + "click.filter", p + "Click Filter", click, filters, 3));
+        add(continuous(pid::lane(l, ClickCutoff), k + "click.cutoff", p + "Click Cutoff", click, Scale::Log, 20.0,
+                       20000.0, "Hz", 2500.0));
+        add(continuous(pid::lane(l, ClickReso), k + "click.reso", p + "Click Reso", click, Scale::Linear, 0.0, 100.0,
+                       "%", 10.0));
+        add(continuous(pid::lane(l, ClickPitch), k + "click.pitch", p + "Click Pitch", click, Scale::Log, 20.0,
+                       10000.0, "Hz", 1500.0));
+        add(continuous(pid::lane(l, ClickSweep), k + "click.sweep", p + "Click Sweep", click, Scale::Linear, 0.0, 8.0,
+                       "oct", 3.0));
+
+        add(enumeration(pid::lane(l, NoiseColor), k + "noise.color", p + "Noise Color", noise,
+                        {"White", "Pink", "Brown", "Crackle"}, 0));
+        add(continuous(pid::lane(l, NoiseDensity), k + "noise.density", p + "Noise Density", noise, Scale::Linear, 0.0,
+                       100.0, "%", 50.0));
+        add(continuous(pid::lane(l, NoiseWidth), k + "noise.width", p + "Noise Width", noise, Scale::Linear, 0.0, 100.0,
+                       "%", 30.0));
+        add(enumeration(pid::lane(l, NoiseFilter), k + "noise.filter", p + "Noise Filter", noise, filters, 2));
+        add(continuous(pid::lane(l, NoiseCutoff), k + "noise.cutoff", p + "Noise Cutoff", noise, Scale::Log, 20.0,
+                       20000.0, "Hz", 3000.0));
+        add(continuous(pid::lane(l, NoiseReso), k + "noise.reso", p + "Noise Reso", noise, Scale::Linear, 0.0, 100.0,
+                       "%", 20.0));
+        add(continuous(pid::lane(l, NoiseFilterEnv), k + "noise.filter_env", p + "Noise Filter Env", noise,
+                       Scale::Linear, -8.0, 8.0, "oct", 0.0));
+        add(continuous(pid::lane(l, NoiseEnvDecay), k + "noise.env_decay", p + "Noise Env Decay", noise, Scale::Log,
+                       1.0, 2000.0, "ms", 50.0));
+        add(continuous(pid::lane(l, NoiseAttack), k + "noise.attack", p + "Noise Attack", noise, Scale::Cubic, 0.0,
+                       100.0, "ms", 0.0));
+        add(continuous(pid::lane(l, NoiseHold), k + "noise.hold", p + "Noise Hold", noise, Scale::Cubic, 0.0, 2000.0,
+                       "ms", 0.0));
+        add(continuous(pid::lane(l, NoiseDecay), k + "noise.decay", p + "Noise Decay", noise, Scale::Log, 5.0, 8000.0,
+                       "ms", 120.0));
+        add(continuous(pid::lane(l, NoiseCurve), k + "noise.curve", p + "Noise Curve", noise, Scale::Linear, -100.0,
+                       100.0, "%", 50.0));
+
+        add(enumeration(pid::lane(l, ResExciter), k + "resonator.exciter", p + "Resonator Exciter", res,
+                        {"Impulse", "Mallet", "Noise"}, 1));
+        add(enumeration(pid::lane(l, ResModel), k + "resonator.model", p + "Resonator Model", res,
+                        {"Membrane", "Harmonic", "Odd", "Bar"}, 0));
+        add(enumeration(pid::lane(l, ResModes), k + "resonator.modes", p + "Resonator Modes", res,
+                        {"2", "3", "4", "5", "6", "7", "8"}, 4));
+        add(continuous(pid::lane(l, ResTune), k + "resonator.tune", p + "Resonator Tune", res, Scale::Log, 20.0,
+                       2000.0, "Hz", 80.0));
+        add(continuous(pid::lane(l, ResKeyTrack), k + "resonator.key_track", p + "Resonator Key Track", res,
+                       Scale::Linear, 0.0, 100.0, "%", 0.0));
+        add(continuous(pid::lane(l, ResDecay), k + "resonator.decay", p + "Resonator Decay", res, Scale::Log, 10.0,
+                       8000.0, "ms", 400.0));
+        add(continuous(pid::lane(l, ResDamping), k + "resonator.damping", p + "Resonator Damping", res, Scale::Linear,
+                       0.0, 100.0, "%", 50.0));
+        add(continuous(pid::lane(l, ResBrightness), k + "resonator.brightness", p + "Resonator Brightness", res,
+                       Scale::Linear, 0.0, 100.0, "%", 40.0));
+        add(continuous(pid::lane(l, ResHardness), k + "resonator.hardness", p + "Resonator Hardness", res,
+                       Scale::Linear, 0.0, 100.0, "%", 50.0));
+        add(continuous(pid::lane(l, ResDrop), k + "resonator.drop", p + "Resonator Drop", res, Scale::Linear, 0.0,
+                       24.0, "st", 0.0));
+        add(continuous(pid::lane(l, ResDropTime), k + "resonator.drop_time", p + "Resonator Drop Time", res,
+                       Scale::Log, 1.0, 1000.0, "ms", 30.0));
     }
 
     uint32_t maxId = 0;
@@ -303,6 +418,10 @@ std::string ParamTable::toText(int index, double value) const
         return fmt("%.0f %%", shown(x, 1.0));
     if (d.unit == "deg")
         return fmt("%.0f deg", shown(x, 1.0));
+    if (d.unit == "st")
+        return fmt("%+.1f st", shown(x, 0.1));
+    if (d.unit == "oct")
+        return fmt("%+.1f oct", shown(x, 0.1));
     if (d.unit == "pan")
     {
         const long r = std::lround(x);
@@ -390,23 +509,81 @@ dsp::EngineParams buildEngineParams(const double* values)
     for (int l = 0; l < dsp::kNumLanes; ++l)
     {
         using namespace pid;
+        auto lv = [&](LaneField f) { return plain(lane(l, f)); };
+        auto pct = [&](LaneField f) { return plain(lane(l, f)) / 100.0; };
+        auto idx = [&](LaneField f) { return static_cast<int>(plain(lane(l, f))); };
+
         dsp::LaneParams& lp = p.lanes[static_cast<size_t>(l)];
-        lp.enabled = plain(lane(l, LEnabled)) > 0.5;
+        lp.enabled = lv(LEnabled) > 0.5;
         lp.gain = gain(lane(l, LLevel));
-        lp.pan = plain(lane(l, LPan)) / 100.0;
-        lp.velocity = plain(lane(l, LVelocity)) / 100.0;
+        lp.pan = pct(LPan);
+        lp.velocity = pct(LVelocity);
+        lp.source = static_cast<dsp::Source>(idx(LSource));
+        lp.delayMs = lv(LDelay);
+        lp.invert = lv(LInvert) > 0.5;
+        lp.note = idx(LNote) - 1;
+        lp.output = static_cast<dsp::Output>(idx(LOutput));
+        lp.pitchLink = idx(LPitchLink) - 1;
+        lp.transpose = lv(LTranspose);
+        lp.variation = pct(LVariation);
 
         dsp::BodyParams& b = lp.body;
-        b.pitchStart = plain(lane(l, BodyPitchStart));
-        b.pitchEnd = plain(lane(l, BodyPitchEnd));
-        b.sweepMs = plain(lane(l, BodySweep));
-        b.sweepCurve = plain(lane(l, BodySweepCurve)) / 100.0;
-        b.keyTrack = plain(lane(l, BodyKeyTrack)) / 100.0;
-        b.attackMs = plain(lane(l, BodyAttack));
-        b.holdMs = plain(lane(l, BodyHold));
-        b.decayMs = plain(lane(l, BodyDecay));
-        b.decayCurve = plain(lane(l, BodyDecayCurve)) / 100.0;
-        b.phase = plain(lane(l, BodyPhase)) / 360.0;
+        b.pitchStart = lv(BodyPitchStart);
+        b.pitchEnd = lv(BodyPitchEnd);
+        b.sweepMs = lv(BodySweep);
+        b.sweepCurve = pct(BodySweepCurve);
+        b.keyTrack = pct(BodyKeyTrack);
+        b.attackMs = lv(BodyAttack);
+        b.holdMs = lv(BodyHold);
+        b.decayMs = lv(BodyDecay);
+        b.decayCurve = pct(BodyDecayCurve);
+        b.phase = lv(BodyPhase) / 360.0;
+        b.wave = static_cast<dsp::Wave>(idx(BodyWave));
+        b.shape = pct(BodyShape);
+        b.tilt = pct(BodyTilt);
+        b.even = pct(BodyEven);
+        b.stretch = pct(BodyStretch);
+        b.fmAmount = pct(BodyFmAmount);
+        b.fmRatio = lv(BodyFmRatio);
+        b.fmDecayMs = lv(BodyFmDecay);
+        b.feedback = pct(BodyFeedback);
+        b.drift = pct(BodyDrift);
+
+        dsp::ClickParams& c = lp.click;
+        c.type = static_cast<dsp::ClickType>(idx(ClickType));
+        c.decayMs = lv(ClickDecay);
+        c.filter = static_cast<dsp::FilterMode>(idx(ClickFilter));
+        c.cutoff = lv(ClickCutoff);
+        c.reso = pct(ClickReso);
+        c.pitch = lv(ClickPitch);
+        c.sweepOct = lv(ClickSweep);
+
+        dsp::NoiseParams& nz = lp.noise;
+        nz.color = static_cast<dsp::NoiseColor>(idx(NoiseColor));
+        nz.density = pct(NoiseDensity);
+        nz.width = pct(NoiseWidth);
+        nz.filter = static_cast<dsp::FilterMode>(idx(NoiseFilter));
+        nz.cutoff = lv(NoiseCutoff);
+        nz.reso = pct(NoiseReso);
+        nz.filterEnvOct = lv(NoiseFilterEnv);
+        nz.envDecayMs = lv(NoiseEnvDecay);
+        nz.attackMs = lv(NoiseAttack);
+        nz.holdMs = lv(NoiseHold);
+        nz.decayMs = lv(NoiseDecay);
+        nz.curve = pct(NoiseCurve);
+
+        dsp::ResonatorParams& r = lp.resonator;
+        r.exciter = static_cast<dsp::Exciter>(idx(ResExciter));
+        r.model = static_cast<dsp::ResonatorModel>(idx(ResModel));
+        r.modes = idx(ResModes) + 2;
+        r.tune = lv(ResTune);
+        r.keyTrack = pct(ResKeyTrack);
+        r.decayMs = lv(ResDecay);
+        r.damping = pct(ResDamping);
+        r.brightness = pct(ResBrightness);
+        r.hardness = pct(ResHardness);
+        r.dropSt = lv(ResDrop);
+        r.dropMs = lv(ResDropTime);
     }
     return p;
 }

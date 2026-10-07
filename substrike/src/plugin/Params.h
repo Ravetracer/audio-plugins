@@ -14,8 +14,9 @@ namespace substrike {
 // slot, has room to grow without touching its neighbours:
 //
 //   1 - 999        global
-//   1000 * (L + 1) lane L (0-7): + 0-99 lane, + 100-199 Body, + 200-599 the
-//                  other sources, + 600-899 the six effect slots (50 each)
+//   1000 * (L + 1) lane L (0-7): + 0-99 lane, + 100-199 Body, + 200-299
+//                  Click, + 300-399 Noise, + 400-499 Resonator, + 500-599
+//                  spare, + 600-899 the six effect slots (50 each)
 //   9000 - 9999    master chain
 //   10000 -        modulation
 namespace pid {
@@ -31,6 +32,14 @@ enum LaneField : uint32_t
     LLevel = 1,
     LPan = 2,
     LVelocity = 3,
+    LSource = 4,
+    LDelay = 5,
+    LInvert = 6,
+    LNote = 7,
+    LOutput = 8,
+    LPitchLink = 9,
+    LTranspose = 10,
+    LVariation = 11,
 
     BodyPitchStart = 100,
     BodyPitchEnd = 101,
@@ -42,6 +51,49 @@ enum LaneField : uint32_t
     BodyDecay = 112,
     BodyDecayCurve = 113,
     BodyPhase = 120,
+    BodyWave = 121,
+    BodyShape = 122,
+    BodyTilt = 123,
+    BodyEven = 124,
+    BodyStretch = 125,
+    BodyFmAmount = 130,
+    BodyFmRatio = 131,
+    BodyFmDecay = 132,
+    BodyFeedback = 133,
+    BodyDrift = 140,
+
+    ClickType = 200,
+    ClickDecay = 201,
+    ClickFilter = 202,
+    ClickCutoff = 203,
+    ClickReso = 204,
+    ClickPitch = 205,
+    ClickSweep = 206,
+
+    NoiseColor = 300,
+    NoiseDensity = 301,
+    NoiseWidth = 302,
+    NoiseFilter = 303,
+    NoiseCutoff = 304,
+    NoiseReso = 305,
+    NoiseFilterEnv = 306,
+    NoiseEnvDecay = 307,
+    NoiseAttack = 308,
+    NoiseHold = 309,
+    NoiseDecay = 310,
+    NoiseCurve = 311,
+
+    ResExciter = 400,
+    ResModel = 401,
+    ResModes = 402,
+    ResTune = 403,
+    ResKeyTrack = 404,
+    ResDecay = 405,
+    ResDamping = 406,
+    ResBrightness = 407,
+    ResHardness = 408,
+    ResDrop = 409,
+    ResDropTime = 410,
 };
 
 constexpr uint32_t kLaneBlock = 1000;
@@ -71,7 +123,7 @@ struct ParamDef
     Kind kind;
     Scale scale = Scale::Linear;
     double lo = 0.0, hi = 1.0; // plain range
-    std::string unit;          // "Hz", "ms", "dB", "%", "deg", "" -- drives text
+    std::string unit;          // "Hz", "ms", "dB", "%", "deg", "pan", "st", "oct", "" -- drives text
     double def = 0.0;          // default, stored (normalised) value
     std::vector<std::string> labels;
     // A decibel parameter at its lowest position means silence.

@@ -64,14 +64,14 @@ note on ─ trigger ─┬─ lane 1: source ─ slot1 ─ ... ─ slot6 ─ gua
   also be played as a drum kit.
 - Pitch follows the note through a key-track amount. 0 % gives a fixed kick
   and 100 % a chromatically playable 808.
-- Per-lane trigger delay of ±20 ms and a polarity switch, for aligning
+- Per-lane trigger delay of 0-100 ms and a polarity switch, for aligning
   layers.
 
 ### Lane sources
 
 1. **Body**: the tonal oscillator.
-   - Waveform morph: sine, triangle, shaped, and an additive mode with 8
-     partials.
+   - Waveforms: sine, triangle, saw, square, and an additive mode with 8
+     partials; tanh shaping on top.
    - Start phase 0-360°.
    - FM from its own modulator (ratio, index, envelope) and feedback FM.
    - Drift.
@@ -173,8 +173,35 @@ must never change.
 
 Phase 1 is done (0.1.0): the CLAP and VST3 build for Linux and Windows, one
 lane with the Body source and its macro parameters, plain-text state, and the
-offline renderer with its self-test. The self-test passes natively and under
-wine, and clap-validator is clean. No DAW has loaded it yet.
+offline renderer with its self-test.
+
+Phase 2 is done (0.2.0): eight lanes; Body completed (five waveforms, FM,
+feedback, shaping, drift); the Click, Noise and Resonator sources; trigger
+delay, polarity, note filter, transpose, Variation and pitch link per lane;
+the eight per-lane outputs. The self-test passes natively and under wine,
+and clap-validator is clean. No DAW has loaded it yet.
+
+Decided while building phase 2, and worth keeping:
+
+- Parameter blocks inside a lane: 0-99 the lane, 100-199 Body, 200-299
+  Click, 300-399 Noise, 400-499 Resonator, 500-599 spare (the Bus source).
+- The trigger delay is 0-100 ms and only later, never earlier: a plugin
+  cannot play before the note. It is a countdown to the hit, not an audio
+  delay, so it costs nothing.
+- Pitch Link reads the named lane's Body pitch parameters and transpose,
+  whatever that lane plays and whether it is on. Links do not chain. A Body
+  follows the whole drop; a Resonator and a Click blip or zap take the end
+  pitch as their tuning.
+- Transpose shifts every frequency of the lane's source, filter cutoffs
+  included.
+- Without Variation every hit uses the same seed, so noise, drift and the
+  click repeat bit for bit. With it the seed changes per hit, and pitch
+  (up to 50 cents), level (3 dB) and decays (20 %) vary.
+- Additive partials and resonator modes are normalised by the sum of their
+  levels, so a struck lane never leaves full scale. The Noise filter's
+  output falls as 1/sqrt(Q), which keeps resonant settings near the level
+  of plain noise.
+- The aux outputs carry the lane before the master level.
 
 ## Phases
 
