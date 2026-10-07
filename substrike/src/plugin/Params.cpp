@@ -140,6 +140,101 @@ ParamDef boolean(uint32_t id, std::string key, std::string name, std::string mod
     return d;
 }
 
+// What a slot's A-F mean under each type: the names, the state keys, the
+// ranges and the defaults. The engine reads the values in these units; the
+// effects in dsp/Effects.h say what they do with them. A letter a type does
+// not use is left generic.
+struct Shape
+{
+    const char* key;
+    const char* name;
+    Scale scale;
+    double lo, hi;
+    const char* unit;
+    double def;
+    std::vector<std::string> choices = {};
+    bool floorIsOff = false;
+};
+
+const std::vector<std::string>& slotTypeLabels()
+{
+    static const std::vector<std::string> labels = {"Off",    "Distortion", "Clipper",    "Wavefolder", "Bitcrush",
+                                                    "Filter", "EQ",         "Compressor", "Transient",  "Gate"};
+    return labels;
+}
+
+const std::vector<std::vector<Shape>>& slotShapes()
+{
+    static const std::vector<std::vector<Shape>> shapes = {
+        {}, // Off
+        {
+            {"model", "Model", Scale::Linear, 0, 9, "", 0,
+             {"Soft Clip", "Overdrive", "Tube", "Valve Stack", "Fuzz", "Rectifier", "Crush", "Germanium", "Crunch",
+              "Lead"}},
+            {"drive", "Drive", Scale::Linear, 0, 100, "%", 40},
+            {"bias", "Bias", Scale::Linear, -100, 100, "%", 0},
+            {"tone", "Tone", Scale::Log, 200, 20000, "Hz", 20000},
+            {"output", "Output", Scale::Linear, -24, 12, "dB", 0},
+        },
+        {
+            {"drive", "Drive", Scale::Linear, 0, 36, "dB", 6},
+            {"knee", "Knee", Scale::Linear, 0, 100, "%", 30},
+            {"ceiling", "Ceiling", Scale::Linear, -24, 0, "dB", 0},
+        },
+        {
+            {"drive", "Drive", Scale::Linear, 0, 36, "dB", 6},
+            {"bias", "Bias", Scale::Linear, -100, 100, "%", 0},
+            {"shape", "Shape", Scale::Linear, 0, 100, "%", 0},
+            {"output", "Output", Scale::Linear, -24, 12, "dB", 0},
+        },
+        {
+            {"bits", "Bits", Scale::Linear, 1, 16, "bit", 8},
+            {"rate", "Rate", Scale::Log, 100, 48000, "Hz", 48000},
+            {"output", "Output", Scale::Linear, -24, 12, "dB", 0},
+        },
+        {
+            {"mode", "Mode", Scale::Linear, 0, 6, "", 1,
+             {"LP 12", "LP 24", "HP 12", "HP 24", "Band Pass", "Notch", "Peak"}},
+            {"cutoff", "Cutoff", Scale::Log, 20, 20000, "Hz", 2000},
+            {"reso", "Reso", Scale::Linear, 0, 100, "%", 10},
+            {"env", "Env", Scale::Linear, -8, 8, "oct", 0},
+            {"env_decay", "Env Decay", Scale::Log, 5, 5000, "ms", 100},
+            {"gain", "Gain", Scale::Linear, -24, 24, "dB", 0},
+        },
+        {
+            {"low", "Low", Scale::Linear, -18, 18, "dB", 0},
+            {"mid", "Mid", Scale::Linear, -18, 18, "dB", 0},
+            {"mid_freq", "Mid Freq", Scale::Log, 30, 15000, "Hz", 1000},
+            {"mid_q", "Mid Q", Scale::Log, 0.2, 10, "", 1},
+            {"high", "High", Scale::Linear, -18, 18, "dB", 0},
+            {"tilt", "Tilt", Scale::Linear, -12, 12, "dB", 0},
+        },
+        {
+            {"threshold", "Threshold", Scale::Linear, -60, 0, "dB", -18},
+            {"ratio", "Ratio", Scale::Log, 1, 20, ":1", 4},
+            {"attack", "Attack", Scale::Log, 0.05, 200, "ms", 3},
+            {"release", "Release", Scale::Log, 5, 2000, "ms", 80},
+            {"knee", "Knee", Scale::Linear, 0, 24, "dB", 6},
+            {"makeup", "Makeup", Scale::Linear, 0, 24, "dB", 0},
+        },
+        {
+            {"attack", "Attack", Scale::Linear, -100, 100, "%", 0},
+            {"sustain", "Sustain", Scale::Linear, -100, 100, "%", 0},
+            {"speed", "Speed", Scale::Log, 1, 100, "ms", 20},
+            {"output", "Output", Scale::Linear, -24, 12, "dB", 0},
+        },
+        {
+            {"mode", "Mode", Scale::Linear, 0, 1, "", 0, {"Gate", "Hit"}},
+            {"threshold", "Threshold", Scale::Linear, -80, 0, "dB", -40},
+            {"attack", "Attack", Scale::Cubic, 0, 50, "ms", 0.5},
+            {"hold", "Hold", Scale::Cubic, 0, 2000, "ms", 50},
+            {"release", "Release", Scale::Log, 1, 5000, "ms", 100},
+            {"range", "Range", Scale::Linear, -80, 0, "dB", -80, {}, true},
+        },
+    };
+    return shapes;
+}
+
 } // namespace
 
 // The bottom of a level range is silence. Anything that would display as the
@@ -160,12 +255,38 @@ ParamTable::ParamTable()
 {
     using namespace pid;
     defs_.push_back(continuous(Output, "output", "Output", "Master", Scale::Linear, -60.0, 12.0, "dB", -3.0));
-    defs_.back().dbFloorIsOff = true;
+    defs_.back().floorIsOff = true;
     std::vector<std::string> notes;
     for (int n = 0; n < 128; ++n)
         notes.push_back(noteName(n));
     // MIDI 36, where a kick sits on most drum maps; named C2, with C4 = 60.
     defs_.push_back(enumeration(RootNote, "root_note", "Root Note", "Master", notes, 36));
+    // Oversampling for the drive slots and the output clip. Changing it resets
+    // every chain, so it is a setting rather than something to automate.
+    defs_.push_back(enumeration(Quality, "quality", "Quality", "Master", {"1x", "2x", "4x"}, 1));
+    defs_.back().automatable = false;
+
+    auto addSlot = [&](uint32_t base, const std::string& name, const std::string& key, const std::string& module) {
+        const int typeIndex = static_cast<int>(defs_.size());
+        defs_.push_back(enumeration(base + SType, key + "type", name + "Type", module, slotTypeLabels(), 0));
+        // Picking a type rewrites what A-F mean, so it is not automated.
+        defs_.back().automatable = false;
+        defs_.push_back(enumeration(base + SBand, key + "band", name + "Band", module,
+                                    {"Full", "Low", "Mid", "High", "Low+Mid", "Mid+High"}, 0));
+        defs_.push_back(continuous(base + SMix, key + "mix", name + "Mix", module, Scale::Linear, 0.0, 100.0, "%",
+                                   100.0));
+        defs_.push_back(boolean(base + SBypass, key + "bypass", name + "Bypass", module, false));
+        for (int k = 0; k < dsp::kSlotValues; ++k)
+        {
+            const char letter = static_cast<char>('A' + k);
+            ParamDef d = continuous(base + SValueA + static_cast<uint32_t>(k),
+                                    key + static_cast<char>(std::tolower(letter)), name + letter, module,
+                                    Scale::Linear, 0.0, 100.0, "%", 50.0);
+            d.typeParam = typeIndex;
+            d.letter = k;
+            defs_.push_back(std::move(d));
+        }
+    };
 
     std::vector<std::string> laneNotes{"Any"};
     for (int n = 0; n < 128; ++n)
@@ -187,7 +308,7 @@ ParamTable::ParamTable()
         const std::string res = lane + "/Resonator";
         auto add = [&](ParamDef d) { defs_.push_back(std::move(d)); };
         auto addDb = [&](ParamDef d) {
-            d.dbFloorIsOff = true;
+            d.floorIsOff = true;
             defs_.push_back(std::move(d));
         };
 
@@ -217,6 +338,11 @@ ParamTable::ParamTable()
                        "st", 0.0));
         add(continuous(pid::lane(l, LVariation), k + "variation", p + "Variation", lane, Scale::Linear, 0.0, 100.0,
                        "%", 0.0));
+        // Where a slot's band select splits the lane.
+        add(continuous(pid::lane(l, LXoverLow), k + "xover_low", p + "Crossover Low", lane, Scale::Log, 40.0, 1000.0,
+                       "Hz", 150.0));
+        add(continuous(pid::lane(l, LXoverHigh), k + "xover_high", p + "Crossover High", lane, Scale::Log, 500.0,
+                       12000.0, "Hz", 2500.0));
 
         // The defaults are a plain, solid club kick: a fast drop from the low
         // mids onto a sub around G0, with a medium tail.
@@ -321,7 +447,28 @@ ParamTable::ParamTable()
                        24.0, "st", 0.0));
         add(continuous(pid::lane(l, ResDropTime), k + "resonator.drop_time", p + "Resonator Drop Time", res,
                        Scale::Log, 1.0, 1000.0, "ms", 30.0));
+
+        for (int s = 0; s < dsp::kNumSlots; ++s)
+        {
+            const std::string sn = std::to_string(s + 1);
+            addSlot(pid::slot(l, s, 0), p + "Slot " + sn + " ", k + "slot" + sn + ".", lane + "/Slot " + sn);
+        }
     }
+
+    for (int s = 0; s < dsp::kNumSlots; ++s)
+    {
+        const std::string sn = std::to_string(s + 1);
+        addSlot(pid::masterSlot(s, 0), "Master Slot " + sn + " ", "master.slot" + sn + ".", "Master/Slot " + sn);
+    }
+    defs_.push_back(continuous(MasterXoverLow, "master.xover_low", "Master Crossover Low", "Master", Scale::Log, 40.0,
+                               1000.0, "Hz", 150.0));
+    defs_.push_back(continuous(MasterXoverHigh, "master.xover_high", "Master Crossover High", "Master", Scale::Log,
+                               500.0, 12000.0, "Hz", 2500.0));
+    // Below this the output is mono. The bottom of the range leaves it alone.
+    defs_.push_back(continuous(MonoBelow, "master.mono_below", "Mono Below", "Master", Scale::Log, 20.0, 500.0, "Hz",
+                               20.0));
+    defs_.back().floorIsOff = true;
+    defs_.push_back(enumeration(OutputClip, "master.clip", "Output Clip", "Master", {"Off", "Soft", "Hard"}, 0));
 
     uint32_t maxId = 0;
     for (const ParamDef& d : defs_)
@@ -331,8 +478,44 @@ ParamTable::ParamTable()
     {
         ParamDef& d = defs_[static_cast<size_t>(i)];
         byId_[d.id] = i;
+        byKey_[d.key] = i;
         if (d.kind == Kind::Continuous)
             d.def = fromPlain(i, d.def);
+    }
+
+    // Every slot letter under every type.
+    view_.assign(defs_.size(), -1);
+    isType_.assign(defs_.size(), false);
+    for (int i = 0; i < count(); ++i)
+    {
+        const ParamDef& generic = defs_[static_cast<size_t>(i)];
+        if (generic.typeParam < 0)
+            continue;
+        isType_[static_cast<size_t>(generic.typeParam)] = true;
+        const std::string& name = generic.name;
+        const std::string namePrefix = name.substr(0, name.size() - 1);
+        const std::string keyPrefix = generic.key.substr(0, generic.key.size() - 1);
+        view_[static_cast<size_t>(i)] = static_cast<int>(views_.size());
+        for (int t = 0; t < dsp::kNumSlotTypes; ++t)
+        {
+            ParamDef v = generic;
+            const std::vector<Shape>& shape = slotShapes()[static_cast<size_t>(t)];
+            if (generic.letter < static_cast<int>(shape.size()))
+            {
+                const Shape& s = shape[static_cast<size_t>(generic.letter)];
+                v.name = namePrefix + s.name;
+                v.key = keyPrefix + s.key;
+                v.scale = s.scale;
+                v.lo = s.lo;
+                v.hi = s.hi;
+                v.unit = s.unit;
+                v.choices = s.choices;
+                v.floorIsOff = s.floorIsOff;
+                v.def = fromPlain(v, s.def);
+            }
+            byViewKey_[v.key].push_back(static_cast<int>(views_.size()));
+            views_.push_back(std::move(v));
+        }
     }
 }
 
@@ -349,9 +532,37 @@ int ParamTable::indexOf(uint32_t id) const
 
 int ParamTable::indexOfKey(const std::string& key) const
 {
-    for (int i = 0; i < count(); ++i)
-        if (defs_[static_cast<size_t>(i)].key == key)
-            return i;
+    const auto it = byKey_.find(key);
+    return it == byKey_.end() ? -1 : it->second;
+}
+
+const ParamDef& ParamTable::effective(int index, double typeValue) const
+{
+    const int v = view_[static_cast<size_t>(index)];
+    if (v < 0)
+        return def(index);
+    const int type = std::clamp(static_cast<int>(std::lround(typeValue)), 0, dsp::kNumSlotTypes - 1);
+    return views_[static_cast<size_t>(v + type)];
+}
+
+const ParamDef& ParamTable::effective(int index, const double* values) const
+{
+    const int t = def(index).typeParam;
+    return t < 0 ? def(index) : effective(index, values[t]);
+}
+
+int ParamTable::indexOfSlotKey(const std::string& key, const double* values) const
+{
+    const auto it = byViewKey_.find(key);
+    if (it == byViewKey_.end())
+        return -1;
+    for (int v : it->second)
+    {
+        const ParamDef& d = views_[static_cast<size_t>(v)];
+        const int index = indexOf(d.id);
+        if (&effective(index, values) == &d)
+            return index;
+    }
     return -1;
 }
 
@@ -365,12 +576,13 @@ double ParamTable::maxValue(int index) const
     return def(index).kind == Kind::Continuous ? 1.0 : def(index).hi;
 }
 
-double ParamTable::toPlain(int index, double v) const
+double ParamTable::toPlain(const ParamDef& d, double v)
 {
-    const ParamDef& d = def(index);
     if (d.kind != Kind::Continuous)
         return std::round(std::clamp(v, d.lo, d.hi));
     v = clamp01(v);
+    if (!d.choices.empty())
+        return std::round(d.lo + (d.hi - d.lo) * v);
     switch (d.scale)
     {
     case Scale::Log: return d.lo * std::pow(d.hi / d.lo, v);
@@ -380,9 +592,8 @@ double ParamTable::toPlain(int index, double v) const
     return d.lo + (d.hi - d.lo) * v;
 }
 
-double ParamTable::fromPlain(int index, double plain) const
+double ParamTable::fromPlain(const ParamDef& d, double plain)
 {
-    const ParamDef& d = def(index);
     if (d.kind != Kind::Continuous)
         return std::round(std::clamp(plain, d.lo, d.hi));
     plain = std::clamp(plain, d.lo, d.hi);
@@ -395,22 +606,24 @@ double ParamTable::fromPlain(int index, double plain) const
     return clamp01((plain - d.lo) / (d.hi - d.lo));
 }
 
-std::string ParamTable::toText(int index, double value) const
+std::string ParamTable::toText(const ParamDef& d, double value)
 {
-    const ParamDef& d = def(index);
-    if (d.kind != Kind::Continuous)
+    const std::vector<std::string>& names = d.kind != Kind::Continuous ? d.labels : d.choices;
+    if (!names.empty())
     {
-        const int i = static_cast<int>(toPlain(index, value));
-        return i >= 0 && i < static_cast<int>(d.labels.size()) ? d.labels[static_cast<size_t>(i)] : std::to_string(i);
+        const int i = static_cast<int>(toPlain(d, value) - (d.kind == Kind::Continuous ? d.lo : 0.0));
+        return i >= 0 && i < static_cast<int>(names.size()) ? names[static_cast<size_t>(i)] : std::to_string(i);
     }
-    const double x = toPlain(index, value);
+    const double x = toPlain(d, value);
+    if (d.floorIsOff && d.unit != "dB" && isOff(d, x))
+        return "Off";
     if (d.unit == "Hz")
         return x >= 999.5 ? sig3(x / 1000.0) + " kHz" : sig3(x) + " Hz";
     if (d.unit == "ms")
         return x >= 999.5 ? sig3(x / 1000.0) + " s" : sig3(x) + " ms";
     if (d.unit == "dB")
     {
-        if (d.dbFloorIsOff && isOff(d, x))
+        if (d.floorIsOff && isOff(d, x))
             return "-inf dB";
         return fmt("%+.1f dB", shown(x, 0.1));
     }
@@ -420,6 +633,10 @@ std::string ParamTable::toText(int index, double value) const
         return fmt("%.0f deg", shown(x, 1.0));
     if (d.unit == "st")
         return fmt("%+.1f st", shown(x, 0.1));
+    if (d.unit == ":1")
+        return sig3(x) + ":1";
+    if (d.unit == "bit")
+        return fmt("%.1f bit", shown(x, 0.1));
     if (d.unit == "oct")
         return fmt("%+.1f oct", shown(x, 0.1));
     if (d.unit == "pan")
@@ -432,12 +649,22 @@ std::string ParamTable::toText(int index, double value) const
     return sig3(x);
 }
 
-std::optional<double> ParamTable::fromText(int index, const std::string& text) const
+std::optional<double> ParamTable::fromText(const ParamDef& d, const std::string& text)
 {
-    const ParamDef& d = def(index);
     const std::string t = trim(text);
     if (t.empty())
         return std::nullopt;
+
+    if (d.kind == Kind::Continuous && !d.choices.empty())
+    {
+        const std::string lt = lower(t);
+        for (size_t i = 0; i < d.choices.size(); ++i)
+            if (lower(d.choices[i]) == lt)
+                return fromPlain(d, d.lo + static_cast<double>(i));
+        return std::nullopt;
+    }
+    if (d.floorIsOff && d.unit != "dB" && lower(t) == "off")
+        return 0.0;
 
     if (d.kind != Kind::Continuous)
     {
@@ -462,18 +689,18 @@ std::optional<double> ParamTable::fromText(int index, const std::string& text) c
     const std::string lt = lower(t);
     if (d.unit == "Hz")
         if (auto midi = parseNoteNumber(t))
-            return fromPlain(index, 440.0 * std::exp2((*midi - 69) / 12.0));
+            return fromPlain(d, 440.0 * std::exp2((*midi - 69) / 12.0));
     if (d.unit == "pan")
     {
         if (lt == "c" || lt == "center")
-            return fromPlain(index, 0.0);
+            return fromPlain(d, 0.0);
         if (lt[0] == 'l' || lt[0] == 'r')
         {
             double v;
             std::string rest;
             if (!parseNumber(lt.substr(1), v, rest))
                 return std::nullopt;
-            return fromPlain(index, lt[0] == 'l' ? -v : v);
+            return fromPlain(d, lt[0] == 'l' ? -v : v);
         }
     }
     if (d.unit == "dB" && (lt == "-inf" || lt == "-inf db" || lt == "off"))
@@ -487,7 +714,7 @@ std::optional<double> ParamTable::fromText(int index, const std::string& text) c
         v *= 1000.0;
     if (d.unit == "ms" && (rest == "s" || rest == "sec"))
         v *= 1000.0;
-    return fromPlain(index, v);
+    return fromPlain(d, v);
 }
 
 dsp::EngineParams buildEngineParams(const double* values)
@@ -500,12 +727,36 @@ dsp::EngineParams buildEngineParams(const double* values)
     auto gain = [&](uint32_t id) {
         const int i = t.indexOf(id);
         const double db = t.toPlain(i, values[i]);
-        return t.def(i).dbFloorIsOff && isOff(t.def(i), db) ? 0.0 : std::pow(10.0, db / 20.0);
+        return t.def(i).floorIsOff && isOff(t.def(i), db) ? 0.0 : std::pow(10.0, db / 20.0);
+    };
+
+    auto slot = [&](uint32_t base, dsp::SlotParams& s) {
+        using namespace pid;
+        s.type = static_cast<dsp::SlotType>(static_cast<int>(plain(base + SType)));
+        s.band = static_cast<dsp::Band>(static_cast<int>(plain(base + SBand)));
+        s.mix = plain(base + SMix) / 100.0;
+        s.bypass = plain(base + SBypass) > 0.5;
+        for (int k = 0; k < dsp::kSlotValues; ++k)
+        {
+            const int i = t.indexOf(base + SValueA + static_cast<uint32_t>(k));
+            s.v[static_cast<size_t>(k)] = ParamTable::toPlain(t.effective(i, values), values[i]);
+        }
     };
 
     dsp::EngineParams p;
     p.outGain = gain(pid::Output);
     p.rootNote = static_cast<int>(plain(pid::RootNote));
+    p.oversampling = 1 << static_cast<int>(plain(pid::Quality));
+    for (int s = 0; s < dsp::kNumSlots; ++s)
+        slot(pid::masterSlot(s, 0), p.master[static_cast<size_t>(s)]);
+    p.masterXoverLow = plain(pid::MasterXoverLow);
+    p.masterXoverHigh = plain(pid::MasterXoverHigh);
+    {
+        const int i = t.indexOf(pid::MonoBelow);
+        const double hz = t.toPlain(i, values[i]);
+        p.monoBelow = isOff(t.def(i), hz) ? 0.0 : hz;
+    }
+    p.clip = static_cast<dsp::OutputClip>(static_cast<int>(plain(pid::OutputClip)));
     for (int l = 0; l < dsp::kNumLanes; ++l)
     {
         using namespace pid;
@@ -584,6 +835,11 @@ dsp::EngineParams buildEngineParams(const double* values)
         r.hardness = pct(ResHardness);
         r.dropSt = lv(ResDrop);
         r.dropMs = lv(ResDropTime);
+
+        lp.xoverLow = lv(LXoverLow);
+        lp.xoverHigh = lv(LXoverHigh);
+        for (int s = 0; s < dsp::kNumSlots; ++s)
+            slot(pid::slot(l, s, 0), lp.slots[static_cast<size_t>(s)]);
     }
     return p;
 }

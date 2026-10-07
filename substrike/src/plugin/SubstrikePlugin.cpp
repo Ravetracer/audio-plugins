@@ -157,7 +157,11 @@ void SubstrikePlugin::stopProcessing() { processing_ = false; }
 
 void SubstrikePlugin::reset() { engine_.reset(); }
 
-void SubstrikePlugin::onMainThread() {}
+void SubstrikePlugin::onMainThread()
+{
+    if (rescanInfo_.exchange(false) && hostParams_)
+        hostParams_->rescan(host_, CLAP_PARAM_RESCAN_INFO | CLAP_PARAM_RESCAN_VALUES | CLAP_PARAM_RESCAN_TEXT);
+}
 
 const void* SubstrikePlugin::getExtension(const char* id)
 {
@@ -214,10 +218,10 @@ bool SubstrikePlugin::paramsGetInfo(uint32_t index, clap_param_info_t* info) con
     if (index >= static_cast<uint32_t>(table_.count()))
         return false;
     const int i = static_cast<int>(index);
-    const ParamDef& d = table_.def(i);
+    const ParamDef& d = current(i);
     std::memset(info, 0, sizeof(*info));
     info->id = d.id;
-    info->flags = CLAP_PARAM_IS_AUTOMATABLE;
+    info->flags = d.automatable ? CLAP_PARAM_IS_AUTOMATABLE : 0;
     if (d.kind != Kind::Continuous)
         info->flags |= CLAP_PARAM_IS_STEPPED;
     if (d.kind == Kind::Enum)
@@ -227,7 +231,9 @@ bool SubstrikePlugin::paramsGetInfo(uint32_t index, clap_param_info_t* info) con
     std::snprintf(info->module, sizeof(info->module), "%s", d.module.c_str());
     info->min_value = table_.minValue(i);
     info->max_value = table_.maxValue(i);
-    info->default_value = d.def;
+    // The fixed default: a letter's own depends on the type, and a host may
+    // not see that change.
+    info->default_value = table_.def(i).def;
     return true;
 }
 
@@ -245,7 +251,7 @@ bool SubstrikePlugin::paramsValueToText(clap_id id, double value, char* display,
     const int idx = table_.indexOf(id);
     if (idx < 0 || size == 0)
         return false;
-    std::snprintf(display, size, "%s", table_.toText(idx, value).c_str());
+    std::snprintf(display, size, "%s", ParamTable::toText(current(idx), value).c_str());
     return true;
 }
 
@@ -254,7 +260,7 @@ bool SubstrikePlugin::paramsTextToValue(clap_id id, const char* display, double*
     const int idx = table_.indexOf(id);
     if (idx < 0)
         return false;
-    if (auto v = table_.fromText(idx, display))
+    if (auto v = ParamTable::fromText(current(idx), display))
     {
         *value = *v;
         return true;
@@ -267,6 +273,43 @@ void SubstrikePlugin::setShared(int index, double value)
     shared_[static_cast<size_t>(index)].store(value, std::memory_order_relaxed);
 }
 
+const ParamDef& SubstrikePlugin::current(int index) const
+{
+    const int t = table_.def(index).typeParam;
+    if (t < 0)
+        return table_.def(index);
+    return table_.effective(index, shared_[static_cast<size_t>(t)].load(std::memory_order_relaxed));
+}
+
+void SubstrikePlugin::typeChanged(int typeIndex, const clap_output_events_t* out)
+{
+    for (int i = 0; i < table_.count(); ++i)
+    {
+        if (table_.def(i).typeParam != typeIndex)
+            continue;
+        const double v = table_.effective(i, audio_[static_cast<size_t>(typeIndex)]).def;
+        audio_[static_cast<size_t>(i)] = v;
+        setShared(i, v);
+        if (out)
+        {
+            clap_event_param_value_t ev{};
+            ev.header.size = sizeof(ev);
+            ev.header.time = 0;
+            ev.header.space_id = CLAP_CORE_EVENT_SPACE_ID;
+            ev.header.type = CLAP_EVENT_PARAM_VALUE;
+            ev.param_id = table_.def(i).id;
+            ev.note_id = -1;
+            ev.port_index = -1;
+            ev.channel = -1;
+            ev.key = -1;
+            ev.value = v;
+            out->try_push(out, &ev.header);
+        }
+    }
+    rescanInfo_.store(true);
+    host_->request_callback(host_);
+}
+
 void SubstrikePlugin::syncFromShared()
 {
     if (!reloadFromShared_.exchange(false))
@@ -276,7 +319,7 @@ void SubstrikePlugin::syncFromShared()
     engineParamsDirty_ = true;
 }
 
-void SubstrikePlugin::handleEvent(const clap_event_header_t* ev)
+void SubstrikePlugin::handleEvent(const clap_event_header_t* ev, const clap_output_events_t* out)
 {
     if (ev->space_id != CLAP_CORE_EVENT_SPACE_ID)
         return;
@@ -289,9 +332,12 @@ void SubstrikePlugin::handleEvent(const clap_event_header_t* ev)
         if (idx < 0)
             return;
         const double v = std::clamp(pv->value, table_.minValue(idx), table_.maxValue(idx));
+        const double before = audio_[static_cast<size_t>(idx)];
         audio_[static_cast<size_t>(idx)] = v;
         setShared(idx, v);
         engineParamsDirty_ = true;
+        if (table_.isSlotType(idx) && std::lround(v) != std::lround(before))
+            typeChanged(idx, out);
         return;
     }
     case CLAP_EVENT_NOTE_ON:
@@ -326,7 +372,7 @@ void SubstrikePlugin::handleEvent(const clap_event_header_t* ev)
     }
 }
 
-void SubstrikePlugin::paramsFlush(const clap_input_events_t* in, const clap_output_events_t*)
+void SubstrikePlugin::paramsFlush(const clap_input_events_t* in, const clap_output_events_t* out)
 {
     syncFromShared();
     if (!in)
@@ -337,7 +383,7 @@ void SubstrikePlugin::paramsFlush(const clap_input_events_t* in, const clap_outp
         const clap_event_header_t* ev = in->get(in, i);
         // Only parameter changes: a flush carries no time to play a note at.
         if (ev->space_id == CLAP_CORE_EVENT_SPACE_ID && ev->type == CLAP_EVENT_PARAM_VALUE)
-            handleEvent(ev);
+            handleEvent(ev, out);
     }
 }
 
@@ -383,7 +429,7 @@ bool SubstrikePlugin::stateLoad(const clap_istream_t* stream)
     reloadFromShared_.store(true);
     if (hostParams_)
     {
-        hostParams_->rescan(host_, CLAP_PARAM_RESCAN_VALUES | CLAP_PARAM_RESCAN_TEXT);
+        hostParams_->rescan(host_, CLAP_PARAM_RESCAN_VALUES | CLAP_PARAM_RESCAN_TEXT | CLAP_PARAM_RESCAN_INFO);
         if (!processing_)
             hostParams_->request_flush(host_);
     }
@@ -463,7 +509,7 @@ clap_process_status SubstrikePlugin::process(const clap_process_t* process)
                 chunkEnd = std::min(frames, ev->time);
                 break;
             }
-            handleEvent(ev);
+            handleEvent(ev, process->out_events);
             ++nextEvent;
         }
         if (engineParamsDirty_)
@@ -476,7 +522,7 @@ clap_process_status SubstrikePlugin::process(const clap_process_t* process)
     }
     // Events stamped past the block's end are applied for the next one.
     while (nextEvent < numEvents)
-        handleEvent(in->get(in, nextEvent++));
+        handleEvent(in->get(in, nextEvent++), process->out_events);
 
     return engine_.idle() ? CLAP_PROCESS_SLEEP : CLAP_PROCESS_CONTINUE;
 }

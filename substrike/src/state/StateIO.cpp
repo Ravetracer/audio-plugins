@@ -42,15 +42,17 @@ std::string serializeState(const StateDocument& doc)
     char buf[64];
     for (int i = 0; i < t.count() && i < static_cast<int>(doc.values.size()); ++i)
     {
-        const ParamDef& d = t.def(i);
+        // A slot letter is written under the key and in the unit its slot's
+        // type gives it, so "l1.slot1.drive=12" rather than a knob position.
+        const ParamDef& d = t.effective(i, doc.values.data());
         const double v = doc.values[static_cast<size_t>(i)];
-        if (d.kind == Kind::Continuous)
+        if (d.kind == Kind::Continuous && d.choices.empty())
         {
-            std::snprintf(buf, sizeof(buf), "%.9g", t.toPlain(i, v));
+            std::snprintf(buf, sizeof(buf), "%.9g", ParamTable::toPlain(d, v));
             out << d.key << '=' << buf << '\n';
         }
         else
-            out << d.key << '=' << t.toText(i, v) << '\n';
+            out << d.key << '=' << ParamTable::toText(d, v) << '\n';
     }
     return out.str();
 }
@@ -64,6 +66,7 @@ bool parseState(const std::string& text, StateDocument& doc)
     std::string line;
     std::string section;
     bool seenHeader = false;
+    std::vector<std::pair<std::string, std::string>> params;
     while (std::getline(in, line))
     {
         line = trim(line);
@@ -86,20 +89,38 @@ bool parseState(const std::string& text, StateDocument& doc)
                 doc.meta[key] = value;
         }
         else if (section == "Parameters")
+            params.emplace_back(key, value);
+    }
+
+    auto apply = [&](int idx, const ParamDef& d, const std::string& value) {
+        if (d.kind == Kind::Continuous && d.choices.empty())
         {
-            const int idx = t.indexOfKey(key);
-            if (idx < 0)
-                continue;
-            if (t.def(idx).kind == Kind::Continuous)
-            {
-                char* end = nullptr;
-                const double v = std::strtod(value.c_str(), &end);
-                if (end != value.c_str())
-                    doc.values[static_cast<size_t>(idx)] = t.fromPlain(idx, v);
-            }
-            else if (auto v = t.fromText(idx, value))
-                doc.values[static_cast<size_t>(idx)] = *v;
+            char* end = nullptr;
+            const double v = std::strtod(value.c_str(), &end);
+            if (end != value.c_str())
+                doc.values[static_cast<size_t>(idx)] = ParamTable::fromPlain(d, v);
         }
+        else if (auto v = ParamTable::fromText(d, value))
+            doc.values[static_cast<size_t>(idx)] = *v;
+    };
+
+    // Everything but the slot letters first, the slot types among it; then
+    // every letter starts at its type's default, and the letters in the text
+    // are read with the meaning their type gives them.
+    for (const auto& [key, value] : params)
+    {
+        const int idx = t.indexOfKey(key);
+        if (idx >= 0 && t.def(idx).typeParam < 0)
+            apply(idx, t.def(idx), value);
+    }
+    for (int i = 0; i < t.count(); ++i)
+        if (t.def(i).typeParam >= 0)
+            doc.values[static_cast<size_t>(i)] = t.effective(i, doc.values.data()).def;
+    for (const auto& [key, value] : params)
+    {
+        const int idx = t.indexOfSlotKey(key, doc.values.data());
+        if (idx >= 0)
+            apply(idx, t.effective(idx, doc.values.data()), value);
     }
     return seenHeader;
 }

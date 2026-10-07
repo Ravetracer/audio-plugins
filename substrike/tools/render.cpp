@@ -186,25 +186,22 @@ bool findParam(const clap_plugin_t* p, const std::string& name, clap_param_info_
 }
 
 // "Name=text" -> a parameter event, through the plugin's own text parser.
-bool resolveParams(const clap_plugin_t* p, const std::vector<std::string>& specs, EventList& out)
+bool resolveParam(const clap_plugin_t* p, const std::string& spec, EventList& out)
 {
-    for (const std::string& spec : specs)
+    const size_t eq = spec.find('=');
+    clap_param_info_t info{};
+    if (eq == std::string::npos || !findParam(p, spec.substr(0, eq), info))
     {
-        const size_t eq = spec.find('=');
-        clap_param_info_t info{};
-        if (eq == std::string::npos || !findParam(p, spec.substr(0, eq), info))
-        {
-            std::fprintf(stderr, "unknown parameter in '%s' (see --list-params)\n", spec.c_str());
-            return false;
-        }
-        double v = 0.0;
-        if (!paramsOf(p)->text_to_value(p, info.id, spec.substr(eq + 1).c_str(), &v))
-        {
-            std::fprintf(stderr, "cannot read the value in '%s'\n", spec.c_str());
-            return false;
-        }
-        out.add(paramValue(info.id, v));
+        std::fprintf(stderr, "unknown parameter in '%s' (see --list-params)\n", spec.c_str());
+        return false;
     }
+    double v = 0.0;
+    if (!paramsOf(p)->text_to_value(p, info.id, spec.substr(eq + 1).c_str(), &v))
+    {
+        std::fprintf(stderr, "cannot read the value in '%s'\n", spec.c_str());
+        return false;
+    }
+    out.add(paramValue(info.id, v));
     return true;
 }
 
@@ -217,17 +214,29 @@ void flushParams(const clap_plugin_t* p, const EventList& events)
 
 constexpr int kLanes = 8;
 
+// Sets "Name=text" parameters one at a time: a slot's A-F are named after
+// what its type makes them, so they can only be found once the type is set.
+bool applyParams(const clap_plugin_t* p, const std::vector<std::string>& specs)
+{
+    for (const std::string& spec : specs)
+    {
+        EventList one;
+        if (!resolveParam(p, spec, one))
+            return false;
+        flushParams(p, one);
+    }
+    return true;
+}
+
 // Creates a plugin and sets "Name=text" parameters on it.
 const clap_plugin_t* configured(const Module& m, const std::vector<std::string>& specs)
 {
     const clap_plugin_t* p = createPlugin(m);
-    EventList set;
-    if (!p || !resolveParams(p, specs, set))
+    if (!p || !applyParams(p, specs))
     {
         std::fprintf(stderr, "configuration failed\n");
         std::exit(1);
     }
-    flushParams(p, set);
     return p;
 }
 
@@ -367,6 +376,51 @@ double measureFrequency(const std::vector<float>& x, double rate, double from, d
     if (crossings < 3)
         return 0.0;
     return 0.5 * (crossings - 1) * rate / (last - first);
+}
+
+// Level in dB of the component at `freq` over [from, to) samples, Hann
+// windowed (Goertzel), relative to a full-scale sine.
+double toneDb(const std::vector<float>& x, double rate, double freq, size_t from, size_t to)
+{
+    to = std::min(to, x.size());
+    const size_t n = to > from ? to - from : 0;
+    if (n < 2)
+        return -300.0;
+    const double w = 2.0 * 3.14159265358979323846 * freq / rate;
+    const double coef = 2.0 * std::cos(w);
+    double s1 = 0.0, s2 = 0.0, win = 0.0;
+    for (size_t i = 0; i < n; ++i)
+    {
+        const double h = 0.5 - 0.5 * std::cos(2.0 * 3.14159265358979323846 * i / (n - 1));
+        win += h;
+        const double s0 = x[from + i] * h + coef * s1 - s2;
+        s2 = s1;
+        s1 = s0;
+    }
+    const double power = s1 * s1 + s2 * s2 - coef * s1 * s2;
+    return 20.0 * std::log10(std::sqrt(std::max(power, 1e-300)) * 2.0 / win);
+}
+
+// The magnitude in dB of the plain DFT at `freq` over [from, to): for an
+// impulse response, the chain's gain at that frequency.
+double responseDb(const std::vector<float>& x, double rate, double freq, size_t from, size_t to)
+{
+    double re = 0.0, im = 0.0;
+    const double w = 2.0 * 3.14159265358979323846 * freq / rate;
+    for (size_t i = from; i < std::min(to, x.size()); ++i)
+    {
+        re += x[i] * std::cos(w * static_cast<double>(i - from));
+        im -= x[i] * std::sin(w * static_cast<double>(i - from));
+    }
+    return 10.0 * std::log10(std::max(re * re + im * im, 1e-300));
+}
+
+double peakDb(const std::vector<float>& x, size_t from, size_t to)
+{
+    float m = 0.0f;
+    for (size_t i = from; i < std::min(to, x.size()); ++i)
+        m = std::max(m, std::fabs(x[i]));
+    return 20.0 * std::log10(std::max(m, 1e-15f));
 }
 
 float maxStep(const std::vector<float>& x, size_t from, size_t to)
@@ -859,6 +913,390 @@ int runSelfTest(const Module& m)
               "five lanes with delays and variation: bit-identical with a block size of 37");
     }
 
+
+    // ======================================================== effect slots
+
+    // --- a slot's A-F are named, shown and defaulted by its type
+    {
+        p = configured(m, {"L1 Slot 1 Type=Clipper"});
+        params = paramsOf(p);
+        auto text = [&](const char* name) -> std::string {
+            clap_param_info_t info{};
+            if (!findParam(p, name, info))
+                return "(missing)";
+            double v = 0.0;
+            char t[256];
+            params->get_value(p, info.id, &v);
+            params->value_to_text(p, info.id, v, t, sizeof(t));
+            return t;
+        };
+        clap_param_info_t none{};
+        check(text("L1 Slot 1 Drive") == "+6.0 dB" && text("L1 Slot 1 Knee") == "30 %" &&
+                  text("L1 Slot 1 Ceiling") == "+0.0 dB" && !findParam(p, "L1 Slot 1 A", none),
+              "a Clipper slot's letters are Drive, Knee and Ceiling, at their defaults");
+        EventList set;
+        clap_param_info_t type{};
+        findParam(p, "L1 Slot 1 Type", type);
+        double filter = 0.0;
+        params->text_to_value(p, type.id, "Filter", &filter);
+        set.add(paramValue(type.id, filter));
+        flushParams(p, set);
+        check(text("L1 Slot 1 Mode") == "LP 24" && text("L1 Slot 1 Cutoff") == "2.00 kHz" &&
+                  !(type.flags & CLAP_PARAM_IS_AUTOMATABLE),
+              "switched to Filter they become Mode and Cutoff, reset to its defaults; Type is not automatable");
+        p->destroy(p);
+    }
+
+    // --- every type's letters read back what they show
+    {
+        static const char* kTypes[] = {"Distortion", "Clipper", "Wavefolder", "Bitcrush", "Filter",
+                                       "EQ",         "Compressor", "Transient", "Gate"};
+        bool ok = true;
+        for (const char* type : kTypes)
+        {
+            p = configured(m, {std::string("L1 Slot 1 Type=") + type});
+            params = paramsOf(p);
+            for (int k = 0; k < 6; ++k)
+            {
+                const clap_id id = 1604 + static_cast<clap_id>(k);
+                for (int s = 0; s <= 2000; ++s)
+                {
+                    const double x = s / 2000.0;
+                    char text[256], again[256];
+                    double back = 0.0;
+                    if (!params->value_to_text(p, id, x, text, sizeof(text)) ||
+                        !params->text_to_value(p, id, text, &back) ||
+                        !params->value_to_text(p, id, back, again, sizeof(again)) || std::strcmp(text, again) != 0)
+                    {
+                        ok = false;
+                        std::printf("    %s letter %c at %g: '%s' -> %g\n", type, 'A' + k, x, text, back);
+                        break;
+                    }
+                }
+            }
+            p->destroy(p);
+        }
+        check(ok, "every slot type's A-F round-trip through their text");
+    }
+
+    // --- state: letters are saved by name and unit, and come back
+    {
+        const std::vector<std::string> setup = {
+            "L1 Slot 1 Type=Distortion", "L1 Slot 1 Model=Germanium", "L1 Slot 1 Drive=73",
+            "L1 Slot 2 Type=Filter",     "L1 Slot 2 Mode=Notch",      "L1 Slot 2 Cutoff=345",
+            "L1 Slot 2 Band=Mid+High",   "L1 Slot 3 Type=Gate",       "L1 Slot 3 Mode=Hit",
+            "L1 Slot 3 Range=-inf",      "Master Slot 6 Type=EQ",     "Master Slot 6 Tilt=-4.5",
+            "Mono Below=120",            "Output Clip=Soft",          "Quality=4x"};
+        p = configured(m, setup);
+        const auto* state = static_cast<const clap_plugin_state_t*>(p->get_extension(p, CLAP_EXT_STATE));
+        std::string blob;
+        clap_ostream_t os{&blob, [](const clap_ostream_t* st, const void* buf, uint64_t size) -> int64_t {
+                              static_cast<std::string*>(st->ctx)->append(static_cast<const char*>(buf), size);
+                              return static_cast<int64_t>(size);
+                          }};
+        state->save(p, &os);
+        check(blob.find("l1.slot1.model=Germanium\n") != std::string::npos &&
+                  blob.find("l1.slot2.cutoff=345\n") != std::string::npos &&
+                  blob.find("master.slot6.tilt=-4.5\n") != std::string::npos,
+              "slot letters are saved under their names, in their units");
+        struct Reader
+        {
+            const std::string* s;
+            size_t pos;
+        } reader{&blob, 0};
+        clap_istream_t is{&reader, [](const clap_istream_t* st, void* buf, uint64_t size) -> int64_t {
+                              auto* r = static_cast<Reader*>(st->ctx);
+                              const size_t n = std::min<size_t>(size, r->s->size() - r->pos);
+                              std::memcpy(buf, r->s->data() + r->pos, n);
+                              r->pos += n;
+                              return static_cast<int64_t>(n);
+                          }};
+        const clap_plugin_t* q = createPlugin(m);
+        static_cast<const clap_plugin_state_t*>(q->get_extension(q, CLAP_EXT_STATE))->load(q, &is);
+        bool same = true;
+        const clap_plugin_params_t* pp = paramsOf(p);
+        const clap_plugin_params_t* qp = paramsOf(q);
+        for (uint32_t i = 0; i < pp->count(p); ++i)
+        {
+            clap_param_info_t a{}, b{};
+            pp->get_info(p, i, &a);
+            qp->get_info(q, i, &b);
+            double va = 0.0, vb = 0.0;
+            char ta[256], tb[256];
+            pp->get_value(p, a.id, &va);
+            qp->get_value(q, b.id, &vb);
+            pp->value_to_text(p, a.id, va, ta, sizeof(ta));
+            qp->value_to_text(q, b.id, vb, tb, sizeof(tb));
+            if (std::strcmp(a.name, b.name) != 0 || std::strcmp(ta, tb) != 0)
+            {
+                same = false;
+                std::printf("    %s = %s -> %s = %s\n", a.name, ta, b.name, tb);
+            }
+        }
+        check(same, "a state with slots in it loads back to the same names and values");
+        q->destroy(q);
+        p->destroy(p);
+    }
+
+    // --- every type at its defaults and at both ends of every letter, on a
+    //     full band and on a split one: finite, bounded, asleep at the end
+    {
+        static const char* kTypes[] = {"Distortion", "Clipper", "Wavefolder", "Bitcrush", "Filter",
+                                       "EQ",         "Compressor", "Transient", "Gate"};
+        int bad = 0, runs = 0;
+        for (const char* type : kTypes)
+            for (const char* band : {"Full", "Low+Mid"})
+                for (const char* end : {"", "0", "1"})
+                {
+                    p = configured(m, {"L2 On=On", std::string("L1 Slot 1 Type=") + type,
+                                       std::string("L1 Slot 1 Band=") + band, std::string("Master Slot 1 Type=") + type});
+                    if (*end)
+                    {
+                        EventList set;
+                        for (clap_id id : {1604u, 1605u, 1606u, 1607u, 1608u, 1609u, 9004u, 9005u, 9006u, 9007u,
+                                           9008u, 9009u})
+                            set.add(paramValue(id, *end == '0' ? 0.0 : 1.0));
+                        flushParams(p, set);
+                    }
+                    const Render r = render(p, rate, 512, static_cast<uint32_t>(4.0 * rate), hit);
+                    p->destroy(p);
+                    ++runs;
+                    // Every output and makeup gain is at its top at "1", on
+                    // the lane and on the master, so only the other two
+                    // settings have a level to keep.
+                    if (r.sawNonFinite || (*end != '1' && r.peak > 2.0f) || !r.sleptAtEnd)
+                    {
+                        ++bad;
+                        std::printf("    %s on %s, letters at %s: peak %g%s%s\n", type, band, *end ? end : "defaults",
+                                    r.peak, r.sawNonFinite ? ", non-finite" : "", r.sleptAtEnd ? "" : ", never sleeps");
+                    }
+                }
+        check(bad == 0, std::to_string(runs) + " slot settings finite, asleep at the end, and under +6 dBFS unless turned up");
+    }
+
+    // --- mix 0 and bypass leave the lane untouched, to the bit
+    {
+        const Render dry = rendered({"Output=0", "L1 Slot 1 Type=Distortion", "L1 Slot 1 Drive=100",
+                                     "L1 Slot 1 Mix=0"},
+                                    hit);
+        const Render bypassed = rendered({"Output=0", "L1 Slot 1 Type=Wavefolder", "L1 Slot 1 Drive=30",
+                                          "L1 Slot 1 Bypass=On"},
+                                         hit);
+        check(dry.left == unity.left && bypassed.left == unity.left, "mix 0 % and bypass are bit-transparent");
+    }
+
+    // --- the band split is flat, and a band can be taken out on its own
+    {
+        // A single-sample click, so the response is the chain's own.
+        const std::vector<std::string> impulse = {"Output=0", "L1 Source=Click", "L1 Click Type=Impulse",
+                                                  "L1 Click Filter=Off"};
+        auto with = [&](std::vector<std::string> v, std::initializer_list<const char*> extra) {
+            for (const char* e : extra)
+                v.push_back(e);
+            return v;
+        };
+        auto response = [&](const Render& r, double f) { return responseDb(r.left, rate, f, lead, lead + 24000); };
+        // Crossovers close together, where the low band's allpass matters.
+        const Render flat = rendered(with(impulse, {"L1 Slot 1 Type=EQ", "L1 Slot 1 Band=Mid",
+                                                    "L1 Crossover Low=400", "L1 Crossover High=800"}),
+                                     hit);
+        double worst = 0.0;
+        for (double f : {40.0, 300.0, 400.0, 560.0, 800.0, 1200.0, 9000.0})
+            worst = std::max(worst, std::fabs(response(flat, f)));
+        check(worst < 0.01, "low + mid + high around a neutral slot is flat (worst " + std::to_string(worst) + " dB)");
+
+        // A gate that nothing here can open: the click's band parts stay well
+        // under full scale.
+        const std::vector<std::string> mute = {"L1 Slot 1 Type=Gate", "L1 Slot 1 Threshold=0", "L1 Slot 1 Range=-inf"};
+        const Render shut = rendered(with(impulse, {"L1 Slot 1 Type=Gate", "L1 Slot 1 Threshold=0",
+                                                    "L1 Slot 1 Range=-inf", "L1 Slot 1 Band=Mid"}),
+                                     hit);
+        check(response(shut, 600.0) < -30.0, "a gate in Gate mode ignores the hits and stays shut");
+        auto muted = [&](const char* band) {
+            std::vector<std::string> v = impulse;
+            v.insert(v.end(), mute.begin(), mute.end());
+            v.push_back(std::string("L1 Slot 1 Band=") + band);
+            return rendered(v, hit);
+        };
+        const Render noLow = muted("Low"), noHigh = muted("High");
+        check(response(noLow, 40.0) < -30.0 && std::fabs(response(noLow, 9000.0)) < 0.5 &&
+                  response(noHigh, 9000.0) < -30.0 && std::fabs(response(noHigh, 40.0)) < 0.5,
+              "a closed gate on Low removes the lows only, on High the highs only (" +
+                  std::to_string(response(noLow, 40.0)) + " / " + std::to_string(response(noHigh, 9000.0)) + " dB)");
+    }
+
+    // --- oversampling: a hard clip on a 1.9 kHz tone aliases less at 4x
+    {
+        auto aliasing = [&](const char* quality) {
+            const Render r = rendered({"Output=0", std::string("Quality=") + quality, "L1 Pitch Start=1900",
+                                       "L1 Pitch End=1900", "L1 Body Hold=1 s", "L1 Slot 1 Type=Clipper",
+                                       "L1 Slot 1 Drive=24", "L1 Slot 1 Knee=0", "L1 Slot 1 Ceiling=-6"},
+                                      hit);
+            const size_t a = lead + 4800, b = a + 16384;
+            // 1900 Hz and every rate here are multiples of 100 Hz, so every
+            // alias lands on a multiple of 100 Hz: sum the ones that are not
+            // harmonics, below 19 kHz.
+            double power = 0.0;
+            for (int k = 1; k <= 190; ++k)
+                if (k % 19 != 0)
+                    power += std::pow(10.0, toneDb(r.left, rate, 100.0 * k, a, b) / 10.0);
+            return 10.0 * std::log10(power) - toneDb(r.left, rate, 1900.0, a, b);
+        };
+        const double x1 = aliasing("1x"), x2 = aliasing("2x"), x4 = aliasing("4x");
+        // At 2x a hard clip still folds its upper harmonics inside the doubled
+        // rate; 4x is what clears them.
+        check(x2 < x1 - 6.0 && x4 < x2 - 15.0,
+              "aliasing of a clipped tone: 1x " + std::to_string(x1) + ", 2x " + std::to_string(x2) + ", 4x " +
+                  std::to_string(x4) + " dB");
+    }
+
+    // --- the effects do what they say
+    {
+        // A held body: a steady 48 Hz at full scale from 0.3 s on.
+        const size_t a = static_cast<size_t>(0.30 * rate), b = static_cast<size_t>(0.45 * rate);
+        const Render held = rendered({"Output=0", "L1 Body Hold=1 s"}, hit);
+        const double clean = toneDb(held.left, rate, 48.0, a, b);
+        Render r = rendered({"Output=0", "L1 Body Hold=1 s", "L1 Slot 1 Type=EQ", "L1 Slot 1 Mid=12", "L1 Slot 1 Mid Freq=48",
+                             "L1 Slot 1 Mid Q=1"},
+                            hit);
+        const double eq = toneDb(r.left, rate, 48.0, a, b) - clean;
+        check(std::fabs(eq - 12.0) < 0.3, "EQ: +12 dB at 48 Hz lifts the body's tail by " + std::to_string(eq) + " dB");
+
+        r = rendered({"Output=0", "L1 Body Hold=1 s", "L1 Slot 1 Type=Compressor", "L1 Slot 1 Threshold=-30",
+                      "L1 Slot 1 Ratio=20", "L1 Slot 1 Attack=0.05", "L1 Slot 1 Knee=0"},
+                     hit);
+        const double squash = peakDb(held.left, a, b) - peakDb(r.left, a, b);
+        check(squash > 20.0, "Compressor: 20:1 at -30 dB takes " + std::to_string(squash) + " dB off the tail");
+
+        r = rendered({"Output=0", "L1 Slot 1 Type=Gate", "L1 Slot 1 Mode=Hit", "L1 Slot 1 Attack=0",
+                      "L1 Slot 1 Hold=20", "L1 Slot 1 Release=10", "L1 Slot 1 Range=-inf"},
+                     hit);
+        const double gated = peakDb(r.left, lead + static_cast<size_t>(0.08 * rate), lead + static_cast<size_t>(0.2 * rate));
+        check(gated < -80.0 && peakDb(r.left, lead, lead + 500) > -10.0,
+              "Gate in Hit mode cuts the body after hold and release (" + std::to_string(gated) + " dB at 80 ms)");
+
+        const Render punch = rendered({"Output=0", "L1 Slot 1 Type=Transient", "L1 Slot 1 Attack=100"}, hit);
+        const auto contrast = [&](const Render& x) {
+            return peakDb(x.left, lead, lead + 240) - peakDb(x.left, lead + 4800, lead + 7200);
+        };
+        check(contrast(punch) > contrast(unity) + 3.0,
+              "Transient at +100 % attack lifts the onset against the body by " +
+                  std::to_string(contrast(punch) - contrast(unity)) + " dB");
+
+        r = rendered({"Output=0", "L1 Source=Noise", "L1 Noise Filter=Off", "L1 Slot 1 Type=Filter",
+                      "L1 Slot 1 Cutoff=100"},
+                     hit);
+        const Render open = rendered({"Output=0", "L1 Source=Noise", "L1 Noise Filter=Off"}, hit);
+        const double cut = toneDb(open.left, rate, 5000.0, lead, lead + 4096) - toneDb(r.left, rate, 5000.0, lead, lead + 4096);
+        check(cut > 60.0, "Filter LP 24 at 100 Hz takes " + std::to_string(cut) + " dB off noise at 5 kHz");
+
+        r = rendered({"Output=0", "Quality=1x", "L1 Slot 1 Type=Bitcrush", "L1 Slot 1 Bits=3"}, hit);
+        bool steps = true;
+        for (float x : r.left)
+            steps &= std::fabs(x * 4.0f - std::round(x * 4.0f)) < 1e-5f;
+        check(steps && !silent(r.left), "Bitcrush at 3 bits leaves only multiples of 1/4");
+
+        static const char* kModels[] = {"Soft Clip", "Overdrive", "Tube", "Valve Stack", "Fuzz",
+                                        "Rectifier", "Crush",     "Germanium", "Crunch",  "Lead"};
+        const double cleanHarm = std::max(toneDb(held.left, rate, 96.0, a, b), toneDb(held.left, rate, 144.0, a, b)) - clean;
+        int flat = 0;
+        for (const char* model : kModels)
+        {
+            r = rendered({"Output=0", "L1 Body Hold=1 s", "L1 Slot 1 Type=Distortion",
+                          std::string("L1 Slot 1 Model=") + model, "L1 Slot 1 Drive=100"},
+                         hit);
+            const double harm =
+                std::max(toneDb(r.left, rate, 96.0, a, b), toneDb(r.left, rate, 144.0, a, b)) - toneDb(r.left, rate, 48.0, a, b);
+            if (r.sawNonFinite || harm < cleanHarm + 20.0)
+            {
+                ++flat;
+                std::printf("    %s: harmonics %.1f dB under the fundamental\n", model, -harm);
+            }
+        }
+        check(flat == 0, "every distortion model puts harmonics on the body's tail");
+
+        r = rendered({"Output=0", "L1 Body Hold=1 s", "L1 Slot 1 Type=Wavefolder", "L1 Slot 1 Drive=24",
+                      "L1 Slot 1 Shape=100"},
+                     hit);
+        check(!r.sawNonFinite && r.peak < 1.2f && toneDb(r.left, rate, 144.0, a, b) - toneDb(r.left, rate, 48.0, a, b) > -20.0,
+              "Wavefolder folds rather than clips: bounded, with strong odd harmonics");
+    }
+
+    // --- a hit reaches the slots on its own sample, delay included
+    {
+        // The body starts at its peak; the gate's 5 ms attack has to start on
+        // the same sample, so the first sample is a 240th of it.
+        const std::vector<std::string> gate = {"Output=0", "L1 Body Phase=90", "L1 Slot 1 Type=Gate",
+                                               "L1 Slot 1 Mode=Hit", "L1 Slot 1 Attack=5", "L1 Slot 1 Range=-inf",
+                                               "L1 Delay=10"};
+        const Render r = rendered(gate, hit);
+        long first = -1;
+        for (size_t i = 0; i < r.left.size() && first < 0; ++i)
+            if (r.left[i] != 0.0f)
+                first = static_cast<long>(i);
+        const float start = first >= 0 ? std::fabs(r.left[static_cast<size_t>(first)]) : 0.0f;
+        check(first == static_cast<long>(lead + static_cast<uint32_t>(0.010 * rate)) && start < 0.01f,
+              "a Hit gate opens on the delayed hit's sample (" + std::to_string(first) + ", first sample " +
+                  std::to_string(start) + ")");
+    }
+
+    // --- a chain rings past its voices, then the lane goes to sleep
+    {
+        const std::vector<std::string> ring = {"L1 Source=Click", "L1 Click Type=Impulse", "L1 Click Filter=Off",
+                                               "L1 Slot 1 Type=Filter", "L1 Slot 1 Mode=LP 12",
+                                               "L1 Slot 1 Cutoff=60", "L1 Slot 1 Reso=100"};
+        const Render r = rendered(ring, hit, 3.0);
+        const Render odd = rendered(ring, hit, 3.0, 37);
+        check(peakDb(r.left, lead + 4800, lead + 9600) > -60.0 && r.sleptAtEnd && odd.left == r.left,
+              "a resonant filter rings on after a click, ends, sleeps, and ends on the same sample at any block size");
+    }
+
+    // --- the master: its chain, mono below and the output clip
+    {
+        const Render ceiling = rendered({"Output=0", "L1 Output=Main+Aux", "Master Slot 1 Type=Clipper",
+                                         "Master Slot 1 Drive=0", "Master Slot 1 Knee=0", "Master Slot 1 Ceiling=-12",
+                                         "Quality=1x"},
+                                        hit);
+        check(ceiling.peak <= 0.2512f && ceiling.auxL[0] == unity.left,
+              "a master clipper at -12 dB holds the main output there and leaves the lane outputs alone");
+
+        // Held, so the crossover's group delay does not move a decaying tail.
+        const Render hardLeft = rendered({"Output=0", "L1 Body Hold=1 s", "L1 Pan=L100"}, hit);
+        const Render mono = rendered({"Output=0", "L1 Body Hold=1 s", "L1 Pan=L100", "Mono Below=200"}, hit);
+        const size_t a = static_cast<size_t>(0.30 * rate), b = static_cast<size_t>(0.45 * rate);
+        const double before = toneDb(hardLeft.left, rate, 48.0, a, b);
+        check(silent(hardLeft.right) && std::fabs(toneDb(mono.left, rate, 48.0, a, b) - (before - 6.02)) < 0.3 &&
+                  std::fabs(toneDb(mono.right, rate, 48.0, a, b) - (before - 6.02)) < 0.3,
+              "Mono Below 200 Hz puts a hard-left 48 Hz body in the middle, 6 dB down on each side");
+
+        for (const char* clip : {"Hard", "Soft"})
+        {
+            const Render hot = rendered({"Output=0", "L1 Level=+12", "Quality=1x", std::string("Output Clip=") + clip}, hit);
+            check(hot.peak <= 1.0f && hot.peak > 0.9f, std::string("Output Clip ") + clip + " holds a +12 dB hit at full scale");
+        }
+    }
+
+    // --- everything at once: block size still changes nothing
+    {
+        const std::vector<std::string> all = {
+            "L2 On=On",                 "L3 On=On",                    "L4 On=On",
+            "L2 Delay=3",               "L3 Variation=40",             "L1 Slot 1 Type=Distortion",
+            "L1 Slot 1 Model=Valve Stack", "L1 Slot 2 Type=Compressor", "L1 Slot 2 Band=Low",
+            "L1 Slot 3 Type=Filter",    "L1 Slot 3 Env=4",             "L2 Slot 1 Type=Wavefolder",
+            "L2 Slot 1 Band=Mid+High",  "L3 Slot 1 Type=Gate",         "L3 Slot 1 Mode=Hit",
+            "L4 Slot 6 Type=Transient", "L4 Slot 6 Attack=80",         "Master Slot 1 Type=EQ",
+            "Master Slot 1 Low=6",      "Master Slot 2 Type=Bitcrush", "Master Slot 2 Bits=6",
+            "Master Slot 2 Mix=30",     "Mono Below=100",              "Output Clip=Soft",
+            "Quality=4x",               "L1 Output=Main+Aux"};
+        EventList many;
+        for (int h = 0; h < 6; ++h)
+            many.add(noteOn(lead + static_cast<uint32_t>(h * 0.071 * rate), static_cast<int16_t>(36 + h), 0.9));
+        const Render a = rendered(all, many, 2.0, 512);
+        const Render b = rendered(all, many, 2.0, 37);
+        check(!a.sawNonFinite && a.left == b.left && a.right == b.right && a.auxL[0] == b.auxL[0] && a.sleptAtEnd,
+              "slots in four lanes and the master: bit-identical with a block size of 37, asleep at the end");
+    }
+
     std::printf("\nselftest: %d failure(s)\n", failures);
     return failures == 0 ? 0 : 1;
 }
@@ -946,12 +1384,10 @@ int main(int argc, char** argv)
     else
     {
         const clap_plugin_t* p = createPlugin(m);
-        EventList setup;
-        if (!p || !resolveParams(p, specs, setup))
+        if (!p || !applyParams(p, specs))
             rc = 1;
         else
         {
-            flushParams(p, setup);
             EventList notes;
             const double step = 60.0 / bpm;
             for (int h = 0; h < hits; ++h)

@@ -124,11 +124,11 @@ void BodyVoice::start(const Hit& hit, double phase)
     driftTarget_ = drift_;
 }
 
-void BodyVoice::render(float* l, float* r, int n, double sampleRate, const BodyParams& p, const PitchTrack& track,
+int BodyVoice::render(float* l, float* r, int n, double sampleRate, const BodyParams& p, const PitchTrack& track,
                        const Curve& amp)
 {
     if (!active_)
-        return;
+        return 0;
     const double msPerSample = 1000.0 / sampleRate;
     const double invRate = 1.0 / sampleRate;
     const double fEnd = track.endFreq(hit_.semitones) * hit_.pitchRatio;
@@ -185,7 +185,7 @@ void BodyVoice::render(float* l, float* r, int n, double sampleRate, const BodyP
             if (x >= 1.0)
             {
                 active_ = false;
-                return;
+                return i;
             }
             env = amp.eval(x, p.decayCurve);
         }
@@ -241,8 +241,9 @@ void BodyVoice::render(float* l, float* r, int n, double sampleRate, const BodyP
                 partialPhase_[k] = frac(partialPhase_[k] + ratio[k] * dt);
         t_ += 1.0;
         if (!stepFade())
-            return;
+            return i + 1;
     }
+    return n;
 }
 
 // ------------------------------------------------------------------ ClickVoice
@@ -300,23 +301,24 @@ void ClickVoice::start(const Hit& hit, const ClickParams& p, double pitch, doubl
         buffer_[static_cast<size_t>(i)] *= scale;
 }
 
-void ClickVoice::render(float* l, float* r, int n)
+int ClickVoice::render(float* l, float* r, int n)
 {
     if (!active_)
-        return;
+        return 0;
     for (int i = 0; i < n; ++i)
     {
         if (pos_ >= length_)
         {
             active_ = false;
-            return;
+            return i;
         }
         const float y = static_cast<float>(buffer_[static_cast<size_t>(pos_++)] * fade_);
         l[i] += y;
         r[i] += y;
         if (!stepFade())
-            return;
+            return i + 1;
     }
+    return n;
 }
 
 // ------------------------------------------------------------------ NoiseVoice
@@ -365,10 +367,10 @@ void NoiseVoice::start(const Hit& hit)
     t_ = 0.0;
 }
 
-void NoiseVoice::render(float* l, float* r, int n, double sampleRate, const NoiseParams& p, double freqRatio)
+int NoiseVoice::render(float* l, float* r, int n, double sampleRate, const NoiseParams& p, double freqRatio)
 {
     if (!active_)
-        return;
+        return 0;
     const double msPerSample = 1000.0 / sampleRate;
     const double attack = std::max(p.attackMs, 0.0);
     const double holdEnd = attack + std::max(p.holdMs, 0.0);
@@ -397,7 +399,7 @@ void NoiseVoice::render(float* l, float* r, int n, double sampleRate, const Nois
         if (env < 0.0)
         {
             active_ = false;
-            return;
+            return i;
         }
         const double a = colA_.next(p.color, rngA_.bipolar(), crackle, rngA_);
         const double b = colB_.next(p.color, rngB_.bipolar(), crackle, rngB_);
@@ -419,8 +421,9 @@ void NoiseVoice::render(float* l, float* r, int n, double sampleRate, const Nois
         r[i] += static_cast<float>(right * g);
         t_ += 1.0;
         if (!stepFade())
-            return;
+            return i + 1;
     }
+    return n;
 }
 
 // -------------------------------------------------------------- ResonatorVoice
@@ -515,10 +518,10 @@ void ResonatorVoice::updateRotations()
     }
 }
 
-void ResonatorVoice::render(float* l, float* r, int n)
+int ResonatorVoice::render(float* l, float* r, int n)
 {
     if (!active_)
-        return;
+        return 0;
     const double g = norm_ * hit_.level;
     for (int i = 0; i < n; ++i)
     {
@@ -549,7 +552,7 @@ void ResonatorVoice::render(float* l, float* r, int n)
             if (e < 1e-12)
             {
                 active_ = false;
-                return;
+                return i;
             }
         }
 
@@ -567,8 +570,9 @@ void ResonatorVoice::render(float* l, float* r, int n)
         r[i] += out;
         ++t_;
         if (!stepFade())
-            return;
+            return i + 1;
     }
+    return n;
 }
 
 } // namespace substrike::dsp

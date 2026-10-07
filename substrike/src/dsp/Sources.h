@@ -186,8 +186,9 @@ class BodyVoice : public Voice
 {
 public:
     void start(const Hit& hit, double phase);
-    // Adds n samples into l and r (the body is mono).
-    void render(float* l, float* r, int n, double sampleRate, const BodyParams& p, const PitchTrack& track,
+    // Adds n samples into l and r (the body is mono). Every render returns how
+    // many of the n samples the voice was still sounding for.
+    int render(float* l, float* r, int n, double sampleRate, const BodyParams& p, const PitchTrack& track,
                 const Curve& amp);
 
 private:
@@ -211,7 +212,7 @@ public:
     void prepare(double sampleRate);
     // `pitch` and `cutoff` arrive resolved (transpose, pitch link, variation).
     void start(const Hit& hit, const ClickParams& p, double pitch, double cutoff, double sampleRate);
-    void render(float* l, float* r, int n);
+    int render(float* l, float* r, int n);
 
 private:
     std::vector<float> buffer_;
@@ -224,7 +225,7 @@ class NoiseVoice : public Voice
 public:
     void start(const Hit& hit);
     // `freqRatio` scales the filter cutoff (transpose).
-    void render(float* l, float* r, int n, double sampleRate, const NoiseParams& p, double freqRatio);
+    int render(float* l, float* r, int n, double sampleRate, const NoiseParams& p, double freqRatio);
 
 private:
     struct Colour
@@ -248,7 +249,7 @@ public:
 
     // `tune` arrives resolved (key track or pitch link, transpose, variation).
     void start(const Hit& hit, const ResonatorParams& p, double tune, double sampleRate);
-    void render(float* l, float* r, int n);
+    int render(float* l, float* r, int n);
 
 private:
     void updateRotations();

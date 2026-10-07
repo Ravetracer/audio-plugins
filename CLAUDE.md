@@ -56,7 +56,7 @@ audio-plugins/
 | 1 | **SäureKiste** | `saeure-kiste/` | 0.15.2 | Linux, Windows | CLAP, VST3 | a Roland TB-303 model, from the 1982 service notes, plus Robin Whittle's Devil Fish modification |
 | 2 | **RumpelKiste** | `rumpel-kiste/` | 0.2.1 | Linux, Windows | CLAP, VST3 | a Roland TR-909 model, from the 1984 service notes, with SäureKiste's sequencer and drive stage |
 | 3 | **Aurum** | `aurum/` | 0.3.0 | Linux, Windows | CLAP, VST3 | a clean-room algorithmic reverb (FDN, allpass ring, plate) with a per-frequency decay contour; own DSP and GUI, see *Aurum* below |
-| 4 | **Substrike** | `substrike/` | 0.2.0 | Linux, Windows | CLAP, VST3 | a layered kick drum designer for every style; standalone like Aurum, see *Substrike* below |
+| 4 | **Substrike** | `substrike/` | 0.3.0 | Linux, Windows | CLAP, VST3 | a layered kick drum designer for every style; standalone like Aurum, see *Substrike* below |
 
 Naming follows the plugin, not a pattern: the CMake project, the installed
 artifact and the display name are CamelCase (`SaeureKiste`), the folder is
@@ -404,11 +404,12 @@ across plugin folders.
 `docs/PLAN.md` is the source of truth: the design (8 lanes x 6 effect slots
 plus a master chain, per-slot band select, Bus lanes and a transient guard for
 rumble, per-lane aux outputs, hit export with drag-and-drop, a violet theme)
-and the eight phases. Phases 1 and 2 are done as of 0.2.0: the CLAP and VST3
+and the eight phases. Phases 1-3 are done as of 0.3.0: the CLAP and VST3
 build, eight lanes with the Body, Click, Noise and Resonator sources, per-lane
 delay, polarity, note filter, transpose, Variation and pitch link, the eight
-per-lane aux outputs, plain-text state, the offline renderer and self-test.
-No effect chain and no editor yet.
+per-lane aux outputs, six effect slots per lane and on the master (nine
+types, band select, oversampling), mono below and an output clip, plain-text
+state, the offline renderer and self-test. No editor yet.
 
 What to know before working there:
 
@@ -418,6 +419,10 @@ What to know before working there:
   renumber; add inside the block.
 - **State stores plain units** (Hz, ms, dB, enum labels), not knob positions,
   so ranges can be widened without breaking saved projects.
+- **A slot's A-F are generic parameters that take their meaning from the
+  slot's type** (shape table in `src/plugin/Params.cpp`): name, range, text,
+  default and state key all go through `ParamTable::effective()`. Anything
+  that converts a value must use it, not `def()`.
 - **Breakpoint curves are state, macros are parameters.** Every curve is
   scaled by automatable macro parameters (start, end, time, curvature), so a
   drawn curve stays automatable.

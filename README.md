@@ -16,7 +16,7 @@ Vibe coded with Claude.
 | **[SäureKiste](saeure-kiste/)** | 0.15.2 | Linux, Windows | CLAP, VST3 | a monophonic acid bass synthesiser modelled on the Roland TB-303's main board, from the February 1982 service notes, with Robin Whittle's Devil Fish modification |
 | **[RumpelKiste](rumpel-kiste/)** | 0.2.1 | Linux, Windows | CLAP, VST3 | a rhythm composer modelled on the Roland TR-909's voicing board, from the June 1984 service notes, with a 64-pattern step sequencer and a drive bus |
 | **[Aurum](aurum/)** | 0.3.0 | Linux, Windows | CLAP, VST3 | an algorithmic reverb with three engines (feedback delay network, allpass ring, plate), a per-frequency decay contour and a tone EQ; built on its own DSP and window rather than `shared/` |
-| **[Substrike](substrike/)** | 0.2.0 | Linux, Windows | CLAP, VST3 | a layered kick drum designer for every style, from ambient to hardcore; early stage and not yet in the release archives: eight synthesised layers (body, click, noise, resonator) with per-lane outputs so far, effect chains and an editor to follow; built on its own code rather than `shared/` |
+| **[Substrike](substrike/)** | 0.3.0 | Linux, Windows | CLAP, VST3 | a layered kick drum designer for every style, from ambient to hardcore; early stage and not yet in the release archives: eight synthesised layers (body, click, noise, resonator) with per-lane outputs and effect chains so far, an editor to follow; built on its own code rather than `shared/` |
 
 ## Build
 

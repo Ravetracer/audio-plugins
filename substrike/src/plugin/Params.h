@@ -3,6 +3,7 @@
 #include <cstdint>
 #include <optional>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 #include "dsp/Engine.h"
@@ -24,6 +25,12 @@ enum : uint32_t
 {
     Output = 1,
     RootNote = 2,
+    Quality = 3,
+
+    MasterXoverLow = 9300,
+    MasterXoverHigh = 9301,
+    MonoBelow = 9302,
+    OutputClip = 9303,
 };
 
 enum LaneField : uint32_t
@@ -40,6 +47,8 @@ enum LaneField : uint32_t
     LPitchLink = 9,
     LTranspose = 10,
     LVariation = 11,
+    LXoverLow = 12,
+    LXoverHigh = 13,
 
     BodyPitchStart = 100,
     BodyPitchEnd = 101,
@@ -98,6 +107,23 @@ enum LaneField : uint32_t
 
 constexpr uint32_t kLaneBlock = 1000;
 constexpr uint32_t lane(int l, LaneField f) { return kLaneBlock * static_cast<uint32_t>(l + 1) + f; }
+
+// An effect slot: 50 ids each, from lane offset 600 and from 9000 for the
+// master. A-F are generic; the slot's type decides what they mean.
+enum SlotField : uint32_t
+{
+    SType = 0,
+    SBand = 1,
+    SMix = 2,
+    SBypass = 3,
+    SValueA = 4, // .. SValueA + 5 for F
+};
+constexpr uint32_t kSlotBlock = 50;
+constexpr uint32_t slot(int l, int s, uint32_t f)
+{
+    return lane(l, LEnabled) + 600 + kSlotBlock * static_cast<uint32_t>(s) + f;
+}
+constexpr uint32_t masterSlot(int s, uint32_t f) { return 9000 + kSlotBlock * static_cast<uint32_t>(s) + f; }
 } // namespace pid
 
 enum class Kind : uint8_t
@@ -123,11 +149,19 @@ struct ParamDef
     Kind kind;
     Scale scale = Scale::Linear;
     double lo = 0.0, hi = 1.0; // plain range
-    std::string unit;          // "Hz", "ms", "dB", "%", "deg", "pan", "st", "oct", "" -- drives text
+    std::string unit;          // "Hz", "ms", "dB", "%", "deg", "pan", "st", "oct", ":1", "bit", ""
     double def = 0.0;          // default, stored (normalised) value
     std::vector<std::string> labels;
-    // A decibel parameter at its lowest position means silence.
-    bool dbFloorIsOff = false;
+    // The lowest position means off: silence for a level, "Off" otherwise.
+    bool floorIsOff = false;
+    // A continuous value that is shown and set as one of these (a slot's
+    // model or mode, which must stay continuous because the slot's type
+    // decides whether it is a choice at all).
+    std::vector<std::string> choices;
+    bool automatable = true;
+    // A slot's A-F: the table index of the slot's Type, and which letter.
+    int typeParam = -1;
+    int letter = -1;
 };
 
 class ParamTable
@@ -143,21 +177,44 @@ public:
     double minValue(int index) const;
     double maxValue(int index) const;
 
-    // Stored value <-> plain value in the parameter's unit.
-    double toPlain(int index, double value) const;
-    double fromPlain(int index, double plain) const;
+    // What a parameter is right now. For everything but a slot's A-F that is
+    // def(index); for those it is the definition the slot's type gives the
+    // letter -- its name, key, range, unit and default. `typeValue` is the
+    // stored value of the slot's Type, `values` the full set to look it up in.
+    const ParamDef& effective(int index, double typeValue) const;
+    const ParamDef& effective(int index, const double* values) const;
 
-    std::string toText(int index, double value) const;
-    std::optional<double> fromText(int index, const std::string& text) const;
+    // Stored value <-> plain value in the parameter's unit, and text.
+    static double toPlain(const ParamDef& d, double value);
+    static double fromPlain(const ParamDef& d, double plain);
+    static std::string toText(const ParamDef& d, double value);
+    static std::optional<double> fromText(const ParamDef& d, const std::string& text);
+    // The same through def(index), for parameters that are not slot letters.
+    double toPlain(int index, double value) const { return toPlain(def(index), value); }
+    double fromPlain(int index, double plain) const { return fromPlain(def(index), plain); }
+    std::string toText(int index, double value) const { return toText(def(index), value); }
+    std::optional<double> fromText(int index, const std::string& text) const { return fromText(def(index), text); }
+
+    // A slot letter's state key, resolved against the current types: the
+    // letter it names, or -1.
+    int indexOfSlotKey(const std::string& key, const double* values) const;
+    // Whether this is a slot's Type, which the letters hang off.
+    bool isSlotType(int index) const { return isType_[static_cast<size_t>(index)]; }
 
 private:
     ParamTable();
     std::vector<ParamDef> defs_;
     std::vector<int> byId_; // id -> index (or -1)
+    std::unordered_map<std::string, int> byKey_;
+    // Per slot letter, its definition under every type.
+    std::vector<int> view_; // index -> first entry in views_, or -1
+    std::vector<bool> isType_;
+    std::vector<ParamDef> views_;
+    std::unordered_map<std::string, std::vector<int>> byViewKey_; // key -> indices into views_
 };
 
 std::string noteName(int midi);
-bool isOff(const ParamDef& d, double plainDb);
+bool isOff(const ParamDef& d, double plain);
 
 // Convert a full set of stored values (indexed by ParamTable index) into
 // engine parameters.

@@ -31,6 +31,44 @@ public:
         a3_ = g * a2_;
     }
 
+    // All three outputs at once: low, band (peak gain Q) and high.
+    void tick(double x, double& low, double& band, double& high)
+    {
+        const double v3 = x - ic2_;
+        const double v1 = a1_ * ic1_ + a2_ * v3;
+        const double v2 = ic2_ + a2_ * ic1_ + a3_ * v3;
+        ic1_ = 2.0 * v1 - ic1_;
+        ic2_ = 2.0 * v2 - ic2_;
+        low = v2;
+        band = v1;
+        high = x - k_ * v1 - v2;
+    }
+
+    double lowPass(double x)
+    {
+        double l, b, h;
+        tick(x, l, b, h);
+        return l;
+    }
+
+    double highPass(double x)
+    {
+        double l, b, h;
+        tick(x, l, b, h);
+        return h;
+    }
+
+    // Unity magnitude, phase only: the low and high outputs minus the band.
+    double allPass(double x)
+    {
+        double l, b, h;
+        tick(x, l, b, h);
+        return x - 2.0 * k_ * b;
+    }
+
+    // 1/Q, which the shaped outputs (notch, bell) are built with.
+    double k() const { return k_; }
+
     double process(double x, FilterMode mode)
     {
         const double v3 = x - ic2_;

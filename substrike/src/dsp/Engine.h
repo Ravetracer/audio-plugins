@@ -3,7 +3,10 @@
 #include <array>
 #include <cstdint>
 
+#include "dsp/Crossover.h"
 #include "dsp/Curve.h"
+#include "dsp/Effects.h"
+#include "dsp/Oversampler.h"
 #include "dsp/Sources.h"
 
 namespace substrike::dsp {
@@ -43,6 +46,16 @@ struct LaneParams
     ClickParams click;
     NoiseParams noise;
     ResonatorParams resonator;
+    // The effect chain, and the two crossovers its band select splits at.
+    std::array<SlotParams, kNumSlots> slots{};
+    double xoverLow = 150.0, xoverHigh = 2500.0;
+};
+
+enum class OutputClip : int
+{
+    Off = 0,
+    Soft,
+    Hard,
 };
 
 struct EngineParams
@@ -50,6 +63,11 @@ struct EngineParams
     std::array<LaneParams, kNumLanes> lanes{};
     double outGain = 1.0;
     int rootNote = 36;
+    int oversampling = 2; // 1, 2 or 4, for the drive group and the output clip
+    std::array<SlotParams, kNumSlots> master{};
+    double masterXoverLow = 150.0, masterXoverHigh = 2500.0;
+    double monoBelow = 0.0; // Hz; 0 leaves the low end as it is
+    OutputClip clip = OutputClip::Off;
 };
 
 // A stereo pair of output buffers.
@@ -81,8 +99,12 @@ public:
         const LaneParams* params;
         PitchTrack track;
     };
-    // Adds n (<= kChunk) samples into the buses its Output names.
-    void process(const Bus& main, const Bus& aux, int n, const Context& c);
+    // Adds n (<= kChunk) samples into the buses its Output names. Returns the
+    // offset from which the lane is silent until the next chunk at least: n
+    // while anything still sounds or rings in its chain.
+    int process(const Bus& main, const Bus& aux, int n, const Context& c);
+    // Prepares the chain for a new oversampling factor (and resets it).
+    void prepareChain(double sampleRate, int oversampling);
 
     Curve& pitchCurve() { return pitchCurve_; }
     Curve& ampCurve() { return ampCurve_; }
@@ -98,6 +120,7 @@ private:
 
     void fire(const Pending& p, const Context& c);
     void renderVoices(int from, int to, const Context& c);
+    bool voicesActive() const;
 
     static constexpr int kMaxPending = 8;
     std::array<Pending, kMaxPending> pending_{};
@@ -117,6 +140,18 @@ private:
     double gainL_ = 0.0, gainR_ = 0.0;
     bool primed_ = false;
     uint64_t hits_ = 0;
+
+    std::array<Slot, kNumSlots> slots_{};
+    // Offsets in this chunk at which hits fired, for the slots.
+    std::array<int, kMaxPending> fired_{};
+    int firedCount_ = 0;
+    // The first sample of this chunk after which no voice sounds.
+    int soundEnd_ = 0;
+    // Voices are done but the chain still rings; quiet_ counts the samples
+    // it has been below the silence threshold since.
+    bool tail_ = false;
+    int quiet_ = 0;
+    int quietLimit_ = 2400;
 };
 
 class Engine
@@ -134,12 +169,29 @@ public:
     static constexpr int kNumBuses = 1 + kNumLanes;
 
 private:
+    // The master chain, mono below and the output clip, in place on the main
+    // bus. `lanesEnd` is where the lanes stopped sounding in this chunk.
+    void master(const Bus& main, int n, int lanesEnd, const EngineParams& p);
+    void resetMaster();
+
     double sampleRate_ = 48000.0;
     double smoothCoef_ = 0.0;
     int fadeSamples_ = 144;
     double outGain_ = 1.0;
     bool primed_ = false;
+    int oversampling_ = 2;
     std::array<Lane, kNumLanes> lanes_{};
+
+    std::array<Slot, kNumSlots> master_{};
+    bool masterHit_ = false;
+    bool masterTail_ = false;
+    int masterQuiet_ = 0;
+    int quietLimit_ = 2400;
+    Crossover2 monoL_, monoR_;
+    double monoFreq_ = 0.0;
+    OutputClip clip_ = OutputClip::Off;
+    Oversampler clipL_, clipR_;
+    std::array<float, Lane::kChunk * Oversampler::kMaxFactor> clipBufL_{}, clipBufR_{};
 };
 
 } // namespace substrike::dsp

@@ -203,6 +203,41 @@ Decided while building phase 2, and worth keeping:
   of plain noise.
 - The aux outputs carry the lane before the master level.
 
+Phase 3 is done (0.3.0): the slot model with band select and oversampling,
+nine effect types, the master chain, mono below and the output clip.
+
+Decided while building phase 3:
+
+- Slot ids: lane offset 600 + 50 per slot, master 9000 + 50 per slot. Within
+  a slot: 0 Type, 1 Band, 2 Mix, 3 Bypass, 4-9 A-F, 10-49 spare. Lane
+  crossovers at lane offsets 12 and 13; Quality is global id 3; the master's
+  crossovers, Mono Below and Output Clip are 9300-9303.
+- A-F are generic CLAP parameters whose display name, range, unit, text and
+  default come from the slot's type (the shape table in Params.cpp); a type
+  change resets them to its defaults, emits the new values as output events
+  and asks the host to rescan the names (CLAP_PARAM_RESCAN_INFO). In the state
+  they are written under the type's key and unit (`l1.slot1.cutoff=345`), so
+  a type's ranges can change later without breaking a saved song. A model or
+  mode letter stays a continuous parameter shown as a label, because whether
+  it is a choice depends on the type.
+- Oversampling is a polyphase IIR halfband (hiir's design, coefficients
+  computed offline): 99 dB from 0.58 of the base rate in the first stage,
+  90 dB in the second; no latency. It runs around a slot's whole effect,
+  for the drive group only.
+- The three-way split is LR4, with the low band through the upper
+  crossover's allpass, so the sum is flat (checked to 1e-6 dB).
+- SaeureKiste's drive stage is ported unchanged except that it no longer
+  oversamples itself; its one-pole filters keep double state, because a
+  float state stalls short of a constant input at oversampled rates and
+  leaves an offset that never decays.
+- A lane whose chain rings on keeps running until its output has been under
+  -120 dB for 50 ms, counted per sample from where the voices stopped, so
+  where it stops does not depend on the block size. The master does the
+  same with its own chain.
+- The output clip comes before the output level, as the plan said; the
+  Output parameter can therefore still push the main output past full
+  scale.
+
 ## Phases
 
 1. **Scaffold and first kick.**
@@ -213,12 +248,12 @@ Decided while building phase 2, and worth keeping:
 2. **Sources and lanes.**
    - Body completed; Click, Noise and Resonator sources.
    - 8 lanes with alignment, pitch link and per-lane note.
-   - Per-lane aux outputs.
+   - Per-lane aux outputs. Done in 0.2.0.
 3. **Effect framework and the first effects.**
    - Slot model, band split, oversampling.
    - Distortion (port), Clipper, Wavefolder, Bitcrush, Filter, EQ,
      Compressor, Transient shaper, Gate.
-   - The master chain and mono below.
+   - The master chain and mono below. Done in 0.3.0.
 4. **GUI.**
    - The window backends and widget base copied from Aurum, with a new
      theme.

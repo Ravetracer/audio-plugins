@@ -48,9 +48,14 @@ private:
     bool stateSave(const clap_ostream_t* stream);
     bool stateLoad(const clap_istream_t* stream);
 
-    void handleEvent(const clap_event_header_t* ev);
+    void handleEvent(const clap_event_header_t* ev, const clap_output_events_t* out);
     void syncFromShared();
     void setShared(int index, double value);
+    // A parameter as it is now: a slot letter as its slot's type defines it.
+    const ParamDef& current(int index) const;
+    // A slot's type changed: its letters go to the new type's defaults, and
+    // the host hears about it.
+    void typeChanged(int typeIndex, const clap_output_events_t* out);
 
     clap_plugin_t plugin_;
     const clap_host_t* host_;
@@ -64,6 +69,9 @@ private:
     std::atomic<bool> reloadFromShared_{true};
     // A new state arrived: the audio thread stops the sounding hit.
     std::atomic<bool> chokeRequested_{false};
+    // A slot's type changed, so its letters have new names: the main thread
+    // tells the host.
+    std::atomic<bool> rescanInfo_{false};
 
     dsp::Engine engine_;
     // Render target for ports the host did not connect, and for the right

@@ -9,7 +9,7 @@ its own effect chain in free order, layers feeding one another for rumble, a
 master chain, and modulation. The design and the phases are in
 [docs/PLAN.md](docs/PLAN.md).
 
-## Status: 0.2.0, phase 2
+## Status: 0.3.0, phase 3
 
 What exists:
 
@@ -43,8 +43,37 @@ What exists:
   over 3 ms, so retriggering does not click. Note choke is honoured.
 - Plain-text state: parameters are saved in their own units (Hz, ms, dB), so
   a state stays valid when a range is widened later. A 0.1.0 state loads.
-- No effect chain and no editor yet; the host shows its generic parameter
-  view.
+- **Effect chains**: six slots per lane and six on the master. See below.
+- **Master**: after its slots, Mono Below (an LR4 split under which the
+  output is mono), an Output Clip (Off, Soft, Hard) and the output level.
+- No editor yet; the host shows its generic parameter view.
+
+## Effect slots
+
+Every slot has a Type, a Band, Mix, Bypass and six controls A-F, whose
+meaning, name, range and default come from the type. Picking a type resets
+A-F to its defaults, and the host is told their new names. Type is not
+automatable; everything else is, and values glide over 5 ms.
+
+| Type | A-F |
+|---|---|
+| Distortion | Model (the ten drive models from SaeureKiste), Drive, Bias, Tone, Output |
+| Clipper | Drive, Knee (hard to soft), Ceiling |
+| Wavefolder | Drive, Bias, Shape (sine to triangle fold), Output |
+| Bitcrush | Bits (1-16), Rate (sample and hold; off at the top), Output |
+| Filter | Mode (LP 12/24, HP 12/24, Band Pass, Notch, Peak), Cutoff, Reso, Env (octaves from each hit), Env Decay, Gain |
+| EQ | Low shelf, Mid, Mid Freq, Mid Q, High shelf, Tilt |
+| Compressor | Threshold, Ratio, Attack, Release, Knee, Makeup |
+| Transient | Attack, Sustain, Speed, Output |
+| Gate | Mode (Gate opens on level, Hit runs from every hit), Threshold, Attack, Hold, Release, Range |
+
+**Band** processes Full, Low, Mid, High, Low+Mid or Mid+High of the lane,
+split at the lane's Crossover Low and High (LR4); the rest passes by, and the
+sum is flat. **Quality** (1x, 2x, 4x) oversamples Distortion, Clipper,
+Wavefolder, Bitcrush and the Output Clip. A chain that rings on after its hit
+keeps the lane running until it has been quiet for 50 ms, then sleeps. The
+state stores each slot's controls under their names and units, e.g.
+`l1.slot1.drive=73`.
 
 ## Build
 
@@ -100,7 +129,14 @@ bit-identical output across block sizes, MIDI and CLAP note dialects,
 click-free retriggering, key tracking and other sample rates, and for the
 lanes: every source variant finite and asleep after its tail, the note
 filter, the trigger delay to the sample, polarity, output routing, pitch link
-and transpose, resonator tuning, and Variation on and off.
+and transpose, resonator tuning, and Variation on and off. For the slots:
+names, defaults and text of every type's controls, their state keys, every
+type at its defaults and extremes on a full and a split band, mix and bypass
+bit-transparent, a flat band split, band isolation, aliasing at each
+quality, what each effect does (EQ gain, compression, gating, transient
+lift, filter slope, quantisation, distortion harmonics, folding), hits
+reaching a slot on their sample, chain tails, the master clip, mono below
+and the output clip.
 
 ## Reference material
 
