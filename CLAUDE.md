@@ -308,9 +308,11 @@ What differs from the other plugins:
   path that reaches the file system goes through `util/Path.h`: a narrow
   `std::string` is read in the ANSI code page on Windows.
 - **No `STATUS.md`/`TODO.md`.** `docs/PLAN.md` carries the phases and their
-  status. Phases 1-7 are done (DSP, CLAP+VST3, GUI, presets and browser,
-  undo/A-B, MIDI learn, IR import, `.ffp` import); phase 8, tuning the sound by
-  ear, is open. The VST3 has only been smoke-tested.
+  status. All eight phases are done (DSP, CLAP+VST3, GUI, presets and browser,
+  undo/A-B, MIDI learn, IR import, `.ffp` import, sound tuning). Phase 8 was
+  closed by ear test on 2026-10-08: the presets are close, the remaining
+  differences are accepted (the reference modulates, Aurum is not meant to be
+  a clone). The VST3 has only been smoke-tested.
 - **Windows since 0.2.0**, with the same setup as SäureKiste: the mingw
   toolchain file, `AURUM_WIN_CAIRO` (defaults to `../winbuild/cairo-mingw`),
   `CAIRO_WIN32_STATIC_BUILD`, the runtime linked in (`aurum_static_runtime()`
@@ -365,9 +367,9 @@ What differs from the other plugins:
   lengthens the plate as rate^0.905 above 100 % with a soft floor at 0.38 x
   the room's time below. Every Plate sweep matches within about 0.5 dB in
   total level, and Dark Grotto (`plate/dark_grotto_pro_r2.wav`, a real Plate
-  render) within 0.1 dB. Open: Classic at -100 % cuts the 16 kHz octave
-  almost completely, which the lowpass does not follow; Plate and Classic
-  lows still decay about 25 % short in long rooms; Additive and Cloud
+  render) within 0.1 dB. Known and accepted, not planned work: Classic at
+  -100 % cuts the 16 kHz octave almost completely, which the lowpass does
+  not follow; Plate and Classic lows still decay about 25 % short in long rooms; Additive and Cloud
   Chamber II (small rooms) are 2-4 dB too loud in every style, probably the
   room-size level, which has only been measured at 2.5 s and 10 s; and
   `presets/DarkGrotto_Plate.wav` and `presets/OlanchaFarewell_Plate.wav` were

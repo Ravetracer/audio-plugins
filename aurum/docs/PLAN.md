@@ -61,16 +61,19 @@ in ─ input level/pan ─┬─────────────────
 
 ## Status
 
-Phases 1-7 implemented and tested (see README "Tests"). Windows builds since
+Phases 1-8 implemented and tested (see README "Tests"). Windows builds since
 0.2.0: tests, offscreen render and the embedded window (mouse, keyboard, file
 dialog, IR import) verified under wine; no Windows DAW has loaded it yet, and
 drag-and-drop of an IR onto the window is untested there. Since 0.3.0 the
 sound is calibrated against reference renders (see CLAUDE.md, Aurum), and
 since 0.3.1 Brightness per style and Plate's Thickness, Distance and
 Decay Rate.
-Open: sound tuning
-by ear (phase 8), VST3 build not yet verified in a host, surround out of
-scope.
+Phase 8 closed by ear test (2026-10-08): the sound is approved and the
+factory presets are close to the reference. Remaining preset differences
+are accepted -- the reference applies modulation that Aurum deliberately
+does not replicate, and Aurum keeps its own character rather than aiming
+for a clone. No further preset fitting is planned.
+Open: VST3 build not yet verified in a host; surround support (see TODO).
 
 ## Phases
 
@@ -90,3 +93,21 @@ scope.
 8. Factory presets, sound tuning, polish.
 
 Phase 6 also gets an importer for external `.ffp` text presets (user-supplied files; never bundled in this repo).
+
+## TODO
+
+- **Surround.** Aurum is mono/stereo only. Hosts other than the one used
+  for development offer multichannel tracks, and a multichannel reverb is
+  useful for film, game and immersive mixes. To work out:
+  - Layouts: 5.1 and 7.1 first, 7.1.4 as a stretch; mono/stereo in to
+    surround out as well as surround in to surround out.
+  - CLAP: `audio-ports-config` (or `configurable-audio-ports`) with
+    `surround` channel maps; VST3: speaker arrangements through
+    clap-wrapper, which must be verified to pass them through.
+  - Engine: decorrelated outputs per channel from the FDN (more output
+    taps, not copies), early reflections per speaker position, a centre
+    channel that does not collapse the image, LFE left dry or band-limited.
+  - Controls: Width generalised to a front/rear and height spread; the
+    `.ffp` importer's surround keys, ignored today, mapped where they fit.
+  - Testing: no multichannel host is available here; a multichannel path
+    in the offline test harness and `clap_gui_host` is needed first.
