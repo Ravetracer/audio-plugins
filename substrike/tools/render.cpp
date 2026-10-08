@@ -691,6 +691,64 @@ int runSelfTest(const Module& m)
         p->destroy(p);
     }
 
+    // --- curves are state: they change the sound, save, load, and a state
+    // without them goes back to the default curves
+    {
+        auto loadText = [](const clap_plugin_t* pl, const std::string& text) {
+            struct Reader
+            {
+                const std::string* s;
+                size_t pos;
+            } reader{&text, 0};
+            clap_istream_t is{&reader, [](const clap_istream_t* st, void* buf, uint64_t size) -> int64_t {
+                                  auto* r = static_cast<Reader*>(st->ctx);
+                                  const size_t n = std::min<size_t>(size, r->s->size() - r->pos);
+                                  std::memcpy(buf, r->s->data() + r->pos, n);
+                                  r->pos += n;
+                                  return static_cast<int64_t>(n);
+                              }};
+            const auto* st = static_cast<const clap_plugin_state_t*>(pl->get_extension(pl, CLAP_EXT_STATE));
+            return st->load(pl, &is);
+        };
+        auto saveText = [](const clap_plugin_t* pl) {
+            std::string blob;
+            clap_ostream_t os{&blob, [](const clap_ostream_t* st, const void* buf, uint64_t size) -> int64_t {
+                                  static_cast<std::string*>(st->ctx)->append(static_cast<const char*>(buf), size);
+                                  return static_cast<int64_t>(size);
+                              }};
+            const auto* st = static_cast<const clap_plugin_state_t*>(pl->get_extension(pl, CLAP_EXT_STATE));
+            st->save(pl, &os);
+            return blob;
+        };
+        EventList one;
+        one.add(noteOn(lead, 36, 1.0));
+        p = createPlugin(m);
+        const Render plain = render(p, rate, 512, static_cast<uint32_t>(rate), one);
+        // The pitch holds at Pitch Start for 80 % of the sweep, then drops.
+        const std::string curves = "[Substrike]\nformat=1\n[Parameters]\n[Curves]\n"
+                                   "l1.pitch=0,1,0;0.8,1,0;1,0,0\nl1.amp=0,1,0;0.5,0.6,0.3;1,0,0\n";
+        check(loadText(p, curves), "a state with curves loads");
+        const Render curved = render(p, rate, 512, static_cast<uint32_t>(rate), one);
+        const double held = measureFrequency(curved.left, rate, lead / rate + 0.04, lead / rate + 0.08);
+        const double fell = measureFrequency(plain.left, rate, lead / rate + 0.04, lead / rate + 0.08);
+        check(std::fabs(held / 350.0 - 1.0) < 0.03 && fell < 150.0,
+              "a drawn pitch curve plays: " + std::to_string(held) + " Hz held, " + std::to_string(fell) +
+                  " Hz without it");
+        const std::string saved = saveText(p);
+        check(saved.find("l1.pitch=0,1,0;0.8,1,0;1,0,0\n") != std::string::npos &&
+                  saved.find("l1.amp=0,1,0;0.5,0.6,0.3;1,0,0\n") != std::string::npos,
+              "curves are saved as written");
+        const clap_plugin_t* q = createPlugin(m);
+        check(loadText(q, saved), "the saved state loads");
+        const Render back = render(q, rate, 512, static_cast<uint32_t>(rate), one);
+        check(back.left == curved.left, "a saved curve plays back bit-identically");
+        q->destroy(q);
+        check(loadText(p, "[Substrike]\nformat=1\n"), "a state without curves loads");
+        const Render reset = render(p, rate, 512, static_cast<uint32_t>(rate), one);
+        check(reset.left == plain.left, "a state without curves restores the default ones");
+        p->destroy(p);
+    }
+
     // --- ports: main plus one aux per lane
     {
         p = createPlugin(m);

@@ -56,7 +56,7 @@ audio-plugins/
 | 1 | **SäureKiste** | `saeure-kiste/` | 0.15.2 | Linux, Windows | CLAP, VST3 | a Roland TB-303 model, from the 1982 service notes, plus Robin Whittle's Devil Fish modification |
 | 2 | **RumpelKiste** | `rumpel-kiste/` | 0.2.1 | Linux, Windows | CLAP, VST3 | a Roland TR-909 model, from the 1984 service notes, with SäureKiste's sequencer and drive stage |
 | 3 | **Aurum** | `aurum/` | 0.3.1 | Linux, Windows | CLAP, VST3 | a clean-room algorithmic reverb (FDN, allpass ring, plate) with a per-frequency decay contour; own DSP and GUI, see *Aurum* below |
-| 4 | **Substrike** | `substrike/` | 0.3.0 | Linux, Windows | CLAP, VST3 | a layered kick drum designer for every style; standalone like Aurum, see *Substrike* below |
+| 4 | **Substrike** | `substrike/` | 0.4.0 | Linux, Windows | CLAP, VST3 | a layered kick drum designer for every style; standalone like Aurum, see *Substrike* below |
 
 Naming follows the plugin, not a pattern: the CMake project, the installed
 artifact and the display name are CamelCase (`SaeureKiste`), the folder is
@@ -432,12 +432,17 @@ across plugin folders.
 `docs/PLAN.md` is the source of truth: the design (8 lanes x 6 effect slots
 plus a master chain, per-slot band select, Bus lanes and a transient guard for
 rumble, per-lane aux outputs, hit export with drag-and-drop, a violet theme)
-and the eight phases. Phases 1-3 are done as of 0.3.0: the CLAP and VST3
+and the eight phases. Phases 1-4 are done as of 0.4.0: the CLAP and VST3
 build, eight lanes with the Body, Click, Noise and Resonator sources, per-lane
 delay, polarity, note filter, transpose, Variation and pitch link, the eight
 per-lane aux outputs, six effect slots per lane and on the master (nine
 types, band select, oversampling), mono below and an output clip, plain-text
-state, the offline renderer and self-test. No editor yet.
+state, the offline renderer and self-test, and the editor: a lane rack on
+the left, the selected lane's strip, source, Body pitch/amp breakpoint curves
+and chain on the right (accent `#8F7CF7`), a hit preview rendered on a worker
+thread, Play, and the hit export by file and by drag and drop (an XDND
+source in `X11Window`, OLE `DoDragDrop` in `Win32Window`; Aurum's backends
+only accept drops). Undo/redo is not there yet.
 
 What to know before working there:
 
@@ -458,6 +463,13 @@ What to know before working there:
   loads the built `.clap` through the CLAP API; `install.sh` runs it. It also
   runs the Windows build under wine -- with a scratch `WINEPREFIX`, never the
   one in `winetest.env`.
+- **GUI tests** follow Aurum's rules: `substrike-gui-snapshot` offscreen, and
+  `substrike-gui-host` on a private Xvfb with scratch `XDG_CONFIG_HOME` and
+  `XDG_DATA_HOME` (the drag writes into `$XDG_DATA_HOME/Substrike/Exports`).
+  `SUBSTRIKE_TEST_DROP=1` gives it an XDND drop target that prints the URI it
+  receives. The editor rebuilds its panels from the timer when the selection,
+  a source or a slot type changes -- never from inside a widget's handler,
+  which would destroy the widget under it.
 - `substrike/!references/` holds third-party kick samples used to measure the
   ranges the engine must reach (the table in PLAN.md). Gitignored via
   `*/\!references/`; never commit, never ship, never name the packs.

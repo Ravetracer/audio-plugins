@@ -12,6 +12,16 @@
 namespace substrike::dsp {
 
 constexpr int kNumLanes = 8;
+// Every lane has a pitch and an amplitude curve; a curve index is
+// 2 * lane + which.
+constexpr int kCurvesPerLane = 2;
+constexpr int kNumCurves = kNumLanes * kCurvesPerLane;
+enum CurveKind : int
+{
+    PitchCurve = 0,
+    AmpCurve = 1,
+};
+constexpr int curveIndex(int lane, int which) { return lane * kCurvesPerLane + which; }
 
 enum class Source : int
 {
@@ -68,6 +78,9 @@ struct EngineParams
     double masterXoverLow = 150.0, masterXoverHigh = 2500.0;
     double monoBelow = 0.0; // Hz; 0 leaves the low end as it is
     OutputClip clip = OutputClip::Off;
+    // Every lane also goes to its aux bus, whatever its Output says: the
+    // editor's preview shows each lane on its own. Never set by the plugin.
+    bool tapLanes = false;
 };
 
 // A stereo pair of output buffers.
@@ -98,6 +111,7 @@ public:
         int index;
         const LaneParams* params;
         PitchTrack track;
+        bool tap;
     };
     // Adds n (<= kChunk) samples into the buses its Output names. Returns the
     // offset from which the lane is silent until the next chunk at least: n
@@ -165,6 +179,13 @@ public:
     // buses[1 + L] lane L's aux output. Every pointer must be valid.
     void process(const Bus* buses, int n, const EngineParams& p);
     bool idle() const;
+    // A lane's pitch or amplitude curve (curveIndex()). They are state, not
+    // parameters: the plugin sets them between process calls.
+    Curve& curve(int index)
+    {
+        Lane& l = lanes_[static_cast<size_t>(index / kCurvesPerLane)];
+        return index % kCurvesPerLane == PitchCurve ? l.pitchCurve() : l.ampCurve();
+    }
 
     static constexpr int kNumBuses = 1 + kNumLanes;
 

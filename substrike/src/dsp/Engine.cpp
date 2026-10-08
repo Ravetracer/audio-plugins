@@ -277,7 +277,7 @@ int Lane::process(const Bus& main, const Bus& aux, int n, const Context& c)
         quiet_ = 0;
 
     const bool toMain = p.output != Output::Aux;
-    const bool toAux = p.output != Output::Main;
+    const bool toAux = p.output != Output::Main || c.tap;
     for (int i = 0; i < n; ++i)
     {
         gainL_ += c.smoothCoef * (targetL - gainL_);
@@ -495,7 +495,7 @@ void Engine::process(const Bus* buses, int n, const EngineParams& p)
         t.keyTrack = sp.body.keyTrack;
         t.ratio = std::exp2(lp.transpose / 12.0) * (src != i ? std::exp2(sp.transpose / 12.0) : 1.0);
         t.curve = &lanes_[static_cast<size_t>(src)].pitchCurve();
-        ctx[static_cast<size_t>(i)] = {sampleRate_, smoothCoef_, fadeSamples_, i, &lp, t};
+        ctx[static_cast<size_t>(i)] = {sampleRate_, smoothCoef_, fadeSamples_, i, &lp, t, p.tapLanes};
     }
 
     for (int pos = 0; pos < n; pos += Lane::kChunk)

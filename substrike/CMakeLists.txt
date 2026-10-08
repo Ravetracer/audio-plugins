@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.21)
-project(Substrike VERSION 0.3.0 LANGUAGES C CXX)
+project(Substrike VERSION 0.4.0 LANGUAGES C CXX)
 
 # Substrike builds as a CLAP and, through the clap-wrapper, as a VST3, for
 # Linux and Windows (cross-compiled with mingw-w64). Like Aurum it does not use
@@ -7,8 +7,8 @@ project(Substrike VERSION 0.3.0 LANGUAGES C CXX)
 # and ../saeure-kiste/CMakeLists.txt is where the reasons for each link option
 # are written down.
 #
-# Phase 1 has no editor, so there is no Cairo or X11 dependency yet; hosts show
-# their generic parameter view.
+# The editor is drawn with Cairo, on X11 (Linux) or win32 (Windows); the window
+# backends and widgets come from ../aurum and belong to Substrike from then on.
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -51,6 +51,40 @@ endfunction()
 
 set(CLAP_SDK_ROOT "${SUBSTRIKE_SDK_DIR}/clap" CACHE PATH "" FORCE)
 add_subdirectory("${CLAP_SDK_ROOT}" clap-sdk EXCLUDE_FROM_ALL)
+find_package(Threads REQUIRED)
+
+# ------------------------------------------------------------------- gui deps
+#
+# pkg-config on this machine describes this machine, so a cross build must not
+# consult it. On Windows, SUBSTRIKE_WIN_CAIRO points at a Cairo cross-built with
+# its win32 backend (../setup-winbuild.sh puts one in ../winbuild/cairo-mingw).
+add_library(substrike-gui-deps INTERFACE)
+if (CMAKE_SYSTEM_NAME STREQUAL "Windows")
+    set(SUBSTRIKE_WIN_CAIRO "${CMAKE_CURRENT_SOURCE_DIR}/../winbuild/cairo-mingw"
+        CACHE PATH "Cairo cross-built for Windows (setup-winbuild.sh)")
+    if (NOT EXISTS "${SUBSTRIKE_WIN_CAIRO}/lib/libcairo.a")
+        # Like Aurum: a kick designer with no window is not something to ship
+        # by accident.
+        message(FATAL_ERROR "Substrike: no Windows Cairo at SUBSTRIKE_WIN_CAIRO=${SUBSTRIKE_WIN_CAIRO}; run ../setup-winbuild.sh")
+    endif()
+    # Both levels: the code says <cairo/cairo.h>.
+    target_include_directories(substrike-gui-deps INTERFACE
+        "${SUBSTRIKE_WIN_CAIRO}/include" "${SUBSTRIKE_WIN_CAIRO}/include/cairo")
+    target_link_directories(substrike-gui-deps INTERFACE "${SUBSTRIKE_WIN_CAIRO}/lib")
+    # Cairo's win32 backend draws and measures text through GDI; shell32 and
+    # ole32 are drag and drop, comdlg32 the file chooser.
+    target_link_libraries(substrike-gui-deps INTERFACE
+        cairo pixman-1 gdi32 msimg32 user32 shell32 comdlg32 ole32 uuid)
+    # Cairo's headers declare everything dllimport unless told the library is
+    # static, which is how it is built here.
+    target_compile_definitions(substrike-gui-deps INTERFACE CAIRO_WIN32_STATIC_BUILD)
+    set(SUBSTRIKE_WINDOW_SOURCE src/gui/Win32Window.cpp)
+else()
+    find_package(PkgConfig REQUIRED)
+    pkg_check_modules(SUBSTRIKE_GUI REQUIRED IMPORTED_TARGET cairo x11)
+    target_link_libraries(substrike-gui-deps INTERFACE PkgConfig::SUBSTRIKE_GUI)
+    set(SUBSTRIKE_WINDOW_SOURCE src/gui/X11Window.cpp)
+endif()
 
 add_library(substrike-impl STATIC
     src/dsp/Engine.cpp
@@ -58,13 +92,22 @@ add_library(substrike-impl STATIC
     src/dsp/Drive.cpp
     src/dsp/Effects.cpp
     src/plugin/Params.cpp
+    src/plugin/HitRender.cpp
     src/plugin/SubstrikePlugin.cpp
     src/state/StateIO.cpp
+    src/state/Settings.cpp
+    src/gui/Widget.cpp
+    src/gui/Widgets.cpp
+    src/gui/FileDialog.cpp
+    src/gui/HitPreview.cpp
+    src/gui/CurveEditor.cpp
+    src/gui/Editor.cpp
+    ${SUBSTRIKE_WINDOW_SOURCE}
 )
 target_include_directories(substrike-impl PUBLIC src)
 # Lets src/substrike.h static_assert that kPluginVersion matches project().
 target_compile_definitions(substrike-impl PUBLIC SUBSTRIKE_CMAKE_VERSION="${PROJECT_VERSION}")
-target_link_libraries(substrike-impl PUBLIC clap)
+target_link_libraries(substrike-impl PUBLIC clap substrike-gui-deps Threads::Threads)
 
 # ------------------------------------------------------------- the CLAP module
 add_library(Substrike MODULE src/entry.cpp)
@@ -130,4 +173,21 @@ if (SUBSTRIKE_BUILD_TOOLS)
     target_link_libraries(substrike-render PRIVATE clap ${CMAKE_DL_LIBS})
     substrike_static_runtime(substrike-render)
     add_dependencies(substrike-render Substrike)
+
+    # The editor rendered offscreen to a PNG, with frame timings.
+    add_executable(substrike-gui-snapshot tests/gui_snapshot.cpp)
+    target_link_libraries(substrike-gui-snapshot PRIVATE substrike-impl)
+    substrike_static_runtime(substrike-gui-snapshot)
+
+    # A minimal CLAP host that opens the plugin's window: X11 on Linux, a real
+    # win32 window on Windows (under wine, how the win32 backend gets
+    # exercised from here at all).
+    add_executable(substrike-gui-host tests/clap_gui_host.cpp)
+    target_link_libraries(substrike-gui-host PRIVATE clap Threads::Threads)
+    if (CMAKE_SYSTEM_NAME STREQUAL "Windows")
+        target_link_libraries(substrike-gui-host PRIVATE user32 gdi32)
+        substrike_static_runtime(substrike-gui-host)
+    else()
+        target_link_libraries(substrike-gui-host PRIVATE PkgConfig::SUBSTRIKE_GUI ${CMAKE_DL_LIBS})
+    endif()
 endif()

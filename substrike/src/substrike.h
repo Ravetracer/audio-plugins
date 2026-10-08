@@ -11,7 +11,7 @@ constexpr char kPluginName[] = "Substrike";
 // settings/preset folders.
 constexpr char kPluginDirName[] = "Substrike";
 constexpr char kPluginVendor[] = "Ravetracer";
-constexpr char kPluginVersion[] = "0.3.0";
+constexpr char kPluginVersion[] = "0.4.0";
 constexpr char kPluginUrl[] = "https://github.com/Ravetracer/audio-plugins";
 constexpr char kPluginDescription[] = "Layered kick drum designer";
 

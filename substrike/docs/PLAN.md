@@ -238,6 +238,53 @@ Decided while building phase 3:
   Output parameter can therefore still push the main output past full
   scale.
 
+Phase 4 is done (0.4.0): the editor, the Body curves as state, and the hit
+export with drag and drop. Tested offscreen, in a minimal host on Xvfb
+(including a drag onto an XDND target) and the win32 build under wine; no
+DAW has opened the window yet.
+
+Decided while building phase 4:
+
+- Layout: a rack of the eight lanes and the master on the left (on/off,
+  source, level, a waveform of each lane's share of the hit); the selected
+  one on the right as a strip (lane controls), the source panel and the
+  chain with the selected slot's controls under it. The master shows the
+  whole hit where a lane shows its source.
+- Theme: accent `#8F7CF7`, the chassis greys tinted towards it
+  (`src/gui/Graphics.h`); the amplitude curve and band labels in a teal
+  (`#6CC6C0`) so pitch and level never look alike.
+- The curves are the Body's pitch and amplitude curves, two per lane. The
+  state keeps them in a `[Curves]` section as `x,y,curvature` triples
+  (`l1.pitch=0,1,0;0.4,0.2,0.5;1,0,0`); a state without one gets the default
+  falling segment, which with the Bend macro is exactly what 0.3.0 played.
+  The main thread owns them and hands each change to the audio thread
+  through a queue; the host is told the state is dirty, since a curve is not
+  a parameter. The Noise source keeps its parametric envelope for now.
+- The editor shows a curve scaled by its macros and bent by the Bend macro,
+  so what is drawn is what plays: pitch in Hz between Pitch Start and End
+  over Sweep Time, level over Body Decay.
+- The preview renders a private engine on a worker thread, 40 ms after the
+  last change, up to 8 s or until the engine sleeps. It plays the root note
+  at full velocity, so a lane with a note filter for another note shows as
+  silent. `EngineParams::tapLanes` sends every lane to its aux bus for it,
+  whatever the lane's Output says; the plugin never sets it.
+- Play asks the audio thread for a hit and the host for a process call
+  (`request_process`), which wakes a sleeping plugin.
+- A GUI edit goes through a queue to the audio thread, which applies it the
+  way it applies a host event -- a Type change resets the letters there and
+  tells the host -- and sends it on to the host. `request_flush` is always
+  called, because a sleeping plugin is not processed until something comes.
+- A slot swap is one gesture over both slots' twenty parameters, types
+  first, then the rest sent even where unchanged, because the type change in
+  front of them has just reset the letters.
+- The export is a 24-bit stereo WAV at the host's rate, optionally
+  normalised to -0.3 dBFS. A drag writes it into the export folder first and
+  then starts the drag: X11 as an XDND source offering `text/uri-list` and
+  `text/plain`, win32 through OLE `DoDragDrop` with `CF_HDROP`.
+- The window backends, widgets, file dialog and settings come from Aurum.
+  Panels whose controls depend on the selection are rebuilt from the timer,
+  never from inside a widget's handler.
+
 ## Phases
 
 1. **Scaffold and first kick.**
@@ -259,7 +306,7 @@ Decided while building phase 3:
      theme.
    - Editors: the lane strip, the chain row with drag-reorder, the
      breakpoint curve editor, and slot panels.
-   - Hit export to WAV, with drag-and-drop into the DAW.
+   - Hit export to WAV, with drag-and-drop into the DAW. Done in 0.4.0.
 5. **Time effects and rumble.**
    - Reverb, the delays, Smear, Bus lanes and the transient guard.
 6. **Modulation.** LFOs, envelopes, macros and the matrix in the GUI.
@@ -282,5 +329,5 @@ Decided while building phase 3:
   can also be dragged straight from the window into the DAW's arranger:
   an XDND drag source on X11 and an OLE `DoDragDrop` with `CF_HDROP` on
   win32. This comes in phase 4 with the GUI.
-- **Theme: violet.** The accent is a cold violet, with the chassis greys
-  tinted towards it. Its exact value is set in phase 4.
+- **Theme: violet.** The accent is a cold violet, `#8F7CF7`, with the chassis
+  greys tinted towards it.

@@ -7,22 +7,50 @@
 
 #include <clap/clap.h>
 
+#include "Controller.h"
 #include "Params.h"
 #include "dsp/Engine.h"
+#include "util/SpscQueue.h"
 
 namespace substrike {
 
-class SubstrikePlugin
+namespace gui {
+class Editor;
+}
+
+class SubstrikePlugin final : public Controller
 {
 public:
     static const clap_plugin_descriptor_t* descriptor();
 
     explicit SubstrikePlugin(const clap_host_t* host);
-    ~SubstrikePlugin();
+    ~SubstrikePlugin() override;
 
     const clap_plugin_t* clapPlugin() const { return &plugin_; }
 
+    // Controller (main thread)
+    double paramValue(int index) const override;
+    void beginEdit(int index) override;
+    void performEdit(int index, double value) override;
+    void endEdit(int index) override;
+    const dsp::Curve& curve(int index) const override { return curves_[static_cast<size_t>(index)]; }
+    void setCurve(int index, const dsp::Curve& c) override;
+    double sampleRate() const override { return sampleRate_; }
+    void audition() override;
+
 private:
+    struct GuiEvent
+    {
+        enum Type : uint8_t { Begin, Value, End } type;
+        int index;
+        double value;
+    };
+    struct CurveEvent
+    {
+        int index;
+        dsp::Curve curve;
+    };
+
     // clap_plugin
     bool init();
     void destroy();
@@ -48,7 +76,29 @@ private:
     bool stateSave(const clap_ostream_t* stream);
     bool stateLoad(const clap_istream_t* stream);
 
+    // GUI
+    bool guiCreate();
+    void guiDestroy();
+    bool guiSetScale(double scale);
+    bool guiGetSize(uint32_t* w, uint32_t* h);
+    bool guiAdjustSize(uint32_t* w, uint32_t* h);
+    bool guiSetSize(uint32_t w, uint32_t h);
+    bool guiSetParent(const clap_window_t* window);
+    bool guiShow();
+    bool guiHide();
+    void onTimer(clap_id id);
+    void onFd(int fd, clap_posix_fd_flags_t flags);
+
     void handleEvent(const clap_event_header_t* ev, const clap_output_events_t* out);
+    // A new value for a parameter, from the host or the GUI (audio thread).
+    void applyValue(int index, double value, const clap_output_events_t* out);
+    void drainGuiEvents(const clap_output_events_t* out);
+    // Curves the main thread changed, into the engine (audio thread).
+    void drainCurves();
+    // Hands every curve whose copy in the engine may be stale to the audio
+    // thread (main thread).
+    void pushCurves();
+    void requestFlush();
     void syncFromShared();
     void setShared(int index, double value);
     // A parameter as it is now: a slot letter as its slot's type defines it.
@@ -60,6 +110,10 @@ private:
     clap_plugin_t plugin_;
     const clap_host_t* host_;
     const clap_host_params_t* hostParams_ = nullptr;
+    const clap_host_state_t* hostState_ = nullptr;
+    const clap_host_gui_t* hostGui_ = nullptr;
+    const clap_host_timer_support_t* hostTimer_ = nullptr;
+    const clap_host_posix_fd_support_t* hostFd_ = nullptr;
 
     const ParamTable& table_;
     // Values visible to all threads (stored units, see ParamTable).
@@ -69,9 +123,23 @@ private:
     std::atomic<bool> reloadFromShared_{true};
     // A new state arrived: the audio thread stops the sounding hit.
     std::atomic<bool> chokeRequested_{false};
+    // The editor asked for a hit.
+    std::atomic<bool> auditionRequested_{false};
     // A slot's type changed, so its letters have new names: the main thread
     // tells the host.
     std::atomic<bool> rescanInfo_{false};
+
+    // Edits from the GUI, in order, for the audio thread.
+    SpscQueue<GuiEvent> guiEvents_{4096};
+    // The curves as the main thread knows them; the engine holds its own
+    // copies, updated through curveEvents_.
+    std::array<dsp::Curve, dsp::kNumCurves> curves_{};
+    SpscQueue<CurveEvent> curveEvents_{64};
+    std::array<bool, dsp::kNumCurves> curvePending_{};
+
+    std::unique_ptr<gui::Editor> editor_;
+    clap_id timerId_ = CLAP_INVALID_ID;
+    int registeredFd_ = -1;
 
     dsp::Engine engine_;
     // Render target for ports the host did not connect, and for the right

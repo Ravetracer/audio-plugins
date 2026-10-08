@@ -63,6 +63,17 @@ public:
     int count() const { return count_; }
     const CurvePoint& point(int i) const { return points_[i]; }
 
+    bool operator==(const Curve& o) const
+    {
+        if (count_ != o.count_)
+            return false;
+        for (int i = 0; i < count_; ++i)
+            if (points_[i].x != o.points_[i].x || points_[i].y != o.points_[i].y || points_[i].k != o.points_[i].k)
+                return false;
+        return true;
+    }
+    bool operator!=(const Curve& o) const { return !(*this == o); }
+
     double eval(double x, double bend) const
     {
         if (x <= 0.0)

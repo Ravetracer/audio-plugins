@@ -8,6 +8,8 @@
 
 #include <xmmintrin.h>
 
+#include "gui/Editor.h"
+#include "state/Settings.h"
 #include "state/StateIO.h"
 #include "substrike.h"
 
@@ -32,6 +34,13 @@ const clap_plugin_descriptor_t kDescriptor = {
 };
 
 SubstrikePlugin* self(const clap_plugin_t* p) { return static_cast<SubstrikePlugin*>(p->plugin_data); }
+
+// The one window API each platform's editor is written against.
+#if defined(_WIN32)
+constexpr const char* kWindowApi = CLAP_WINDOW_API_WIN32;
+#else
+constexpr const char* kWindowApi = CLAP_WINDOW_API_X11;
+#endif
 
 // Denormals flush-to-zero for the duration of a process call.
 struct ScopedFtz
@@ -86,10 +95,50 @@ struct PluginGlue
     static bool stateSave(const clap_plugin_t* p, const clap_ostream_t* s) { return self(p)->stateSave(s); }
     static bool stateLoad(const clap_plugin_t* p, const clap_istream_t* s) { return self(p)->stateLoad(s); }
 
+    static bool guiApiSupported(const clap_plugin_t*, const char* api, bool floating)
+    {
+        return !floating && !std::strcmp(api, kWindowApi);
+    }
+    static bool guiPreferredApi(const clap_plugin_t*, const char** api, bool* floating)
+    {
+        *api = kWindowApi;
+        *floating = false;
+        return true;
+    }
+    static bool guiCreate(const clap_plugin_t* p, const char* api, bool floating)
+    {
+        return guiApiSupported(p, api, floating) && self(p)->guiCreate();
+    }
+    static void guiDestroy(const clap_plugin_t* p) { self(p)->guiDestroy(); }
+    static bool guiSetScale(const clap_plugin_t* p, double s) { return self(p)->guiSetScale(s); }
+    static bool guiGetSize(const clap_plugin_t* p, uint32_t* w, uint32_t* h) { return self(p)->guiGetSize(w, h); }
+    static bool guiCanResize(const clap_plugin_t*) { return true; }
+    static bool guiResizeHints(const clap_plugin_t*, clap_gui_resize_hints_t* hints)
+    {
+        hints->can_resize_horizontally = true;
+        hints->can_resize_vertically = true;
+        hints->preserve_aspect_ratio = false;
+        hints->aspect_ratio_width = 0;
+        hints->aspect_ratio_height = 0;
+        return true;
+    }
+    static bool guiAdjustSize(const clap_plugin_t* p, uint32_t* w, uint32_t* h) { return self(p)->guiAdjustSize(w, h); }
+    static bool guiSetSize(const clap_plugin_t* p, uint32_t w, uint32_t h) { return self(p)->guiSetSize(w, h); }
+    static bool guiSetParent(const clap_plugin_t* p, const clap_window_t* w) { return self(p)->guiSetParent(w); }
+    static bool guiSetTransient(const clap_plugin_t*, const clap_window_t*) { return false; }
+    static void guiSuggestTitle(const clap_plugin_t*, const char*) {}
+    static bool guiShow(const clap_plugin_t* p) { return self(p)->guiShow(); }
+    static bool guiHide(const clap_plugin_t* p) { return self(p)->guiHide(); }
+    static void timerTick(const clap_plugin_t* p, clap_id id) { self(p)->onTimer(id); }
+    static void fdReady(const clap_plugin_t* p, int fd, clap_posix_fd_flags_t flags) { self(p)->onFd(fd, flags); }
+
     static const clap_plugin_audio_ports_t audioPorts;
     static const clap_plugin_note_ports_t notePorts;
     static const clap_plugin_params_t params;
     static const clap_plugin_state_t state;
+    static const clap_plugin_gui_t gui;
+    static const clap_plugin_timer_support_t timer;
+    static const clap_plugin_posix_fd_support_t posixFd;
 };
 
 const clap_plugin_audio_ports_t PluginGlue::audioPorts = {portsCount, portsGet};
@@ -97,6 +146,12 @@ const clap_plugin_note_ports_t PluginGlue::notePorts = {notePortsCount, notePort
 const clap_plugin_params_t PluginGlue::params = {paramsCount, paramsInfo, paramsValue, paramsToText, paramsFromText,
                                                  paramsFlush};
 const clap_plugin_state_t PluginGlue::state = {stateSave, stateLoad};
+const clap_plugin_gui_t PluginGlue::gui = {guiApiSupported, guiPreferredApi, guiCreate,      guiDestroy,
+                                           guiSetScale,     guiGetSize,      guiCanResize,   guiResizeHints,
+                                           guiAdjustSize,   guiSetSize,      guiSetParent,   guiSetTransient,
+                                           guiSuggestTitle, guiShow,         guiHide};
+const clap_plugin_timer_support_t PluginGlue::timer = {timerTick};
+const clap_plugin_posix_fd_support_t PluginGlue::posixFd = {fdReady};
 
 const clap_plugin_descriptor_t* SubstrikePlugin::descriptor() { return &kDescriptor; }
 
@@ -130,10 +185,18 @@ SubstrikePlugin::~SubstrikePlugin() = default;
 bool SubstrikePlugin::init()
 {
     hostParams_ = static_cast<const clap_host_params_t*>(host_->get_extension(host_, CLAP_EXT_PARAMS));
+    hostState_ = static_cast<const clap_host_state_t*>(host_->get_extension(host_, CLAP_EXT_STATE));
+    hostGui_ = static_cast<const clap_host_gui_t*>(host_->get_extension(host_, CLAP_EXT_GUI));
+    hostTimer_ = static_cast<const clap_host_timer_support_t*>(host_->get_extension(host_, CLAP_EXT_TIMER_SUPPORT));
+    hostFd_ = static_cast<const clap_host_posix_fd_support_t*>(host_->get_extension(host_, CLAP_EXT_POSIX_FD_SUPPORT));
     return true;
 }
 
-void SubstrikePlugin::destroy() { delete this; }
+void SubstrikePlugin::destroy()
+{
+    guiDestroy();
+    delete this;
+}
 
 bool SubstrikePlugin::activate(double sampleRate, uint32_t, uint32_t)
 {
@@ -159,6 +222,7 @@ void SubstrikePlugin::reset() { engine_.reset(); }
 
 void SubstrikePlugin::onMainThread()
 {
+    pushCurves();
     if (rescanInfo_.exchange(false) && hostParams_)
         hostParams_->rescan(host_, CLAP_PARAM_RESCAN_INFO | CLAP_PARAM_RESCAN_VALUES | CLAP_PARAM_RESCAN_TEXT);
 }
@@ -173,6 +237,14 @@ const void* SubstrikePlugin::getExtension(const char* id)
         return &PluginGlue::params;
     if (!std::strcmp(id, CLAP_EXT_STATE))
         return &PluginGlue::state;
+    if (!std::strcmp(id, CLAP_EXT_GUI))
+        return &PluginGlue::gui;
+    if (!std::strcmp(id, CLAP_EXT_TIMER_SUPPORT))
+        return &PluginGlue::timer;
+#if !defined(_WIN32)
+    if (!std::strcmp(id, CLAP_EXT_POSIX_FD_SUPPORT))
+        return &PluginGlue::posixFd;
+#endif
     return nullptr;
 }
 
@@ -329,15 +401,8 @@ void SubstrikePlugin::handleEvent(const clap_event_header_t* ev, const clap_outp
     {
         const auto* pv = reinterpret_cast<const clap_event_param_value_t*>(ev);
         const int idx = table_.indexOf(pv->param_id);
-        if (idx < 0)
-            return;
-        const double v = std::clamp(pv->value, table_.minValue(idx), table_.maxValue(idx));
-        const double before = audio_[static_cast<size_t>(idx)];
-        audio_[static_cast<size_t>(idx)] = v;
-        setShared(idx, v);
-        engineParamsDirty_ = true;
-        if (table_.isSlotType(idx) && std::lround(v) != std::lround(before))
-            typeChanged(idx, out);
+        if (idx >= 0)
+            applyValue(idx, pv->value, out);
         return;
     }
     case CLAP_EVENT_NOTE_ON:
@@ -372,19 +437,155 @@ void SubstrikePlugin::handleEvent(const clap_event_header_t* ev, const clap_outp
     }
 }
 
+void SubstrikePlugin::applyValue(int idx, double value, const clap_output_events_t* out)
+{
+    const double v = std::clamp(value, table_.minValue(idx), table_.maxValue(idx));
+    const double before = audio_[static_cast<size_t>(idx)];
+    audio_[static_cast<size_t>(idx)] = v;
+    setShared(idx, v);
+    engineParamsDirty_ = true;
+    if (table_.isSlotType(idx) && std::lround(v) != std::lround(before))
+        typeChanged(idx, out);
+}
+
+void SubstrikePlugin::drainGuiEvents(const clap_output_events_t* out)
+{
+    GuiEvent e;
+    while (guiEvents_.pop(e))
+    {
+        const uint32_t id = table_.def(e.index).id;
+        if (e.type == GuiEvent::Value)
+        {
+            // The host hears the value first, then any letters a type change
+            // resets behind it.
+            if (out)
+            {
+                clap_event_param_value_t v{};
+                v.header.size = sizeof(v);
+                v.header.time = 0;
+                v.header.space_id = CLAP_CORE_EVENT_SPACE_ID;
+                v.header.type = CLAP_EVENT_PARAM_VALUE;
+                v.param_id = id;
+                v.note_id = -1;
+                v.port_index = -1;
+                v.channel = -1;
+                v.key = -1;
+                v.value = e.value;
+                out->try_push(out, &v.header);
+            }
+            applyValue(e.index, e.value, out);
+            continue;
+        }
+        if (out)
+        {
+            clap_event_param_gesture_t g{};
+            g.header.size = sizeof(g);
+            g.header.time = 0;
+            g.header.space_id = CLAP_CORE_EVENT_SPACE_ID;
+            g.header.type = e.type == GuiEvent::Begin ? CLAP_EVENT_PARAM_GESTURE_BEGIN : CLAP_EVENT_PARAM_GESTURE_END;
+            g.param_id = id;
+            out->try_push(out, &g.header);
+        }
+    }
+}
+
+void SubstrikePlugin::drainCurves()
+{
+    CurveEvent e;
+    while (curveEvents_.pop(e))
+        engine_.curve(e.index) = e.curve;
+}
+
+void SubstrikePlugin::pushCurves()
+{
+    bool any = false;
+    for (int i = 0; i < dsp::kNumCurves; ++i)
+    {
+        if (!curvePending_[static_cast<size_t>(i)])
+            continue;
+        if (!curveEvents_.push({i, curves_[static_cast<size_t>(i)]}))
+        {
+            // Full: try again on the next main-thread callback.
+            host_->request_callback(host_);
+            break;
+        }
+        curvePending_[static_cast<size_t>(i)] = false;
+        any = true;
+    }
+    if (any)
+        requestFlush();
+}
+
+void SubstrikePlugin::requestFlush()
+{
+    // A plugin that has gone to sleep is not processed again until something
+    // arrives; a flush (or a process call) drains what the GUI queued.
+    if (hostParams_)
+        hostParams_->request_flush(host_);
+}
+
 void SubstrikePlugin::paramsFlush(const clap_input_events_t* in, const clap_output_events_t* out)
 {
     syncFromShared();
-    if (!in)
-        return;
-    const uint32_t n = in->size(in);
-    for (uint32_t i = 0; i < n; ++i)
+    drainCurves();
+    if (in)
     {
-        const clap_event_header_t* ev = in->get(in, i);
-        // Only parameter changes: a flush carries no time to play a note at.
-        if (ev->space_id == CLAP_CORE_EVENT_SPACE_ID && ev->type == CLAP_EVENT_PARAM_VALUE)
-            handleEvent(ev, out);
+        const uint32_t n = in->size(in);
+        for (uint32_t i = 0; i < n; ++i)
+        {
+            const clap_event_header_t* ev = in->get(in, i);
+            // Only parameter changes: a flush carries no time to play a note at.
+            if (ev->space_id == CLAP_CORE_EVENT_SPACE_ID && ev->type == CLAP_EVENT_PARAM_VALUE)
+                handleEvent(ev, out);
+        }
     }
+    drainGuiEvents(out);
+}
+
+// ---------------------------------------------------------------- Controller
+
+double SubstrikePlugin::paramValue(int index) const
+{
+    return shared_[static_cast<size_t>(index)].load(std::memory_order_relaxed);
+}
+
+void SubstrikePlugin::beginEdit(int index)
+{
+    guiEvents_.push({GuiEvent::Begin, index, 0.0});
+    requestFlush();
+}
+
+void SubstrikePlugin::performEdit(int index, double value)
+{
+    value = std::clamp(value, table_.minValue(index), table_.maxValue(index));
+    setShared(index, value);
+    guiEvents_.push({GuiEvent::Value, index, value});
+    requestFlush();
+}
+
+void SubstrikePlugin::endEdit(int index)
+{
+    guiEvents_.push({GuiEvent::End, index, 0.0});
+    requestFlush();
+}
+
+void SubstrikePlugin::audition()
+{
+    auditionRequested_.store(true);
+    // The plugin may be asleep; this wakes it.
+    host_->request_process(host_);
+}
+
+void SubstrikePlugin::setCurve(int index, const dsp::Curve& c)
+{
+    if (curves_[static_cast<size_t>(index)] == c)
+        return;
+    curves_[static_cast<size_t>(index)] = c;
+    curvePending_[static_cast<size_t>(index)] = true;
+    pushCurves();
+    // A curve is not a parameter, so the host does not know the song changed.
+    if (hostState_)
+        hostState_->mark_dirty(host_);
 }
 
 // ---------------------------------------------------------------- state
@@ -395,6 +596,7 @@ bool SubstrikePlugin::stateSave(const clap_ostream_t* stream)
     doc.values.resize(static_cast<size_t>(table_.count()));
     for (int i = 0; i < table_.count(); ++i)
         doc.values[static_cast<size_t>(i)] = shared_[static_cast<size_t>(i)].load();
+    doc.curves = curves_;
     const std::string text = serializeState(doc);
     size_t written = 0;
     while (written < text.size())
@@ -427,6 +629,9 @@ bool SubstrikePlugin::stateLoad(const clap_istream_t* stream)
     for (int i = 0; i < table_.count(); ++i)
         setShared(i, doc.values[static_cast<size_t>(i)]);
     reloadFromShared_.store(true);
+    curves_ = doc.curves;
+    curvePending_.fill(true);
+    pushCurves();
     if (hostParams_)
     {
         hostParams_->rescan(host_, CLAP_PARAM_RESCAN_VALUES | CLAP_PARAM_RESCAN_TEXT | CLAP_PARAM_RESCAN_INFO);
@@ -444,6 +649,8 @@ clap_process_status SubstrikePlugin::process(const clap_process_t* process)
     if (chokeRequested_.exchange(false))
         engine_.choke();
     syncFromShared();
+    drainCurves();
+    drainGuiEvents(process->out_events);
 
     const uint32_t frames = process->frames_count;
     const clap_input_events_t* in = process->in_events;
@@ -458,6 +665,16 @@ clap_process_status SubstrikePlugin::process(const clap_process_t* process)
         const clap_audio_buffer_t& o = process->audio_outputs[b];
         return o.data32 ? o.channel_count : 0;
     };
+
+    if (auditionRequested_.exchange(false))
+    {
+        if (engineParamsDirty_)
+        {
+            engineParams_ = buildEngineParams(audio_.data());
+            engineParamsDirty_ = false;
+        }
+        engine_.noteOn(engineParams_.rootNote, 1.0, engineParams_);
+    }
 
     // Nothing sounding and nothing arriving: write silence and let the host
     // put the plugin to sleep until the next event.
@@ -525,6 +742,113 @@ clap_process_status SubstrikePlugin::process(const clap_process_t* process)
         handleEvent(in->get(in, nextEvent++), process->out_events);
 
     return engine_.idle() ? CLAP_PROCESS_SLEEP : CLAP_PROCESS_CONTINUE;
+}
+
+// ---------------------------------------------------------------- GUI
+
+bool SubstrikePlugin::guiCreate()
+{
+    if (editor_)
+        return true;
+    editor_ = std::make_unique<gui::Editor>(*this);
+    editor_->requestResize = [this](int w, int h) {
+        return hostGui_ && hostGui_->request_resize(host_, static_cast<uint32_t>(w), static_cast<uint32_t>(h));
+    };
+    if (hostTimer_)
+        hostTimer_->register_timer(host_, 33, &timerId_); // 30 fps
+    return true;
+}
+
+void SubstrikePlugin::guiDestroy()
+{
+    if (!editor_)
+        return;
+    if (hostTimer_ && timerId_ != CLAP_INVALID_ID)
+        hostTimer_->unregister_timer(host_, timerId_);
+    timerId_ = CLAP_INVALID_ID;
+    if (hostFd_ && registeredFd_ >= 0)
+        hostFd_->unregister_fd(host_, registeredFd_);
+    registeredFd_ = -1;
+    editor_.reset();
+}
+
+bool SubstrikePlugin::guiSetScale(double scale)
+{
+    if (!editor_)
+        return false;
+    // The host scale replaces the desktop guess; the user scaling still applies.
+    editor_->setScale(scale * Settings::get().getDouble("gui_scaling", 1.0));
+    return true;
+}
+
+bool SubstrikePlugin::guiGetSize(uint32_t* w, uint32_t* h)
+{
+    if (!editor_)
+        return false;
+    int pw, ph;
+    editor_->physicalSize(pw, ph);
+    *w = static_cast<uint32_t>(pw);
+    *h = static_cast<uint32_t>(ph);
+    return true;
+}
+
+bool SubstrikePlugin::guiAdjustSize(uint32_t* w, uint32_t* h)
+{
+    const double s = editor_ ? editor_->scale() : 1.0;
+    *w = std::max(*w, static_cast<uint32_t>(gui::Editor::kMinW * s));
+    *h = std::max(*h, static_cast<uint32_t>(gui::Editor::kMinH * s));
+    return true;
+}
+
+bool SubstrikePlugin::guiSetSize(uint32_t w, uint32_t h)
+{
+    if (!editor_)
+        return false;
+    editor_->setPhysicalSize(static_cast<int>(w), static_cast<int>(h));
+    return true;
+}
+
+bool SubstrikePlugin::guiSetParent(const clap_window_t* window)
+{
+    if (!editor_ || !window)
+        return false;
+#if defined(_WIN32)
+    const auto parent = reinterpret_cast<uintptr_t>(window->win32);
+#else
+    const auto parent = static_cast<uintptr_t>(window->x11);
+#endif
+    if (!editor_->attach(parent))
+        return false;
+    const int fd = editor_->fd();
+    if (hostFd_ && fd >= 0 && hostFd_->register_fd(host_, fd, CLAP_POSIX_FD_READ))
+        registeredFd_ = fd;
+    return true;
+}
+
+bool SubstrikePlugin::guiShow()
+{
+    if (editor_)
+        editor_->show();
+    return editor_ != nullptr;
+}
+
+bool SubstrikePlugin::guiHide()
+{
+    if (editor_)
+        editor_->hide();
+    return editor_ != nullptr;
+}
+
+void SubstrikePlugin::onTimer(clap_id id)
+{
+    if (editor_ && id == timerId_)
+        editor_->onTimer();
+}
+
+void SubstrikePlugin::onFd(int fd, clap_posix_fd_flags_t)
+{
+    if (editor_ && fd == registeredFd_)
+        editor_->onFd();
 }
 
 // ---------------------------------------------------------------- factory

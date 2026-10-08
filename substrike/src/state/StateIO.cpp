@@ -1,6 +1,7 @@
 #include "StateIO.h"
 
 #include <algorithm>
+#include <cmath>
 #include <cstdio>
 #include <cstdlib>
 #include <sstream>
@@ -21,6 +22,67 @@ std::string trim(const std::string& s)
 }
 
 } // namespace
+
+std::string curveKey(int index)
+{
+    return "l" + std::to_string(index / dsp::kCurvesPerLane + 1) +
+           (index % dsp::kCurvesPerLane == dsp::PitchCurve ? ".pitch" : ".amp");
+}
+
+std::string curveToText(const dsp::Curve& c)
+{
+    std::string out;
+    char buf[96];
+    for (int i = 0; i < c.count(); ++i)
+    {
+        const dsp::CurvePoint& p = c.point(i);
+        std::snprintf(buf, sizeof(buf), "%s%.6g,%.6g,%.6g", i ? ";" : "", p.x, p.y, p.k);
+        out += buf;
+    }
+    return out;
+}
+
+bool curveFromText(const std::string& text, dsp::Curve& c)
+{
+    std::vector<dsp::CurvePoint> points;
+    size_t start = 0;
+    while (start <= text.size())
+    {
+        size_t end = text.find(';', start);
+        if (end == std::string::npos)
+            end = text.size();
+        const std::string item = trim(text.substr(start, end - start));
+        start = end + 1;
+        if (item.empty())
+            continue;
+        dsp::CurvePoint p;
+        double* fields[3] = {&p.x, &p.y, &p.k};
+        const char* cur = item.c_str();
+        for (int f = 0; f < 3; ++f)
+        {
+            char* stop = nullptr;
+            *fields[f] = std::strtod(cur, &stop);
+            if (stop == cur)
+                return false;
+            cur = stop;
+            while (*cur == ' ')
+                ++cur;
+            if (f < 2)
+            {
+                if (*cur != ',')
+                    return false;
+                ++cur;
+            }
+        }
+        if (static_cast<int>(points.size()) == dsp::Curve::kMaxPoints)
+            break;
+        points.push_back(p);
+    }
+    if (points.size() < 2)
+        return false;
+    c.set(points.data(), static_cast<int>(points.size()));
+    return true;
+}
 
 std::vector<double> defaultValues()
 {
@@ -48,12 +110,19 @@ std::string serializeState(const StateDocument& doc)
         const double v = doc.values[static_cast<size_t>(i)];
         if (d.kind == Kind::Continuous && d.choices.empty())
         {
-            std::snprintf(buf, sizeof(buf), "%.9g", ParamTable::toPlain(d, v));
+            double plain = ParamTable::toPlain(d, v);
+            // Rounding in the knob mapping leaves 0 as -1.3e-15; write 0.
+            if (std::fabs(plain) < 1e-9 * (d.hi - d.lo))
+                plain = 0.0;
+            std::snprintf(buf, sizeof(buf), "%.9g", plain);
             out << d.key << '=' << buf << '\n';
         }
         else
             out << d.key << '=' << ParamTable::toText(d, v) << '\n';
     }
+    out << "[Curves]\n";
+    for (int i = 0; i < dsp::kNumCurves; ++i)
+        out << curveKey(i) << '=' << curveToText(doc.curves[static_cast<size_t>(i)]) << '\n';
     return out.str();
 }
 
@@ -62,6 +131,7 @@ bool parseState(const std::string& text, StateDocument& doc)
     const ParamTable& t = ParamTable::get();
     doc.values = defaultValues();
     doc.meta.clear();
+    doc.curves.fill(dsp::Curve());
     std::istringstream in(text);
     std::string line;
     std::string section;
@@ -90,6 +160,16 @@ bool parseState(const std::string& text, StateDocument& doc)
         }
         else if (section == "Parameters")
             params.emplace_back(key, value);
+        else if (section == "Curves")
+        {
+            for (int i = 0; i < dsp::kNumCurves; ++i)
+                if (key == curveKey(i))
+                {
+                    dsp::Curve c;
+                    if (curveFromText(value, c))
+                        doc.curves[static_cast<size_t>(i)] = c;
+                }
+        }
     }
 
     auto apply = [&](int idx, const ParamDef& d, const std::string& value) {
