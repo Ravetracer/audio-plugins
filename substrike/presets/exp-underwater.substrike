@@ -1,0 +1,28 @@
+[Substrike]
+format=1
+name=Underwater
+category=Experimental
+author=Substrike
+tags=filtered, lfo, submerged
+description=A kick heard underwater: a slow-moving lowpass and a smear that blurs the attack.
+[Parameters]
+l1.body.pitch_start=220
+l1.body.pitch_end=48
+l1.body.sweep=100
+l1.body.hold=40
+l1.body.decay=420
+l1.slot1.type=Smear
+l1.slot1.time=25
+l1.slot1.diffusion=70
+l1.slot1.stages=12
+l1.slot2.type=Filter
+l1.slot2.mode=LP 24
+l1.slot2.cutoff=500
+l1.slot2.reso=40
+mod.lfo1.shape=Sine
+mod.lfo1.rate=0.25
+mod.lfo1.retrigger=Off
+mod.route1.source=LFO 1
+mod.route1.dest=L1 Slot 2 B
+mod.route1.amount=15
+output=-1.3

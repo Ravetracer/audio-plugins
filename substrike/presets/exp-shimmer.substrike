@@ -1,0 +1,27 @@
+[Substrike]
+format=1
+name=Shimmer Kick
+category=Experimental
+author=Substrike
+tags=shimmer, octave, bright
+description=A kick with a shimmer tail: echoes climb an octave each time and dissolve into a bright room.
+[Parameters]
+l1.body.pitch_start=300
+l1.body.pitch_end=50
+l1.body.sweep=80
+l1.body.hold=30
+l1.body.decay=300
+l1.slot1.type=Warp
+l1.slot1.band=High
+l1.slot1.mix=60
+l1.slot1.time=180
+l1.slot1.feedback=60
+l1.slot1.pitch=12
+l1.slot1.diffusion=60
+l1.slot2.type=Reverb
+l1.slot2.band=Mid+High
+l1.slot2.mix=35
+l1.slot2.size=80
+l1.slot2.decay=3000
+l1.slot2.damping=10000
+output=-1.2

@@ -1,0 +1,9 @@
+[Substrike]
+format=1
+name=Init
+category=Init
+author=Substrike
+tags=clean, starting point
+description=The plain kick every new instance starts with: a sine dropping onto 48 Hz with a medium tail.
+[Parameters]
+output=-1

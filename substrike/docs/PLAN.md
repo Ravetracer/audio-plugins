@@ -285,6 +285,188 @@ Decided while building phase 4:
   Panels whose controls depend on the selection are rebuilt from the timer,
   never from inside a widget's handler.
 
+Phase 5 is done (0.5.0): Reverb, Delay, Warp (the experimental delay) and
+Smear; the Other group the effect table lists (Ring Mod with the frequency
+shifts, Stereo, Utility), which no phase had claimed; Bus lanes; and the
+transient guard. Tested offline, in the minimal host on Xvfb and under wine.
+
+Decided while building phase 5:
+
+- Bus ids at lane offset 500-508: 500-507 one switch per lane, 508 the tap
+  (Pre Chain, Post Chain). Guard ids at lane offsets 14-18: Guard Delay,
+  Guard Fade, Duck Source, Duck Depth, Duck Release. The new slot types are
+  appended to the Type list (10-16).
+- A bus input is a sum of lanes, not one lane, so a bus can collect several
+  layers. Post Chain is after the chain and the guard, before level, pan and
+  polarity: the lane's own mix does not change what a bus hears.
+- Lanes run in dependency order (bus inputs and duck sources first),
+  otherwise by number, recomputed per process call. A lane in a loop runs
+  when nothing else can and hears silence from the lanes still to come, so
+  a loop is quiet rather than a one-block feedback whose sound would depend
+  on the block size.
+- The guard is a window (silent for Delay after each of the lane's own hits,
+  then a raised-cosine fade over Fade) and a duck (a peak follower on the
+  source lane's post signal, 0.5 ms up and Release down; gain = 1 - Depth x
+  its level, so a full-scale kick ducks fully). Both act after the check for
+  the end of the tail, so a lane held shut by its window does not count as
+  rung out. The duck's follower runs every chunk, sounding or not.
+- Delay and Warp output the input plus their echoes, so a newly inserted
+  delay never takes the hit away; Reverb outputs the reverb alone, since the
+  rumble chain wants it at 100 %.
+- Time effects run at the base rate. Every slot owns one block of delay
+  memory, sized for the largest type at the host's rate (two seconds of
+  stereo) and allocated only when the rate changes, never on the audio
+  thread; the slot clears it when it was used and the type changes or the
+  chain resets.
+- Each effect says how long its output may stay silent while it still holds
+  a sound (a delay: its time; a reverb: its pre-delay), and the lane and the
+  master wait that much longer before they call the tail done.
+- The synced times read the host's tempo from the transport; without one
+  they keep the last tempo, 120 to begin with.
+- Allpasses use whole-sample lengths: a linearly interpolated read inside
+  the loop is a lowpass and cost a 16-stage smear 7 dB.
+- Smear's Time is the sum of its stages, so more stages smear more finely
+  rather than longer; diffusion tops out at 0.7, past which an allpass chain
+  is heard as a tail.
+
+Phase 6 is done (0.6.0): the modulation sources, the matrix and the
+modulation page in the editor. Tested offline, in the minimal host on Xvfb
+(a route added through a knob's menu) and under wine.
+
+Decided while building phase 6:
+
+- Ids: routes 10000 + 10 x route (Source, Destination, Amount, Curve), LFOs
+  11000 + 20 x LFO (Shape, Rate, Sync, Phase, Retrigger), envelopes 11200 +
+  20 x envelope (Time, Loop), macros 11400-11407.
+- A route's Destination is an enum parameter whose labels are the names of
+  every continuous, automatable parameter outside the modulation block, so it
+  rides the existing parameter path (host, GUI queue, state) and the state
+  stores it by name. Source and Destination are not automatable. A slot's
+  letter is a destination as its generic parameter; what it means follows
+  the slot's type.
+- Modulation adds Amount x source to the destination's stored value (0..1)
+  and clamps: one depth scale for every parameter.
+- The player (plugin/Player) wraps the engine: it builds the engine
+  parameters, applies the matrix and runs the sources. buildEngineParams is
+  now a loop over a per-parameter assignParam, which is what lets the matrix
+  rewrite single parameters. Without routes the player hands the engine
+  whole blocks, and the output is bit-identical to 0.5.0.
+- Control rate: every 32 samples on the host's steady-time clock, plus at
+  every note. The clock follows steady time even while the plugin sleeps;
+  without it the grid moved with the moment the plugin fell asleep, which
+  the block-size tests caught.
+- LFO and beat positions are computed from whole sample counts since an
+  anchor (set on a retrigger, a rate change or a tempo change), never
+  summed per block, so they do not depend on block sizes. A synced LFO that
+  does not retrigger is locked to the host's song position.
+- The modulation envelopes' curves are curves 16-19 of the curve state, so
+  the queue to the audio thread, the preview and the state handle them like
+  the Body curves.
+- The lane followers are peak followers on the lane's output after its
+  guard, decaying sample by sample even while the lane sleeps.
+- Not done: a live display of modulated values on the knobs (the arc shows
+  the reach, not the current value) and per-lane copies of the per-note
+  sources for lanes with their own note filter.
+
+Phase 7 is done (0.7.0): the preset format, browser and host integration,
+112 factory presets, the metrics tool and the calibration; and, asked for
+along the way, a Limiter slot and Limit as the master's Output Clip.
+
+Decided while building phase 7:
+
+- A preset is a state document with name, category, author, tags and
+  description in its header. The factory presets are files in presets/,
+  embedded at build time (cmake/embed_presets.cmake, Substrike's own) and
+  listed sparsely: only what differs from the defaults. So the defaults are
+  frozen; changing one means rendering every preset before and after.
+  substrike-preset-check (run by install.sh) catches unknown keys, values
+  out of range and missing metadata, which the parser used to drop silently.
+- Host integration: CLAP preset discovery (the factory presets at location
+  PLUGIN with the file name as load key, the user folder at FILE once it
+  exists) and preset-load. The state remembers the preset's name.
+- The browser is a panel over the right side of the window, not an
+  overlay, so a rebuild (a preset changes every lane) does not close it.
+  Clicking a preset loads it and plays it.
+- substrike-metrics: YIN with frames of three periods of the last pitch
+  found, so a fast sweep is followed; the start pitch from zero crossings
+  after 1.5 ms through 2 kHz lowpasses, so the body's start is measured and
+  not the click; energy ratios floored at -60 dB.
+- Calibration against the reference set (89 kicks): the first presets
+  started too low (median 86 against 333 Hz), settled too fast (35 against
+  92 ms) and clicked too softly (-28 against -14 dB); the hardstyle and
+  hardcore references start with a zap of 1-4 kHz and are mostly above
+  1.5 kHz in their first 12 ms. The club categories now start 1.6 times
+  higher with 1.5 times longer sweeps and 6 dB more click, and the hard ones
+  start with a drawn zap from 2-4 kHz. Mean distance from each reference to
+  its nearest preset: 3.12 before, 2.81 after (about one unit per octave of
+  pitch, doubling of time or 3 dB). The rest is for ears, not numbers.
+- Every factory preset peaks at -1 dBFS at full velocity on its root note.
+- Two engine fixes the presets found: the Transient shaper turned an attack
+  from silence into a spike of up to +24 dB (each contrast is now taken up
+  to 12 dB and the gain glides over 0.3 ms), and a lane that slept glided
+  into a per-note modulated level instead of taking it on the hit's first
+  sample, so a velocity route on a click barely reached it.
+- The limiters have no lookahead and no latency: down at once, a 25 ms
+  hold (a period of 40 Hz, so a low kick's waveform is not ridden), then
+  the release. They run at the base rate, where the ceiling is exact.
+- clap-validator 0.4.1 deadlocks in its preset-discovery-crawl and -load
+  tests on any provider that lists several presets with load keys: its
+  begin_preset() holds its result lock while flush_preset() takes it again
+  (src/plugin/preset_discovery/metadata_receiver.rs). Run it with
+  `-x "preset-discovery-(crawl|load)"`; the self-test crawls the presets
+  with its own indexer instead.
+- Not done: no DAW has loaded the presets through its browser yet.
+
+0.7.1 fixes what switching presets did and rebuilds the rumble presets:
+
+- Switching presets while the old one still rang could fire a burst of up
+  to +64 dBFS: a slot fading out to Off fed its old effect the empty slot's
+  generic values (all 50), which a Filter reads as Peak mode, +50 dB. A slot
+  fading out now keeps its old values. Beyond that bug, every slot used to
+  glide from the old preset's values into the new ones -- a delay's time
+  gliding is a pitch sweep, a ring modulator's or a resonant filter's
+  frequency gliding is another. A new state or preset is now a fresh start:
+  the player fades the old sound out over 5 ms exactly as it was (the new
+  values and curves wait), then resets the engine and plays any note that
+  came in the meantime. After the fade the output is bit-identical to the
+  new preset played alone, 5 ms late. Checked over 672 preset pairs.
+- The rumble, measured against 14 kick + rumble loops
+  (`!references/rumble_loops/`): between the kicks it is a floor at -8 to
+  -15 dB of the kick's peak, centred on the kick's pitch (47-86 Hz, 40-120 Hz
+  carrying it, -22 to -35 dB above 250 Hz), moderately tonal, mostly mono,
+  and often swelling back towards the next kick. The 0.7.0 rumble presets
+  were a tail at -30 to -35 dB peaking at 80 Hz: their second distortion is
+  level-compensated and does not flatten a decaying reverb, and the small
+  room's sparse modes made a tone at 76 Hz. The recipe now: a big (Size
+  100), dark, mono reverb, a clipper driven 30 dB that turns its decay into
+  a level, a 24 dB lowpass near 110 Hz, and a duck on the kick with a 250 ms
+  release. All eight measure -11.7 to -13.9 dB between the kicks, peaking at
+  48-60 Hz. No engine change was needed.
+
+0.7.2: the rumble presets all sounded alike, since they shared one kick and
+the floor follows the kick. Each now has its own (41-62 Hz, 83-223 ms of
+body, from no click to a hard one, clean to crushed) and a floor to match
+(the distortion model, darkness, density, soft or hard clipping). Measuring
+the kicks alone found a bug: a Bus lane switched off went on playing, since
+switching a lane off only fades its voices and a bus lane has none. A lane
+that is off now takes no bus input; its chain's tail rings out.
+
+0.8.0: hard techno. The user's own two presets (Hard Rumble, Crash Rumble)
+showed what current techno wants and the factory set lacked: a long, slow
+drop (480 to 55 Hz over 325 ms; the pitch settles after ~135 ms), a body
+saturated in stages (Body Shape 40 %, Soft Clip, Clipper) with a lowpass
+before and after the drive so it thickens instead of fizzing, a hard
+impulse click and no velocity sensitivity. They are factory presets now,
+unchanged but for the output level, and Crushed Rumble is gone. Concrete
+Thump, Berlin Pressure, Peak Time, Hydraulic Press, Tech Trance Drive and
+the kicks of Classic, Sidechained and Rolling Thunder follow that recipe,
+each tuned differently; Brick Wall, Schranz Hammer, Tail Driver and Hard
+Groove are new. They measure 50-63 Hz, settle after 85-160 ms, with
+harmonics at -7 to -14 dB (the user's: -11) -- harder than the Inferno
+references (-17 to -20 dB), as asked. The classic techno kicks (Minimal
+Tick, Detroit Round, Dub Chamber, Acid Floor, Hypnotic Loop, Warehouse
+Punch) stay.
+
 ## Phases
 
 1. **Scaffold and first kick.**
@@ -308,12 +490,14 @@ Decided while building phase 4:
      breakpoint curve editor, and slot panels.
    - Hit export to WAV, with drag-and-drop into the DAW. Done in 0.4.0.
 5. **Time effects and rumble.**
-   - Reverb, the delays, Smear, Bus lanes and the transient guard.
-6. **Modulation.** LFOs, envelopes, macros and the matrix in the GUI.
+   - Reverb, the delays, Smear, Bus lanes and the transient guard. Done in
+     0.5.0, with Ring Mod, Stereo and Utility.
+6. **Modulation.** LFOs, envelopes, macros and the matrix in the GUI. Done
+   in 0.6.0.
 7. **Presets and calibration.**
    - Format and browser. Factory presets across every style named above.
    - A metrics tool (YIN pitch, the table above) that checks the presets
-     cover the ranges of the reference set.
+     cover the ranges of the reference set. Done in 0.7.0.
 8. **Release.**
    - Manual with screenshots, `release.sh` integration, Windows under wine.
 

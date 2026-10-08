@@ -1,0 +1,32 @@
+[Substrike]
+format=1
+name=Gabber Classic
+category=Hardcore
+author=Substrike
+tags=gabber, distorted, classic
+description=The classic gabber kick: a long body driven into a fuzz until it buzzes, then clipped hard.
+[Parameters]
+l1.body.pitch_start=3500
+l1.body.pitch_end=55
+l1.body.sweep=450
+l1.body.hold=250
+l1.body.decay=250
+l1.body.decay_curve=50
+l1.slot1.type=Distortion
+l1.slot1.model=Fuzz
+l1.slot1.drive=85
+l1.slot1.tone=6000
+l1.slot1.output=-8
+l1.slot2.type=Distortion
+l1.slot2.model=Rectifier
+l1.slot2.drive=40
+l1.slot2.output=-4
+l1.slot3.type=EQ
+l1.slot3.low=2
+l1.slot3.mid=-4
+l1.slot3.mid_freq=700
+l1.slot3.mid_q=0.8
+master.clip=Hard
+output=5.9
+[Curves]
+l1.pitch=0,1,0;0.005,0.78,0;0.03,0.35,0.3;0.15,0.1,0.2;1,0,0

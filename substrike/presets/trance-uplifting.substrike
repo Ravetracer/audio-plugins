@@ -1,0 +1,31 @@
+[Substrike]
+format=1
+name=Uplifting Tail
+category=Trance
+author=Substrike
+tags=long, clean, tonal
+description=A clean trance kick with a long, tuned tail for big breakdown drops.
+[Parameters]
+l1.body.pitch_start=512
+l1.body.pitch_end=48
+l1.body.sweep=150
+l1.body.sweep_curve=60
+l1.body.hold=60
+l1.body.decay=480
+l1.body.decay_curve=40
+l2.on=On
+l2.level=-8
+l2.click.type=Noise
+l2.click.decay=4
+l2.click.filter=High Pass
+l2.click.cutoff=3500
+l1.slot1.type=Distortion
+l1.slot1.model=Soft Clip
+l1.slot1.drive=18
+master.slot1.type=Compressor
+master.slot1.threshold=-14
+master.slot1.ratio=3
+master.slot1.attack=15
+master.slot1.release=120
+master.slot1.makeup=2
+output=-4.4

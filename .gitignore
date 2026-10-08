@@ -22,6 +22,10 @@
 */\!dev/
 */\!references/
 
+# Backups of a plugin's preset files, made before presets are regenerated:
+# local safety copies, not content.
+*/presets-backup/
+
 # Python bytecode
 __pycache__/
 *.py[cod]

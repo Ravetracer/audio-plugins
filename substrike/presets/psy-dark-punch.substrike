@@ -1,0 +1,25 @@
+[Substrike]
+format=1
+name=Dark Psy Punch
+category=Psytrance
+author=Substrike
+tags=psy, dark, distorted
+description=A darker psy kick with a distorted knock and a dry, abrupt end.
+[Parameters]
+l1.body.pitch_start=720
+l1.body.pitch_end=56
+l1.body.sweep=60
+l1.body.hold=15
+l1.body.decay=160
+l1.slot1.type=Distortion
+l1.slot1.model=Fuzz
+l1.slot1.drive=40
+l1.slot1.output=-5
+l1.slot2.type=Gate
+l1.slot2.mode=Hit
+l1.slot2.hold=120
+l1.slot2.release=20
+l1.slot3.type=Filter
+l1.slot3.mode=LP 24
+l1.slot3.cutoff=5000
+output=5.9

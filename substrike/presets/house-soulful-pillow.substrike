@@ -1,0 +1,25 @@
+[Substrike]
+format=1
+name=Soulful Pillow
+category=House
+author=Substrike
+tags=soft, warm, roomy
+description=A soft pillow of a kick: warm, low and wrapped in a small room.
+[Parameters]
+l1.body.pitch_start=180
+l1.body.pitch_end=52
+l1.body.sweep=90
+l1.body.sweep_curve=45
+l1.body.hold=50
+l1.body.decay=380
+l1.slot1.type=Distortion
+l1.slot1.model=Tube
+l1.slot1.drive=15
+l1.slot1.tone=3500
+l1.slot2.type=Reverb
+l1.slot2.band=Mid+High
+l1.slot2.mix=20
+l1.slot2.size=25
+l1.slot2.decay=500
+l1.slot2.damping=4000
+output=-2.2

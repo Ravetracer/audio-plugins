@@ -25,6 +25,8 @@ std::string trim(const std::string& s)
 
 std::string curveKey(int index)
 {
+    if (index >= dsp::kNumLaneCurves)
+        return "mod.env" + std::to_string(index - dsp::kNumLaneCurves + 1);
     return "l" + std::to_string(index / dsp::kCurvesPerLane + 1) +
            (index % dsp::kCurvesPerLane == dsp::PitchCurve ? ".pitch" : ".amp");
 }
@@ -132,6 +134,7 @@ bool parseState(const std::string& text, StateDocument& doc)
     doc.values = defaultValues();
     doc.meta.clear();
     doc.curves.fill(dsp::Curve());
+    doc.warnings.clear();
     std::istringstream in(text);
     std::string line;
     std::string section;
@@ -162,13 +165,19 @@ bool parseState(const std::string& text, StateDocument& doc)
             params.emplace_back(key, value);
         else if (section == "Curves")
         {
+            bool known = false;
             for (int i = 0; i < dsp::kNumCurves; ++i)
                 if (key == curveKey(i))
                 {
+                    known = true;
                     dsp::Curve c;
                     if (curveFromText(value, c))
                         doc.curves[static_cast<size_t>(i)] = c;
+                    else
+                        doc.warnings.push_back("unreadable curve " + key);
                 }
+            if (!known)
+                doc.warnings.push_back("unknown curve " + key);
         }
     }
 
@@ -178,10 +187,20 @@ bool parseState(const std::string& text, StateDocument& doc)
             char* end = nullptr;
             const double v = std::strtod(value.c_str(), &end);
             if (end != value.c_str())
+            {
                 doc.values[static_cast<size_t>(idx)] = ParamTable::fromPlain(d, v);
+                // -inf is how a silent level is written.
+                if (std::isfinite(v) && (v < d.lo - 1e-9 * std::fabs(d.lo) || v > d.hi + 1e-9 * std::fabs(d.hi)))
+                    doc.warnings.push_back(d.key + "=" + value + " is outside " + std::to_string(d.lo) + ".." +
+                                           std::to_string(d.hi));
+            }
+            else
+                doc.warnings.push_back(d.key + "=" + value + " is not a number");
         }
         else if (auto v = ParamTable::fromText(d, value))
             doc.values[static_cast<size_t>(idx)] = *v;
+        else
+            doc.warnings.push_back(d.key + "=" + value + " is not one of its choices");
     };
 
     // Everything but the slot letters first, the slot types among it; then
@@ -201,6 +220,8 @@ bool parseState(const std::string& text, StateDocument& doc)
         const int idx = t.indexOfSlotKey(key, doc.values.data());
         if (idx >= 0)
             apply(idx, t.effective(idx, doc.values.data()), value);
+        else if (t.indexOfKey(key) < 0)
+            doc.warnings.push_back("unknown key " + key);
     }
     return seenHeader;
 }

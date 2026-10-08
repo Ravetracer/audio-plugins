@@ -34,14 +34,15 @@ cmake --build "${build_dir}" --parallel
 
 if [ "$selftest" = 1 ]; then
    echo "==> verifying"
+   "${build_dir}/substrike-preset-check"
    "${build_dir}/substrike-render" --plugin "${build_dir}/Substrike.clap" --selftest
 fi
 
 echo "==> installing"
 mkdir -p "${HOME}/.clap" "${HOME}/.vst3"
 cp -f "${build_dir}/Substrike.clap" "${HOME}/.clap/"
-rm -rf "${HOME}/.vst3/Substrike.vst3"
-cp -r "${build_dir}/vst3/Substrike.vst3" "${HOME}/.vst3/"
+# Copied over the installed bundle in place rather than deleting it first.
+cp -rT "${build_dir}/vst3/Substrike.vst3" "${HOME}/.vst3/Substrike.vst3"
 
 cat <<TXT
 

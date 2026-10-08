@@ -9,6 +9,7 @@
 
 #include "Controller.h"
 #include "Params.h"
+#include "Player.h"
 #include "dsp/Engine.h"
 #include "util/SpscQueue.h"
 
@@ -37,6 +38,9 @@ public:
     void setCurve(int index, const dsp::Curve& c) override;
     double sampleRate() const override { return sampleRate_; }
     void audition() override;
+    void loadDocument(const StateDocument& doc, const std::string& name) override;
+    StateDocument currentDocument() const override;
+    std::string presetName() const override { return presetName_; }
 
 private:
     struct GuiEvent
@@ -75,6 +79,10 @@ private:
     void paramsFlush(const clap_input_events_t* in, const clap_output_events_t* out);
     bool stateSave(const clap_ostream_t* stream);
     bool stateLoad(const clap_istream_t* stream);
+    bool presetLoad(uint32_t kind, const char* location, const char* loadKey);
+    // Makes `doc` the plugin's state: values, curves, the preset's name; the
+    // sounding hit stops and the host rescans (main thread).
+    void applyDocument(const StateDocument& doc);
 
     // GUI
     bool guiCreate();
@@ -111,6 +119,10 @@ private:
     const clap_host_t* host_;
     const clap_host_params_t* hostParams_ = nullptr;
     const clap_host_state_t* hostState_ = nullptr;
+    const clap_host_preset_load_t* hostPresetLoad_ = nullptr;
+    // The preset the state came from, shown by the browser; saved with the
+    // state.
+    std::string presetName_ = "Init";
     const clap_host_gui_t* hostGui_ = nullptr;
     const clap_host_timer_support_t* hostTimer_ = nullptr;
     const clap_host_posix_fd_support_t* hostFd_ = nullptr;
@@ -122,7 +134,7 @@ private:
     std::vector<double> audio_;
     std::atomic<bool> reloadFromShared_{true};
     // A new state arrived: the audio thread stops the sounding hit.
-    std::atomic<bool> chokeRequested_{false};
+    std::atomic<bool> freshStartRequested_{false};
     // The editor asked for a hit.
     std::atomic<bool> auditionRequested_{false};
     // A slot's type changed, so its letters have new names: the main thread
@@ -141,12 +153,11 @@ private:
     clap_id timerId_ = CLAP_INVALID_ID;
     int registeredFd_ = -1;
 
-    dsp::Engine engine_;
+    Player player_;
     // Render target for ports the host did not connect, and for the right
     // channel of a mono one.
     static constexpr uint32_t kScratch = 256;
     std::array<std::array<std::array<float, kScratch>, 2>, dsp::Engine::kNumBuses> scratch_{};
-    dsp::EngineParams engineParams_{};
     bool engineParamsDirty_ = true;
     double sampleRate_ = 48000.0;
     bool active_ = false;

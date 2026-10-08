@@ -1,0 +1,31 @@
+[Substrike]
+format=1
+name=Full-On Tok
+category=Psytrance
+author=Substrike
+tags=psy, short, tight
+description=A short, tight psytrance kick: a hard knock with almost no tail, so the rolling bass fits in after it.
+[Parameters]
+l1.body.pitch_start=800
+l1.body.pitch_end=58
+l1.body.sweep=52
+l1.body.sweep_curve=70
+l1.body.hold=10
+l1.body.decay=150
+l1.body.decay_curve=60
+l2.on=On
+l2.level=-2
+l2.click.type=Zap
+l2.click.decay=1.5
+l2.click.pitch=4000
+l2.click.sweep=4
+l2.click.filter=Off
+l1.slot1.type=Clipper
+l1.slot1.drive=6
+l1.slot1.knee=20
+l1.slot2.type=EQ
+l1.slot2.low=2
+l1.slot2.mid=3
+l1.slot2.mid_freq=1200
+l1.slot2.mid_q=1.5
+output=-5

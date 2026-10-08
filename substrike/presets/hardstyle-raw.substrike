@@ -1,0 +1,36 @@
+[Substrike]
+format=1
+name=Raw Punch
+category=Hardstyle
+author=Substrike
+tags=raw, punchy, hard
+description=A raw hardstyle kick: an aggressive punch and a gritty, folded tail.
+[Parameters]
+l1.body.pitch_start=3500
+l1.body.pitch_end=55
+l1.body.sweep=400
+l1.body.key_track=100
+l1.body.hold=220
+l1.body.decay=180
+l1.body.shape=40
+l5.on=On
+l5.level=-2
+l5.body.pitch_start=900
+l5.body.pitch_end=90
+l5.body.sweep=30
+l5.body.hold=5
+l5.body.decay=60
+l1.slot1.type=Wavefolder
+l1.slot1.band=Mid+High
+l1.slot1.drive=20
+l1.slot1.shape=60
+l1.slot2.type=Distortion
+l1.slot2.model=Rectifier
+l1.slot2.drive=70
+l1.slot2.output=-6
+l1.slot3.type=Clipper
+l1.slot3.drive=10
+master.clip=Hard
+output=-3.5
+[Curves]
+l1.pitch=0,1,0;0.004,0.8,0;0.02,0.45,0.3;0.08,0.12,0;0.35,0.17,-0.2;1,0,0.2

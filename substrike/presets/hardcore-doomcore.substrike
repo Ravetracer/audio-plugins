@@ -1,0 +1,31 @@
+[Substrike]
+format=1
+name=Doomcore
+category=Hardcore
+author=Substrike
+tags=doom, slow, huge
+description=A slow, huge doomcore kick: a deep distorted drop into a long dark tail.
+[Parameters]
+l1.body.pitch_start=2000
+l1.body.pitch_end=42
+l1.body.sweep=500
+l1.body.hold=300
+l1.body.decay=700
+l1.body.decay_curve=40
+l1.slot1.type=Distortion
+l1.slot1.model=Valve Stack
+l1.slot1.drive=80
+l1.slot1.output=-8
+l1.slot2.type=Filter
+l1.slot2.mode=LP 24
+l1.slot2.cutoff=900
+l1.slot2.reso=25
+l1.slot3.type=Reverb
+l1.slot3.mix=25
+l1.slot3.size=70
+l1.slot3.decay=2500
+l1.slot3.damping=1500
+master.clip=Soft
+output=8
+[Curves]
+l1.pitch=0,1,0;0.005,0.78,0;0.03,0.35,0.3;0.15,0.1,0.2;1,0,0

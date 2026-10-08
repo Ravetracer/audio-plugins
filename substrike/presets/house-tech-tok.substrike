@@ -1,0 +1,33 @@
+[Substrike]
+format=1
+name=Tech House Tok
+category=House
+author=Substrike
+tags=tech house, knock, compressed
+description=A compressed tech house kick with a knocky top that cuts through a busy groove.
+[Parameters]
+l1.body.pitch_start=320
+l1.body.pitch_end=57
+l1.body.sweep=70
+l1.body.hold=30
+l1.body.decay=280
+l2.on=On
+l2.level=-10
+l2.click.type=Blip
+l2.click.decay=3
+l2.click.pitch=1200
+l2.click.sweep=1
+l2.click.filter=Band Pass
+l2.click.cutoff=1600
+l2.click.reso=40
+l1.slot1.type=Compressor
+l1.slot1.threshold=-18
+l1.slot1.ratio=5
+l1.slot1.attack=6
+l1.slot1.release=90
+l1.slot1.makeup=4
+l1.slot2.type=EQ
+l1.slot2.mid=3
+l1.slot2.mid_freq=1500
+l1.slot2.mid_q=1.5
+output=-4.3

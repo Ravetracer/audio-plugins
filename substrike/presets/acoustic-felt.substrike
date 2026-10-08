@@ -1,0 +1,27 @@
+[Substrike]
+format=1
+name=Felt Beater
+category=Acoustic
+author=Substrike
+tags=acoustic, soft, felt
+description=A soft felt beater on a loose head: dull, warm, close.
+[Parameters]
+l1.on=On
+l1.source=Resonator
+l1.level=0
+l1.resonator.exciter=Mallet
+l1.resonator.model=Membrane
+l1.resonator.tune=50
+l1.resonator.decay=350
+l1.resonator.damping=75
+l1.resonator.brightness=15
+l1.resonator.hardness=10
+l1.resonator.drop=2
+l5.on=On
+l5.level=-8
+l5.body.pitch_start=100
+l5.body.pitch_end=46
+l5.body.sweep=60
+l5.body.hold=20
+l5.body.decay=280
+output=0.7

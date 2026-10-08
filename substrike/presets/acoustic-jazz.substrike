@@ -1,0 +1,26 @@
+[Substrike]
+format=1
+name=Jazz Bass Drum
+category=Acoustic
+author=Substrike
+tags=acoustic, jazz, open
+description=An open, ringing jazz bass drum, tuned higher and left to sing.
+[Parameters]
+l1.on=On
+l1.source=Resonator
+l1.level=0
+l1.resonator.exciter=Mallet
+l1.resonator.model=Membrane
+l1.resonator.modes=8
+l1.resonator.tune=82
+l1.resonator.decay=900
+l1.resonator.damping=35
+l1.resonator.brightness=45
+l1.resonator.hardness=30
+l1.resonator.drop=1
+master.slot1.type=Reverb
+master.slot1.mix=15
+master.slot1.size=35
+master.slot1.decay=800
+master.slot1.damping=4000
+output=3.8

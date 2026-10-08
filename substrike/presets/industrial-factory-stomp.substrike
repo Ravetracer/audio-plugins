@@ -1,0 +1,33 @@
+[Substrike]
+format=1
+name=Factory Stomp
+category=Industrial
+author=Substrike
+tags=stomp, noise, gated
+description=A stomp in a factory hall: a burst of filtered noise and a body, gated together.
+[Parameters]
+l1.body.pitch_start=400
+l1.body.pitch_end=48
+l1.body.sweep=105
+l1.body.hold=40
+l1.body.decay=300
+l3.on=On
+l3.level=-8
+l3.noise.color=Brown
+l3.noise.filter=Low Pass
+l3.noise.cutoff=1200
+l3.noise.reso=30
+l3.noise.filter_env=3
+l3.noise.env_decay=60
+l3.noise.hold=40
+l3.noise.decay=200
+master.slot1.type=Reverb
+master.slot1.mix=25
+master.slot1.size=60
+master.slot1.decay=900
+master.slot1.damping=5000
+master.slot2.type=Gate
+master.slot2.mode=Hit
+master.slot2.hold=200
+master.slot2.release=40
+output=-0.1

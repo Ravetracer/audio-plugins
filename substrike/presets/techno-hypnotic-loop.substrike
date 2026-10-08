@@ -1,0 +1,33 @@
+[Substrike]
+format=1
+name=Hypnotic Loop
+category=Techno
+author=Substrike
+tags=evolving, lfo, hypnotic
+description=A kick that never quite repeats: a slow free-running LFO moves its tuning and its filter from bar to bar.
+[Parameters]
+l1.body.pitch_start=480
+l1.body.pitch_end=50
+l1.body.sweep=135
+l1.body.hold=35
+l1.body.decay=380
+l1.slot1.type=Filter
+l1.slot1.mode=LP 12
+l1.slot1.cutoff=2500
+l1.slot1.reso=20
+l1.slot2.type=Distortion
+l1.slot2.model=Germanium
+l1.slot2.drive=25
+mod.lfo1.shape=Smooth
+mod.lfo1.rate=0.13
+mod.lfo1.retrigger=Off
+mod.lfo2.shape=Triangle
+mod.lfo2.rate=0.07
+mod.lfo2.retrigger=Off
+mod.route1.source=LFO 1
+mod.route1.dest=L1 Pitch End
+mod.route1.amount=4
+mod.route2.source=LFO 2
+mod.route2.dest=L1 Slot 1 B
+mod.route2.amount=18
+output=-3.8

@@ -1,0 +1,30 @@
+[Substrike]
+format=1
+name=Sampler Twelve
+category=Lo-Fi
+author=Substrike
+tags=12-bit, sampler, punchy
+description=A punchy kick through a twelve-bit sampler with its aliasing left in.
+[Parameters]
+l1.body.pitch_start=260
+l1.body.pitch_end=55
+l1.body.sweep=60
+l1.body.hold=25
+l1.body.decay=280
+l2.on=On
+l2.level=-12
+l2.click.type=Noise
+l2.click.decay=4
+l2.click.filter=Band Pass
+l2.click.cutoff=2000
+master.slot1.type=Bitcrush
+master.slot1.bits=12
+master.slot1.rate=22050
+master.slot2.type=Compressor
+master.slot2.threshold=-16
+master.slot2.ratio=4
+master.slot2.attack=10
+master.slot2.release=90
+master.slot2.makeup=3
+quality=1x
+output=-4.2

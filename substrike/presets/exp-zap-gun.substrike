@@ -1,0 +1,28 @@
+[Substrike]
+format=1
+name=Zap Gun
+category=Experimental
+author=Substrike
+tags=zap, fm, sci-fi
+description=A kick fired from a ray gun: a body that falls from 3 kHz, frequency-modulated, with a zap on top.
+[Parameters]
+l1.body.pitch_start=3000
+l1.body.pitch_end=55
+l1.body.sweep=90
+l1.body.sweep_curve=80
+l1.body.hold=30
+l1.body.decay=300
+l1.body.fm_amount=40
+l1.body.fm_ratio=1.5
+l1.body.fm_decay=60
+l2.on=On
+l2.level=-8
+l2.click.type=Zap
+l2.click.decay=6
+l2.click.pitch=6000
+l2.click.sweep=6
+l2.slot1.type=Delay
+l2.slot1.mix=30
+l2.slot1.time=60
+l2.slot1.feedback=40
+l2.slot1.ping_pong=100

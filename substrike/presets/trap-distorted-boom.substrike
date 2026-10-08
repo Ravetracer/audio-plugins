@@ -1,0 +1,27 @@
+[Substrike]
+format=1
+name=Distorted Boom
+category=Trap
+author=Substrike
+tags=sub, distorted, tuned
+description=A saturated boom that growls on small speakers and still holds the sub. Tuned to the keys, root C1.
+[Parameters]
+root_note=C1
+l1.body.pitch_start=110
+l1.body.pitch_end=32.7
+l1.body.sweep=50
+l1.body.key_track=100
+l1.body.hold=150
+l1.body.decay=1600
+l1.body.decay_curve=35
+l1.slot1.type=Distortion
+l1.slot1.model=Valve Stack
+l1.slot1.drive=60
+l1.slot1.tone=5000
+l1.slot1.output=-6
+l1.slot2.type=EQ
+l1.slot2.low=3
+l1.slot2.mid=-3
+l1.slot2.mid_freq=300
+master.clip=Soft
+output=7.4

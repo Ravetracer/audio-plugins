@@ -1,0 +1,32 @@
+[Substrike]
+format=1
+name=Neuro Thump
+category=Drum & Bass
+author=Substrike
+tags=neuro, distorted, punchy
+description=A neurofunk kick: a distorted, compressed thump with a metallic top.
+[Parameters]
+l1.body.pitch_start=720
+l1.body.pitch_end=70
+l1.body.sweep=68
+l1.body.hold=20
+l1.body.decay=170
+l4.on=On
+l4.level=-14
+l4.resonator.exciter=Impulse
+l4.resonator.model=Bar
+l4.resonator.tune=300
+l4.resonator.decay=60
+l4.resonator.damping=50
+l4.resonator.brightness=70
+l1.slot1.type=Distortion
+l1.slot1.model=Crunch
+l1.slot1.drive=55
+l1.slot1.output=-5
+master.slot1.type=Compressor
+master.slot1.threshold=-20
+master.slot1.ratio=8
+master.slot1.attack=3
+master.slot1.release=60
+master.slot1.makeup=5
+output=3.1

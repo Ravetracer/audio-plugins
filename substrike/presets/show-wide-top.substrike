@@ -1,0 +1,25 @@
+[Substrike]
+format=1
+name=Wide Top
+category=Showcase
+author=Substrike
+tags=stereo, haas, mono below
+description=A stereo kick that stays mono where it matters: a wide noisy top with a Haas delay, everything under 130 Hz in the middle.
+[Parameters]
+l1.body.pitch_start=300
+l1.body.pitch_end=50
+l1.body.sweep=80
+l1.body.hold=30
+l1.body.decay=300
+l3.on=On
+l3.level=-14
+l3.noise.color=White
+l3.noise.width=100
+l3.noise.filter=High Pass
+l3.noise.cutoff=3000
+l3.noise.decay=60
+l3.slot1.type=Stereo
+l3.slot1.width=180
+l3.slot1.haas=8
+master.mono_below=130
+output=-2.1

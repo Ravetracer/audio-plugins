@@ -1,0 +1,33 @@
+[Substrike]
+format=1
+name=Humanizer
+category=Showcase
+author=Substrike
+tags=random, variation, organic
+description=No two hits alike: Random nudges pitch, decay and click per hit, and Variation does the rest.
+[Parameters]
+l1.body.pitch_start=300
+l1.body.pitch_end=52
+l1.body.sweep=80
+l1.body.hold=30
+l1.body.decay=300
+l1.on=On
+l1.level=0
+l1.variation=40
+l2.on=On
+l2.level=-14
+l2.variation=60
+l2.click.type=Noise
+l2.click.decay=4
+l2.click.filter=Band Pass
+l2.click.cutoff=3000
+mod.route1.source=Random
+mod.route1.dest=L1 Pitch End
+mod.route1.amount=3
+mod.route2.source=Random
+mod.route2.dest=L1 Body Decay
+mod.route2.amount=6
+mod.route3.source=Random
+mod.route3.dest=L2 Click Cutoff
+mod.route3.amount=10
+output=-0.9

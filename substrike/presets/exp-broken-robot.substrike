@@ -1,0 +1,33 @@
+[Substrike]
+format=1
+name=Broken Robot
+category=Experimental
+author=Substrike
+tags=robotic, folded, ring
+description=A malfunctioning machine: folded, ring-modulated and crushed, with a stuttering pitch.
+[Parameters]
+l1.body.pitch_start=400
+l1.body.pitch_end=60
+l1.body.sweep=60
+l1.body.hold=60
+l1.body.decay=260
+l1.slot1.type=Wavefolder
+l1.slot1.drive=15
+l1.slot1.shape=70
+l1.slot2.type=Ring Mod
+l1.slot2.mix=60
+l1.slot2.mode=Ring
+l1.slot2.freq=95
+l1.slot2.env=3
+l1.slot2.env_decay=100
+l1.slot3.type=Bitcrush
+l1.slot3.mix=70
+l1.slot3.bits=7
+l1.slot3.rate=9000
+mod.lfo1.shape=Square
+mod.lfo1.rate=24
+mod.lfo1.retrigger=On
+mod.route1.source=LFO 1
+mod.route1.dest=L1 Pitch End
+mod.route1.amount=5
+output=-0.7

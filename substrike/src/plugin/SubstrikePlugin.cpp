@@ -9,9 +9,12 @@
 #include <xmmintrin.h>
 
 #include "gui/Editor.h"
+#include "state/PresetProvider.h"
+#include "state/Presets.h"
 #include "state/Settings.h"
 #include "state/StateIO.h"
 #include "substrike.h"
+#include "util/Path.h"
 
 namespace substrike {
 
@@ -136,6 +139,11 @@ struct PluginGlue
     static const clap_plugin_note_ports_t notePorts;
     static const clap_plugin_params_t params;
     static const clap_plugin_state_t state;
+    static bool presetLoad(const clap_plugin_t* p, uint32_t kind, const char* location, const char* key)
+    {
+        return self(p)->presetLoad(kind, location, key);
+    }
+    static const clap_plugin_preset_load_t presetLoadExt;
     static const clap_plugin_gui_t gui;
     static const clap_plugin_timer_support_t timer;
     static const clap_plugin_posix_fd_support_t posixFd;
@@ -146,6 +154,7 @@ const clap_plugin_note_ports_t PluginGlue::notePorts = {notePortsCount, notePort
 const clap_plugin_params_t PluginGlue::params = {paramsCount, paramsInfo, paramsValue, paramsToText, paramsFromText,
                                                  paramsFlush};
 const clap_plugin_state_t PluginGlue::state = {stateSave, stateLoad};
+const clap_plugin_preset_load_t PluginGlue::presetLoadExt = {presetLoad};
 const clap_plugin_gui_t PluginGlue::gui = {guiApiSupported, guiPreferredApi, guiCreate,      guiDestroy,
                                            guiSetScale,     guiGetSize,      guiCanResize,   guiResizeHints,
                                            guiAdjustSize,   guiSetSize,      guiSetParent,   guiSetTransient,
@@ -186,6 +195,10 @@ bool SubstrikePlugin::init()
 {
     hostParams_ = static_cast<const clap_host_params_t*>(host_->get_extension(host_, CLAP_EXT_PARAMS));
     hostState_ = static_cast<const clap_host_state_t*>(host_->get_extension(host_, CLAP_EXT_STATE));
+    hostPresetLoad_ = static_cast<const clap_host_preset_load_t*>(host_->get_extension(host_, CLAP_EXT_PRESET_LOAD));
+    if (!hostPresetLoad_)
+        hostPresetLoad_ =
+            static_cast<const clap_host_preset_load_t*>(host_->get_extension(host_, CLAP_EXT_PRESET_LOAD_COMPAT));
     hostGui_ = static_cast<const clap_host_gui_t*>(host_->get_extension(host_, CLAP_EXT_GUI));
     hostTimer_ = static_cast<const clap_host_timer_support_t*>(host_->get_extension(host_, CLAP_EXT_TIMER_SUPPORT));
     hostFd_ = static_cast<const clap_host_posix_fd_support_t*>(host_->get_extension(host_, CLAP_EXT_POSIX_FD_SUPPORT));
@@ -201,7 +214,10 @@ void SubstrikePlugin::destroy()
 bool SubstrikePlugin::activate(double sampleRate, uint32_t, uint32_t)
 {
     sampleRate_ = sampleRate;
-    engine_.prepare(sampleRate);
+    // The first values go in here, on the main thread, so the player's
+    // buffers are sized before the audio thread uses them.
+    player_.setValues(audio_.data());
+    player_.prepare(sampleRate);
     reloadFromShared_.store(true);
     engineParamsDirty_ = true;
     active_ = true;
@@ -218,7 +234,7 @@ bool SubstrikePlugin::startProcessing()
 
 void SubstrikePlugin::stopProcessing() { processing_ = false; }
 
-void SubstrikePlugin::reset() { engine_.reset(); }
+void SubstrikePlugin::reset() { player_.reset(); }
 
 void SubstrikePlugin::onMainThread()
 {
@@ -237,6 +253,8 @@ const void* SubstrikePlugin::getExtension(const char* id)
         return &PluginGlue::params;
     if (!std::strcmp(id, CLAP_EXT_STATE))
         return &PluginGlue::state;
+    if (!std::strcmp(id, CLAP_EXT_PRESET_LOAD) || !std::strcmp(id, CLAP_EXT_PRESET_LOAD_COMPAT))
+        return &PluginGlue::presetLoadExt;
     if (!std::strcmp(id, CLAP_EXT_GUI))
         return &PluginGlue::gui;
     if (!std::strcmp(id, CLAP_EXT_TIMER_SUPPORT))
@@ -412,16 +430,16 @@ void SubstrikePlugin::handleEvent(const clap_event_header_t* ev, const clap_outp
         // A hit is played with the parameters as they stand at its sample.
         if (engineParamsDirty_)
         {
-            engineParams_ = buildEngineParams(audio_.data());
+            player_.setValues(audio_.data());
             engineParamsDirty_ = false;
         }
         if (ev->type == CLAP_EVENT_NOTE_ON)
         {
             const auto* ne = reinterpret_cast<const clap_event_note_t*>(ev);
-            engine_.noteOn(ne->key >= 0 ? ne->key : engineParams_.rootNote, ne->velocity, engineParams_);
+            player_.noteOn(ne->key >= 0 ? ne->key : player_.rootNote(), ne->velocity);
         }
         else if (ev->type == CLAP_EVENT_NOTE_CHOKE)
-            engine_.choke();
+            player_.choke();
         else
         {
             const auto* me = reinterpret_cast<const clap_event_midi_t*>(ev);
@@ -429,7 +447,7 @@ void SubstrikePlugin::handleEvent(const clap_event_header_t* ev, const clap_outp
             // A kick is a one-shot: note-off does nothing, so only note-on
             // with a velocity counts.
             if (status == 0x90 && me->data[2] > 0)
-                engine_.noteOn(me->data[1] & 0x7F, (me->data[2] & 0x7F) / 127.0, engineParams_);
+                player_.noteOn(me->data[1] & 0x7F, (me->data[2] & 0x7F) / 127.0);
         }
         return;
     }
@@ -493,7 +511,7 @@ void SubstrikePlugin::drainCurves()
 {
     CurveEvent e;
     while (curveEvents_.pop(e))
-        engine_.curve(e.index) = e.curve;
+        player_.setCurve(e.index, e.curve);
 }
 
 void SubstrikePlugin::pushCurves()
@@ -597,6 +615,7 @@ bool SubstrikePlugin::stateSave(const clap_ostream_t* stream)
     for (int i = 0; i < table_.count(); ++i)
         doc.values[static_cast<size_t>(i)] = shared_[static_cast<size_t>(i)].load();
     doc.curves = curves_;
+    doc.meta["preset"] = presetName_;
     const std::string text = serializeState(doc);
     size_t written = 0;
     while (written < text.size())
@@ -625,19 +644,80 @@ bool SubstrikePlugin::stateLoad(const clap_istream_t* stream)
     StateDocument doc;
     if (!parseState(text, doc))
         return false;
-    chokeRequested_.store(true);
+    applyDocument(doc);
+    return true;
+}
+
+void SubstrikePlugin::applyDocument(const StateDocument& doc)
+{
+    freshStartRequested_.store(true);
     for (int i = 0; i < table_.count(); ++i)
         setShared(i, doc.values[static_cast<size_t>(i)]);
     reloadFromShared_.store(true);
     curves_ = doc.curves;
     curvePending_.fill(true);
     pushCurves();
+    const auto preset = doc.meta.find("preset");
+    presetName_ = preset != doc.meta.end() ? preset->second : std::string("Init");
     if (hostParams_)
     {
         hostParams_->rescan(host_, CLAP_PARAM_RESCAN_VALUES | CLAP_PARAM_RESCAN_TEXT | CLAP_PARAM_RESCAN_INFO);
         if (!processing_)
             hostParams_->request_flush(host_);
     }
+}
+
+void SubstrikePlugin::loadDocument(const StateDocument& doc, const std::string& name)
+{
+    StateDocument d = doc;
+    d.meta["preset"] = name;
+    applyDocument(d);
+    // Not through a parameter change the host saw, so the song is dirty here.
+    if (hostState_)
+        hostState_->mark_dirty(host_);
+}
+
+StateDocument SubstrikePlugin::currentDocument() const
+{
+    StateDocument doc;
+    doc.values.resize(static_cast<size_t>(table_.count()));
+    for (int i = 0; i < table_.count(); ++i)
+        doc.values[static_cast<size_t>(i)] = shared_[static_cast<size_t>(i)].load();
+    doc.curves = curves_;
+    doc.meta["preset"] = presetName_;
+    return doc;
+}
+
+bool SubstrikePlugin::presetLoad(uint32_t kind, const char* location, const char* loadKey)
+{
+    StateDocument doc;
+    std::string error;
+    if (kind == CLAP_PRESET_DISCOVERY_LOCATION_PLUGIN)
+    {
+        const char* text = loadKey ? factoryPresetText(loadKey) : nullptr;
+        if (!text || !parseState(text, doc))
+            error = std::string("no factory preset '") + (loadKey ? loadKey : "") + "'";
+    }
+    else if (kind == CLAP_PRESET_DISCOVERY_LOCATION_FILE)
+    {
+        if (!location || !readPresetFile(location, doc))
+            error = std::string("cannot read the preset ") + (location ? location : "");
+    }
+    else
+        error = "unsupported preset location";
+    if (!error.empty())
+    {
+        if (hostPresetLoad_)
+            hostPresetLoad_->on_error(host_, kind, location, loadKey, 0, error.c_str());
+        return false;
+    }
+    PresetInfo info = presetInfo(doc);
+    if (info.name.empty() && location)
+        info.name = fromPath(toPath(location).stem());
+    doc.meta["preset"] = info.name;
+    applyDocument(doc);
+    if (hostPresetLoad_)
+        hostPresetLoad_->loaded(host_, kind, location, loadKey);
     return true;
 }
 
@@ -646,11 +726,23 @@ bool SubstrikePlugin::stateLoad(const clap_istream_t* stream)
 clap_process_status SubstrikePlugin::process(const clap_process_t* process)
 {
     ScopedFtz ftz;
-    if (chokeRequested_.exchange(false))
-        engine_.choke();
+    // A new state or preset: the old sound fades out and the engine starts
+    // clean, rather than gliding from the old settings into the new.
+    if (freshStartRequested_.exchange(false))
+        player_.freshStart();
     syncFromShared();
     drainCurves();
     drainGuiEvents(process->out_events);
+    // The synced delay times follow the host's tempo; without a transport
+    // they keep the last one (120 to begin with).
+    if (process->steady_time >= 0)
+        player_.setClock(static_cast<uint64_t>(process->steady_time));
+    if (const clap_event_transport_t* t = process->transport)
+    {
+        const bool beats = (t->flags & CLAP_TRANSPORT_HAS_BEATS_TIMELINE) != 0;
+        player_.setTransport((t->flags & CLAP_TRANSPORT_HAS_TEMPO) ? t->tempo : 0.0, beats,
+                             beats ? static_cast<double>(t->song_pos_beats) / CLAP_BEATTIME_FACTOR : 0.0);
+    }
 
     const uint32_t frames = process->frames_count;
     const clap_input_events_t* in = process->in_events;
@@ -670,15 +762,15 @@ clap_process_status SubstrikePlugin::process(const clap_process_t* process)
     {
         if (engineParamsDirty_)
         {
-            engineParams_ = buildEngineParams(audio_.data());
+            player_.setValues(audio_.data());
             engineParamsDirty_ = false;
         }
-        engine_.noteOn(engineParams_.rootNote, 1.0, engineParams_);
+        player_.noteOn(player_.rootNote(), 1.0);
     }
 
     // Nothing sounding and nothing arriving: write silence and let the host
     // put the plugin to sleep until the next event.
-    if (numEvents == 0 && engine_.idle())
+    if (numEvents == 0 && player_.idle())
     {
         for (int b = 0; b < ports; ++b)
         {
@@ -687,6 +779,8 @@ clap_process_status SubstrikePlugin::process(const clap_process_t* process)
                 std::fill(o.data32[c], o.data32[c] + frames, 0.0f);
             o.constant_mask = (1ull << o.channel_count) - 1;
         }
+        if (process->steady_time < 0)
+            player_.skip(static_cast<int>(frames));
         return CLAP_PROCESS_SLEEP;
     }
     for (int b = 0; b < ports; ++b)
@@ -704,7 +798,7 @@ clap_process_status SubstrikePlugin::process(const clap_process_t* process)
                 buses[b].l = ch >= 1 ? data[0] + p : scratch_[b][0].data();
                 buses[b].r = ch >= 2 ? data[1] + p : scratch_[b][1].data();
             }
-            engine_.process(buses, static_cast<int>(n), engineParams_);
+            player_.process(buses, static_cast<int>(n));
             for (int b = 0; b < ports; ++b)
                 if (portChannels(b) == 1)
                     for (uint32_t i = 0; i < n; ++i)
@@ -731,7 +825,7 @@ clap_process_status SubstrikePlugin::process(const clap_process_t* process)
         }
         if (engineParamsDirty_)
         {
-            engineParams_ = buildEngineParams(audio_.data());
+            player_.setValues(audio_.data());
             engineParamsDirty_ = false;
         }
         renderSpan(pos, chunkEnd);
@@ -741,7 +835,7 @@ clap_process_status SubstrikePlugin::process(const clap_process_t* process)
     while (nextEvent < numEvents)
         handleEvent(in->get(in, nextEvent++), process->out_events);
 
-    return engine_.idle() ? CLAP_PROCESS_SLEEP : CLAP_PROCESS_CONTINUE;
+    return player_.idle() ? CLAP_PROCESS_SLEEP : CLAP_PROCESS_CONTINUE;
 }
 
 // ---------------------------------------------------------------- GUI
@@ -880,6 +974,9 @@ const void* entryGetFactory(const char* factoryId)
 {
     if (!std::strcmp(factoryId, CLAP_PLUGIN_FACTORY_ID))
         return &kFactory;
+    if (!std::strcmp(factoryId, CLAP_PRESET_DISCOVERY_FACTORY_ID) ||
+        !std::strcmp(factoryId, CLAP_PRESET_DISCOVERY_FACTORY_ID_COMPAT))
+        return presetDiscoveryFactory();
     return nullptr;
 }
 

@@ -1,0 +1,30 @@
+[Substrike]
+format=1
+name=Metal Plate
+category=Industrial
+author=Substrike
+tags=metallic, ring, harsh
+description=A kick struck on a steel plate: a bar resonator and a ring modulator over a short body.
+[Parameters]
+l1.body.pitch_start=480
+l1.body.pitch_end=55
+l1.body.sweep=75
+l1.body.hold=20
+l1.body.decay=250
+l4.on=On
+l4.level=-6
+l4.resonator.exciter=Impulse
+l4.resonator.model=Bar
+l4.resonator.modes=8
+l4.resonator.tune=220
+l4.resonator.decay=500
+l4.resonator.damping=30
+l4.resonator.brightness=70
+l4.slot1.type=Ring Mod
+l4.slot1.mix=60
+l4.slot1.mode=Ring
+l4.slot1.freq=170
+master.slot1.type=Distortion
+master.slot1.model=Crunch
+master.slot1.drive=30
+output=3.6

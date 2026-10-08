@@ -1,0 +1,22 @@
+[Substrike]
+format=1
+name=Hard Trance Stomp
+category=Trance
+author=Substrike
+tags=hard, distorted, stomp
+description=A hard trance stomp: a distorted body clipped flat, with a long, tight tail.
+[Parameters]
+l1.body.pitch_start=640
+l1.body.pitch_end=52
+l1.body.sweep=105
+l1.body.hold=80
+l1.body.decay=400
+l1.slot1.type=Distortion
+l1.slot1.model=Rectifier
+l1.slot1.drive=55
+l1.slot1.output=-4
+l1.slot2.type=Clipper
+l1.slot2.drive=10
+l1.slot2.knee=20
+master.clip=Hard
+output=-1.5

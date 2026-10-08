@@ -1,0 +1,28 @@
+[Substrike]
+format=1
+name=Tonal Drop
+category=Ambient
+author=Substrike
+tags=tonal, tuned, melodic
+description=A tuned drop that plays in key: a resonator under a sine, both following the keys, with a soft echo.
+[Parameters]
+l1.body.pitch_start=200
+l1.body.pitch_end=65.4
+l1.body.sweep=80
+l1.body.key_track=100
+l1.body.hold=60
+l1.body.decay=700
+l4.on=On
+l4.level=-10
+l4.pitch_link=Lane 1
+l4.resonator.exciter=Mallet
+l4.resonator.model=Harmonic
+l4.resonator.decay=900
+l4.resonator.damping=50
+master.slot1.type=Delay
+master.slot1.mix=25
+master.slot1.sync=1/4D
+master.slot1.feedback=20
+master.slot1.color=-40
+master.slot1.ping_pong=60
+output=-2.3

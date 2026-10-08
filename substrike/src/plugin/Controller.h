@@ -1,6 +1,9 @@
 #pragma once
 
+#include <string>
+
 #include "dsp/Curve.h"
+#include "state/StateIO.h"
 
 namespace substrike {
 
@@ -28,6 +31,13 @@ public:
     // The rate a hit is rendered at for the preview and the export: the
     // host's, once the plugin has been activated.
     virtual double sampleRate() const = 0;
+
+    // Presets. A document replaces the whole state, like a song being loaded;
+    // `name` is what the browser shows for it from then on.
+    virtual void loadDocument(const StateDocument& doc, const std::string& name) = 0;
+    // The state as it is now, with its preset name in meta["preset"].
+    virtual StateDocument currentDocument() const = 0;
+    virtual std::string presetName() const = 0;
 };
 
 } // namespace substrike

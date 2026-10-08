@@ -1,0 +1,33 @@
+[Substrike]
+format=1
+name=Detroit Round
+category=Techno
+author=Substrike
+tags=warm, round, soulful
+description=A warm, rounded kick with soul: a triangle body gently shaped, a soft beater noise and no hard edges.
+[Parameters]
+l1.body.pitch_start=384
+l1.body.pitch_end=55
+l1.body.sweep=105
+l1.body.sweep_curve=50
+l1.body.hold=30
+l1.body.decay=300
+l1.body.wave=Triangle
+l1.body.shape=15
+l3.on=On
+l3.level=-24
+l3.noise.color=Pink
+l3.noise.filter=Low Pass
+l3.noise.cutoff=2500
+l3.noise.decay=25
+l1.slot1.type=Distortion
+l1.slot1.model=Soft Clip
+l1.slot1.drive=20
+l1.slot1.tone=5000
+l1.slot2.type=EQ
+l1.slot2.low=2
+l1.slot2.mid=1.5
+l1.slot2.mid_freq=120
+l1.slot2.mid_q=0.8
+l1.slot2.high=-4
+output=-2.1

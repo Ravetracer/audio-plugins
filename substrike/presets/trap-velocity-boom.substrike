@@ -1,0 +1,25 @@
+[Substrike]
+format=1
+name=Velocity Boom
+category=Trap
+author=Substrike
+tags=sub, velocity, dynamic
+description=Soft notes are clean, hard notes distort and ring longer: velocity drives the drive and the decay. Root C1.
+[Parameters]
+root_note=C1
+l1.body.pitch_start=90
+l1.body.pitch_end=32.7
+l1.body.sweep=50
+l1.body.key_track=100
+l1.body.hold=100
+l1.body.decay=900
+l1.slot1.type=Distortion
+l1.slot1.model=Valve Stack
+l1.slot1.drive=10
+mod.route1.source=Velocity
+mod.route1.dest=L1 Slot 1 B
+mod.route1.amount=60
+mod.route2.source=Velocity
+mod.route2.dest=L1 Body Decay
+mod.route2.amount=18
+output=-0.3

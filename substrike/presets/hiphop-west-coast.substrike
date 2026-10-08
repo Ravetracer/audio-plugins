@@ -1,0 +1,25 @@
+[Substrike]
+format=1
+name=West Coast Thump
+category=Hip Hop
+author=Substrike
+tags=sub, long, smooth
+description=A long, smooth sub thump with a soft click, for laid-back beats.
+[Parameters]
+l1.body.pitch_start=150
+l1.body.pitch_end=45
+l1.body.sweep=120
+l1.body.sweep_curve=45
+l1.body.hold=80
+l1.body.decay=750
+l1.body.decay_curve=35
+l2.on=On
+l2.level=-22
+l2.click.type=Noise
+l2.click.decay=4
+l2.click.filter=Band Pass
+l2.click.cutoff=2200
+l1.slot1.type=Distortion
+l1.slot1.model=Soft Clip
+l1.slot1.drive=15
+output=0.1

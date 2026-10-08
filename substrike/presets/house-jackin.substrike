@@ -1,0 +1,28 @@
+[Substrike]
+format=1
+name=Jackin Box
+category=House
+author=Substrike
+tags=jackin, punchy, saturated
+description=A punchy, slightly crunchy kick for jackin house, with a bit of the box it came from.
+[Parameters]
+l1.body.pitch_start=280
+l1.body.pitch_end=58
+l1.body.sweep=60
+l1.body.hold=25
+l1.body.decay=260
+l1.body.wave=Triangle
+l1.body.shape=25
+l3.on=On
+l3.level=-22
+l3.noise.color=White
+l3.noise.filter=High Pass
+l3.noise.cutoff=6000
+l3.noise.decay=20
+l1.slot1.type=Bitcrush
+l1.slot1.bits=12
+l1.slot1.rate=30000
+l1.slot2.type=Distortion
+l1.slot2.model=Crunch
+l1.slot2.drive=20
+output=2.6

@@ -1,0 +1,33 @@
+[Substrike]
+format=1
+name=Golden Era
+category=Hip Hop
+author=Substrike
+tags=punchy, saturated, classic
+description=A punchy, saturated sampler-era kick with a hard transient and a mid-range bump.
+[Parameters]
+l1.body.pitch_start=260
+l1.body.pitch_end=54
+l1.body.sweep=65
+l1.body.hold=30
+l1.body.decay=320
+l1.body.shape=20
+l2.on=On
+l2.level=-12
+l2.click.type=Noise
+l2.click.decay=4
+l2.click.filter=Band Pass
+l2.click.cutoff=1800
+l2.click.reso=25
+master.slot1.type=Transient
+master.slot1.attack=30
+master.slot1.sustain=-10
+master.slot2.type=Bitcrush
+master.slot2.bits=14
+master.slot2.rate=36000
+master.slot3.type=EQ
+master.slot3.mid=3
+master.slot3.mid_freq=110
+master.slot3.mid_q=1
+master.slot3.high=-3
+output=-7

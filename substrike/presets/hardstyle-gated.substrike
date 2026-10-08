@@ -1,0 +1,28 @@
+[Substrike]
+format=1
+name=Gated Hardstyle
+category=Hardstyle
+author=Substrike
+tags=hardstyle, gated, tight
+description=A tight hardstyle kick cut by a Hit gate, for fast tempos.
+[Parameters]
+l1.body.pitch_start=3000
+l1.body.pitch_end=55
+l1.body.sweep=350
+l1.body.key_track=100
+l1.body.hold=200
+l1.body.decay=150
+l1.slot1.type=Distortion
+l1.slot1.model=Valve Stack
+l1.slot1.drive=75
+l1.slot1.output=-6
+l1.slot2.type=Gate
+l1.slot2.mode=Hit
+l1.slot2.hold=170
+l1.slot2.release=15
+l1.slot3.type=Clipper
+l1.slot3.drive=6
+master.clip=Hard
+output=-1.6
+[Curves]
+l1.pitch=0,1,0;0.004,0.8,0;0.02,0.45,0.3;0.08,0.12,0;0.35,0.17,-0.2;1,0,0.2

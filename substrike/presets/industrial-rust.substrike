@@ -1,0 +1,26 @@
+[Substrike]
+format=1
+name=Rust
+category=Industrial
+author=Substrike
+tags=crushed, ring, dirty
+description=A corroded kick: shifted, bitcrushed and saturated until it rattles.
+[Parameters]
+l1.body.pitch_start=448
+l1.body.pitch_end=50
+l1.body.sweep=105
+l1.body.hold=40
+l1.body.decay=320
+l1.slot1.type=Ring Mod
+l1.slot1.band=Mid+High
+l1.slot1.mode=Shift Up
+l1.slot1.freq=35
+l1.slot2.type=Bitcrush
+l1.slot2.mix=60
+l1.slot2.bits=6
+l1.slot2.rate=11000
+l1.slot3.type=Distortion
+l1.slot3.model=Germanium
+l1.slot3.drive=50
+l1.slot3.output=-4
+output=5.8

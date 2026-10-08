@@ -1,76 +1,17 @@
 #pragma once
 
 #include <array>
+#include <vector>
 
 #include "dsp/Crossover.h"
 #include "dsp/Drive.h"
+#include "dsp/Effect.h"
 #include "dsp/OnePole.h"
 #include "dsp/Oversampler.h"
 #include "dsp/Svf.h"
+#include "dsp/TimeEffects.h"
 
 namespace substrike::dsp {
-
-// The slot types, in the order the Type parameter lists them. State stores the
-// label, so the list may grow at the end.
-enum class SlotType : int
-{
-    Off = 0,
-    Distortion,
-    Clipper,
-    Wavefolder,
-    Bitcrush,
-    Filter,
-    Eq,
-    Compressor,
-    Transient,
-    Gate,
-};
-constexpr int kNumSlotTypes = 10;
-
-// Which part of the spectrum a slot processes. The rest passes by it.
-enum class Band : int
-{
-    Full = 0,
-    Low,
-    Mid,
-    High,
-    LowMid,
-    MidHigh,
-};
-
-constexpr int kNumSlots = 6;
-constexpr int kSlotValues = 6;
-
-// One slot as the parameters set it. `v` holds A-F in the plain units the
-// type gives them (see the shape table in plugin/Params.cpp); what each one
-// means is written beside each effect below.
-struct SlotParams
-{
-    SlotType type = SlotType::Off;
-    Band band = Band::Full;
-    double mix = 1.0;
-    bool bypass = false;
-    std::array<double, kSlotValues> v{};
-};
-
-// A choice (a model, a mode) jumps; everything else glides.
-bool slotValueIsChoice(SlotType t, int i);
-// The drive group runs inside the oversampler.
-bool slotIsOversampled(SlotType t);
-
-class Effect
-{
-public:
-    virtual ~Effect() = default;
-    virtual void prepare(double sampleRate) = 0;
-    virtual void reset() = 0;
-    // The six values, in plain units. Called every 16 samples; an effect
-    // that derives something expensive checks for a change itself.
-    virtual void set(const double* v) = 0;
-    // The lane fired a hit (the master: a note arrived).
-    virtual void hit() {}
-    virtual void process(float* l, float* r, int n) = 0;
-};
 
 // A: model (index), B: drive %, C: bias %, D: tone Hz (lowpass after the
 // stage), E: output dB. SaeureKiste's drive stage, then a DC blocker, since
@@ -221,8 +162,9 @@ private:
 
 // A: attack %, B: sustain %, C: speed ms, D: output dB. Two pairs of
 // followers: a fast and a slow attack (same release) find the onsets, a fast
-// and a slow release (same attack) find the tail. Each percent is a decibel
-// per decibel of difference, so 100 % doubles the contrast.
+// and a slow release (same attack) find the tail. Each contrast is taken up
+// to 12 dB, and the percentages are a share of it: +100 % lifts an onset by
+// up to 12 dB, -100 % cuts a tail by as much. The gain glides over 0.3 ms.
 class TransientFx : public Effect
 {
 public:
@@ -236,6 +178,7 @@ private:
     double attack_ = 0.0, sustain_ = 0.0, out_ = 1.0;
     double fastAtk_ = 0.0, slowAtk_ = 0.0, atkRel_ = 0.0, fastRel_ = 0.0, slowRel_ = 0.0, relAtk_ = 0.0;
     double eFastA_ = 0.0, eSlowA_ = 0.0, eFastR_ = 0.0, eSlowR_ = 0.0;
+    double gainDb_ = 0.0, gainGlide_ = 1.0;
 };
 
 // A: mode (Gate, Hit), B: threshold dB, C: attack ms, D: hold ms, E: release
@@ -262,11 +205,39 @@ private:
     bool opening_ = false;
 };
 
+// A: gain dB (into the limiter), B: ceiling dB, C: release ms. A peak
+// limiter without lookahead, so it adds no latency: the gain drops at once
+// to whatever keeps the peak at the ceiling, holds for 25 ms (a period of
+// 40 Hz, so it does not follow the waveform of a low kick) and recovers over
+// the release. It runs at the base rate, where the ceiling is exact: an
+// oversampler's downsampling filter would overshoot it.
+class LimiterFx : public Effect
+{
+public:
+    void prepare(double sampleRate) override;
+    void reset() override
+    {
+        gain_ = 1.0;
+        hold_ = 0;
+    }
+    void set(const double* v) override;
+    void process(float* l, float* r, int n) override;
+    // For the master's Output Clip: the limiter at a fixed ceiling.
+    void setFixed(double ceiling, double releaseMs);
+
+private:
+    double rate_ = 48000.0;
+    double in_ = 1.0, ceiling_ = 1.0, release_ = 0.999;
+    double gain_ = 1.0;
+    int holdSamples_ = 1200, hold_ = 0;
+};
+
 // Where a slot is: the lane's (or the master's) crossovers and the rate.
 struct SlotEnv
 {
     double sampleRate = 48000.0;
     double xoverLow = 150.0, xoverHigh = 2500.0;
+    double tempo = 120.0;
 };
 
 // One effect slot: the type's effect, the band split around it, the
@@ -281,6 +252,9 @@ public:
     void reset();
     // Whether the slot is doing anything (Off and fully bypassed are not).
     bool live() const { return live_; }
+    // How long the slot's output may stay silent while it still holds a
+    // sound, in samples (see Effect::silentHold).
+    int silentHold() const;
     // Processes n samples in place. `hits` are offsets into the n samples, in
     // order, at which the lane fired.
     void process(float* l, float* r, int n, const SlotParams& p, const SlotEnv& e, const int* hits, int hitCount);
@@ -300,6 +274,19 @@ private:
     CompressorFx compressor_;
     TransientFx transient_;
     GateFx gate_;
+    ReverbFx reverb_;
+    DelayFx delay_;
+    WarpFx warp_;
+    SmearFx smear_;
+    RingFx ring_;
+    StereoFx stereo_;
+    UtilityFx utility_;
+    LimiterFx limiter_;
+
+    // The delay memory every type of this slot shares; see Effect::memory.
+    void clearMemory();
+    std::vector<float> memory_;
+    bool memoryDirty_ = false;
 
     Oversampler osL_, osR_;
     Crossover3 xL_, xR_;

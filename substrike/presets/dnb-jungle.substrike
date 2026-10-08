@@ -1,0 +1,36 @@
+[Substrike]
+format=1
+name=Jungle Break Kick
+category=Drum & Bass
+author=Substrike
+tags=jungle, breakbeat, lo-fi
+description=A jungle kick that sounds lifted from an old break: a skin, a room and twelve bits.
+[Parameters]
+l1.on=On
+l1.source=Resonator
+l1.level=0
+l1.resonator.exciter=Mallet
+l1.resonator.model=Membrane
+l1.resonator.tune=75
+l1.resonator.decay=250
+l1.resonator.damping=50
+l1.resonator.hardness=55
+l1.resonator.drop=4
+l5.on=On
+l5.level=-6
+l5.body.pitch_start=320
+l5.body.pitch_end=60
+l5.body.sweep=60
+l5.body.hold=10
+l5.body.decay=150
+master.slot1.type=Reverb
+master.slot1.mix=15
+master.slot1.size=15
+master.slot1.decay=300
+master.slot2.type=Bitcrush
+master.slot2.bits=12
+master.slot2.rate=22000
+master.slot3.type=Filter
+master.slot3.mode=LP 12
+master.slot3.cutoff=7000
+output=0.8

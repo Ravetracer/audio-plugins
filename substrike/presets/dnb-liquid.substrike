@@ -1,0 +1,23 @@
+[Substrike]
+format=1
+name=Liquid Soft
+category=Drum & Bass
+author=Substrike
+tags=liquid, soft, round
+description=A soft, round kick for liquid drum and bass.
+[Parameters]
+l1.body.pitch_start=400
+l1.body.pitch_end=65
+l1.body.sweep=90
+l1.body.hold=20
+l1.body.decay=220
+l3.on=On
+l3.level=-26
+l3.noise.color=Pink
+l3.noise.filter=Band Pass
+l3.noise.cutoff=3000
+l3.noise.decay=25
+l1.slot1.type=Distortion
+l1.slot1.model=Tube
+l1.slot1.drive=12
+output=-3.3

@@ -1,0 +1,28 @@
+[Substrike]
+format=1
+name=Terror Engine
+category=Hardcore
+author=Substrike
+tags=terror, fast, brutal
+description=A brutal, short terror kick for 250 BPM and up: fuzz on fuzz, cut short.
+[Parameters]
+l1.body.pitch_start=4000
+l1.body.pitch_end=60
+l1.body.sweep=250
+l1.body.hold=60
+l1.body.decay=110
+l1.slot1.type=Distortion
+l1.slot1.model=Fuzz
+l1.slot1.drive=100
+l1.slot1.output=-10
+l1.slot2.type=Bitcrush
+l1.slot2.bits=8
+l1.slot2.rate=20000
+l1.slot3.type=Gate
+l1.slot3.mode=Hit
+l1.slot3.hold=110
+l1.slot3.release=10
+master.clip=Hard
+output=11.2
+[Curves]
+l1.pitch=0,1,0;0.005,0.78,0;0.03,0.35,0.3;0.15,0.1,0.2;1,0,0

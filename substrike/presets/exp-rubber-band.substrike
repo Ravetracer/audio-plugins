@@ -1,0 +1,21 @@
+[Substrike]
+format=1
+name=Rubber Band
+category=Experimental
+author=Substrike
+tags=rising, boing, funny
+description=A kick that goes up instead of down: the drawn pitch curve rises, like a plucked rubber band.
+[Parameters]
+l1.body.pitch_start=140
+l1.body.pitch_end=45
+l1.body.sweep=200
+l1.body.hold=60
+l1.body.decay=300
+l1.body.fm_amount=15
+l1.body.fm_ratio=2
+l1.slot1.type=Distortion
+l1.slot1.model=Soft Clip
+l1.slot1.drive=20
+output=-0.7
+[Curves]
+l1.pitch=0,0,0;0.3,0.6,0.5;0.6,0.4,-0.3;1,1,0.4

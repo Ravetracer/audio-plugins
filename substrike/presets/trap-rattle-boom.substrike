@@ -1,0 +1,26 @@
+[Substrike]
+format=1
+name=Rattle Boom
+category=Trap
+author=Substrike
+tags=sub, folded, aggressive
+description=An aggressive boom whose tail rattles: a wavefolder on the mids only, the sub left clean. Root C1.
+[Parameters]
+root_note=C1
+l1.body.pitch_start=120
+l1.body.pitch_end=32.7
+l1.body.sweep=50
+l1.body.key_track=100
+l1.body.hold=100
+l1.body.decay=1300
+l1.slot1.type=Wavefolder
+l1.slot1.band=Mid+High
+l1.slot1.drive=18
+l1.slot1.shape=40
+l1.slot2.type=Distortion
+l1.slot2.band=Mid+High
+l1.slot2.model=Fuzz
+l1.slot2.drive=30
+l1.slot2.output=-4
+l1.xover_low=90
+output=-5.5

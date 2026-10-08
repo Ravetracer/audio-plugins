@@ -1,0 +1,23 @@
+[Substrike]
+format=1
+name=Stutter
+category=Experimental
+author=Substrike
+tags=stutter, delay, glitch
+description=A kick that stutters: thirty-second-note echoes at high feedback, cut off by a gate after a beat.
+[Parameters]
+l1.body.pitch_start=300
+l1.body.pitch_end=52
+l1.body.sweep=70
+l1.body.hold=20
+l1.body.decay=180
+l1.slot1.type=Delay
+l1.slot1.mix=80
+l1.slot1.sync=1/32
+l1.slot1.feedback=75
+l1.slot1.color=-20
+l1.slot2.type=Gate
+l1.slot2.mode=Hit
+l1.slot2.hold=400
+l1.slot2.release=30
+output=-1.1

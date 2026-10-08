@@ -7,6 +7,7 @@
 #include <memory>
 
 #include "Params.h"
+#include "Player.h"
 #include "util/Path.h"
 
 namespace substrike {
@@ -17,13 +18,13 @@ HitRender renderHit(const std::vector<double>& values, const std::array<dsp::Cur
     HitRender out;
     out.sampleRate = sampleRate;
     // The engine is large (voices, chains, oversamplers): keep it off the stack.
-    auto engine = std::make_unique<dsp::Engine>();
-    dsp::EngineParams p = buildEngineParams(values.data());
-    p.tapLanes = true;
+    auto engine = std::make_unique<Player>();
+    engine->setTapLanes(true);
+    engine->setValues(values.data());
     engine->prepare(sampleRate);
     for (int i = 0; i < dsp::kNumCurves; ++i)
         engine->curve(i) = curves[static_cast<size_t>(i)];
-    engine->noteOn(p.rootNote, 1.0, p);
+    engine->noteOn(engine->rootNote(), 1.0);
 
     constexpr int kBlock = 256;
     const size_t limit = static_cast<size_t>(std::max(1.0, maxSeconds * sampleRate));
@@ -36,7 +37,7 @@ HitRender renderHit(const std::vector<double>& values, const std::array<dsp::Cur
     while (done < limit)
     {
         const int n = static_cast<int>(std::min<size_t>(kBlock, limit - done));
-        engine->process(buses, n, p);
+        engine->process(buses, n);
         out.left.insert(out.left.end(), buses[0].l, buses[0].l + n);
         out.right.insert(out.right.end(), buses[0].r, buses[0].r + n);
         for (int l = 0; l < dsp::kNumLanes; ++l)

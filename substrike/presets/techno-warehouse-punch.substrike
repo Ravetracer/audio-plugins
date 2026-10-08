@@ -1,0 +1,31 @@
+[Substrike]
+format=1
+name=Warehouse Punch
+category=Techno
+author=Substrike
+tags=punchy, classic, drum machine
+description=A drum-machine style kick with a triangle body, a short blip on the attack and a little tube warmth.
+[Parameters]
+l1.body.pitch_start=672
+l1.body.pitch_end=52
+l1.body.sweep=90
+l1.body.sweep_curve=70
+l1.body.hold=25
+l1.body.decay=320
+l1.body.wave=Triangle
+l1.body.shape=20
+l2.on=On
+l2.level=-4
+l2.click.type=Blip
+l2.click.decay=2.5
+l2.click.pitch=2200
+l2.click.sweep=2
+l2.click.filter=Off
+l1.slot1.type=Distortion
+l1.slot1.model=Tube
+l1.slot1.drive=25
+l1.slot1.tone=9000
+l1.slot2.type=Transient
+l1.slot2.attack=22
+l1.slot2.sustain=-10
+output=-5.5

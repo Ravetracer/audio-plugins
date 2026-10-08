@@ -46,6 +46,16 @@ void CurveEditor::setLane(int lane)
     }
 }
 
+void CurveEditor::setEnv(int env)
+{
+    if (env != env_)
+    {
+        env_ = env;
+        hover_ = drag_ = {};
+        repaint();
+    }
+}
+
 void CurveEditor::setTab(int which)
 {
     if (which != tab_)
@@ -60,7 +70,12 @@ Rect CurveEditor::plot() const { return {bounds_.x + 52, bounds_.y + 28, bounds_
 
 Rect CurveEditor::tabRect(int i) const { return {bounds_.right() - 118 + i * 56.0f, bounds_.y, 54, 20}; }
 
-int CurveEditor::curveIndex() const { return dsp::curveIndex(lane_, tab_ == 0 ? dsp::PitchCurve : dsp::AmpCurve); }
+int CurveEditor::curveIndex() const
+{
+    if (env_ >= 0)
+        return dsp::modEnvCurveIndex(env_);
+    return dsp::curveIndex(lane_, tab_ == 0 ? dsp::PitchCurve : dsp::AmpCurve);
+}
 
 const dsp::Curve& CurveEditor::curve() const { return ctx_.controller().curve(curveIndex()); }
 
@@ -77,6 +92,8 @@ double CurveEditor::param(uint32_t field) const
 
 double CurveEditor::bend() const
 {
+    if (env_ >= 0)
+        return 0.0;
     return param(tab_ == 0 ? pid::BodySweepCurve : pid::BodyDecayCurve) / 100.0;
 }
 
@@ -114,12 +131,14 @@ void CurveEditor::handlePos(int i, float& x, float& y) const
 
 std::string CurveEditor::xLabel(double x) const
 {
+    if (env_ >= 0)
+        return msText(x * ctx_.plain(ctx_.index(pid::modEnv(env_, pid::EnvTime))));
     return msText(x * param(tab_ == 0 ? pid::BodySweep : pid::BodyDecay));
 }
 
 std::string CurveEditor::yLabel(double y) const
 {
-    if (tab_ == 1)
+    if (tab_ == 1 || env_ >= 0)
     {
         char buf[16];
         std::snprintf(buf, sizeof(buf), "%.0f %%", y * 100.0);
@@ -133,7 +152,7 @@ std::string CurveEditor::yLabel(double y) const
 
 CurveEditor::Target CurveEditor::hitAt(float x, float y) const
 {
-    for (int i = 0; i < 2; ++i)
+    for (int i = 0; i < 2 && env_ < 0; ++i)
         if (tabRect(i).contains(x, y))
             return {Hit::Tab, i};
     const dsp::Curve& c = curve();
@@ -169,12 +188,13 @@ void CurveEditor::paint(cairo_t* cr)
 {
     const Rect p = plot();
     const dsp::Curve& c = curve();
-    const Color line = tab_ == 0 ? theme::accent : theme::amp;
-    const Color bright = tab_ == 0 ? theme::accentBright : theme::amp.mix(Color(1, 1, 1, 1), 0.35f);
+    const bool violet = tab_ == 0 || env_ >= 0;
+    const Color line = violet ? theme::accent : theme::amp;
+    const Color bright = violet ? theme::accentBright : theme::amp.mix(Color(1, 1, 1, 1), 0.35f);
 
     // Tabs
     setFont(cr, 10.5f, true);
-    for (int i = 0; i < 2; ++i)
+    for (int i = 0; i < 2 && env_ < 0; ++i)
     {
         const Rect t = tabRect(i);
         const bool on = i == tab_;
@@ -198,7 +218,9 @@ void CurveEditor::paint(cairo_t* cr)
         cairo_move_to(cr, p.x, gy);
         cairo_line_to(cr, p.right(), gy);
         cairo_stroke(cr);
-        drawText(cr, xLabel(f), {gx - 30, p.bottom() + 3, 60, 14},
+        // The end labels sit inside the plot's width, the others centred.
+        const float lx = i == 0 ? gx : (i == 4 ? gx - 60 : gx - 30);
+        drawText(cr, xLabel(f), {lx, p.bottom() + 3, 60, 14},
                  i == 0 ? Align::Left : (i == 4 ? Align::Right : Align::Center), theme::textFaint);
         if (i == 0 || i == 2 || i == 4)
             drawText(cr, yLabel(f), {bounds_.x, gy - 7, 46, 14}, Align::Right, theme::textFaint);
@@ -265,7 +287,7 @@ void CurveEditor::paint(cairo_t* cr)
     }
 
     // What the Pitch Link means for this curve.
-    if (tab_ == 0)
+    if (tab_ == 0 && env_ < 0)
     {
         const int link = static_cast<int>(std::lround(param(pid::LPitchLink))) - 1;
         if (link >= 0 && link != lane_)
@@ -288,8 +310,10 @@ void CurveEditor::paint(cairo_t* cr)
     else
     {
         setFont(cr, 10.5f);
-        drawText(cr, tab_ == 0 ? "Pitch over Sweep Time" : "Level over Body Decay", {bounds_.x, bounds_.y, 260, 20},
-                 Align::Left, theme::textFaint);
+        const std::string caption = env_ >= 0 ? "Env " + std::to_string(env_ + 1) + " over its Time"
+                                    : tab_ == 0 ? "Pitch over Sweep Time"
+                                                : "Level over Body Decay";
+        drawText(cr, caption, {bounds_.x, bounds_.y, 260, 20}, Align::Left, theme::textFaint);
     }
 }
 

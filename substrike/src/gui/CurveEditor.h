@@ -7,7 +7,8 @@
 
 namespace substrike::gui {
 
-// Draws and edits one lane's Body pitch or amplitude curve. The curve is
+// Draws and edits one lane's Body pitch or amplitude curve, or a modulation
+// envelope's curve (setEnv). The curve is
 // shown scaled by its macros -- Pitch Start/End over Sweep Time for pitch,
 // the level over Body Decay for amplitude -- and bent by the Sweep or Decay
 // Curve macro, so what is drawn is what plays.
@@ -25,6 +26,9 @@ public:
     int lane() const { return lane_; }
     void setTab(int which);
     int tab() const { return tab_; }
+    // Edits modulation envelope `env` (0-3) instead, over its Time; -1 goes
+    // back to the lane's curves.
+    void setEnv(int env);
     // A tab was clicked; the editor rebuilds the macro knobs for it.
     std::function<void(int)> onTab;
 
@@ -69,6 +73,7 @@ private:
     ParamContext& ctx_;
     int lane_ = 0;
     int tab_ = 0;
+    int env_ = -1;
     Target hover_;
     Target drag_;
     float lastX_ = 0, lastY_ = 0;

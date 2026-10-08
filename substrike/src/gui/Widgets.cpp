@@ -9,6 +9,38 @@ namespace substrike::gui {
 
 // ------------------------------------------------------------ ParamContext
 
+bool ParamContext::modRange(int idx, double& lo, double& hi) const
+{
+    const int dest = table_.destinationOf(idx);
+    lo = hi = 0.0;
+    if (dest <= 0)
+        return false;
+    bool any = false;
+    for (int r = 0; r < pid::kNumRoutes; ++r)
+    {
+        const int src = static_cast<int>(std::lround(value(index(pid::route(r, pid::RSource)))));
+        if (src <= 0 || std::lround(value(index(pid::route(r, pid::RDest)))) != dest)
+            continue;
+        const int a = index(pid::route(r, pid::RAmount));
+        const double amount = ParamTable::toPlain(table_.def(a), value(a)) / 100.0;
+        const ModSource s = static_cast<ModSource>(src);
+        const bool bipolar = s == ModSource::Note || s == ModSource::Random ||
+                             (src >= static_cast<int>(ModSource::Lfo1) && src < static_cast<int>(ModSource::Env1));
+        if (bipolar)
+        {
+            lo -= std::fabs(amount);
+            hi += std::fabs(amount);
+        }
+        else
+        {
+            lo += std::min(0.0, amount);
+            hi += std::max(0.0, amount);
+        }
+        any = true;
+    }
+    return any;
+}
+
 void ParamContext::begin(int idx)
 {
     ++openGestures_;
@@ -418,6 +450,19 @@ void Knob::paint(cairo_t* cr)
         setColor(cr, lit ? (hot ? theme::accentBright : theme::accent) : theme::outline);
         cairo_move_to(cr, cx + std::cos(a) * rIn, cy + std::sin(a) * rIn);
         cairo_line_to(cr, cx + std::cos(a) * rOut, cy + std::sin(a) * rOut);
+        cairo_stroke(cr);
+    }
+    // The matrix's reach, as a teal arc just outside the ring.
+    double modLo, modHi;
+    if (ctx_.modRange(param_, modLo, modHi))
+    {
+        const double from = std::clamp(v + modLo, 0.0, 1.0), to = std::clamp(v + modHi, 0.0, 1.0);
+        setColor(cr, theme::amp);
+        cairo_set_line_width(cr, 2.0);
+        if (to - from > 1e-3)
+            cairo_arc(cr, cx, cy, rOut + 2.5, a0 + (a1 - a0) * from, a0 + (a1 - a0) * to);
+        else
+            cairo_arc(cr, cx + std::cos(av) * (rOut + 2.5), cy + std::sin(av) * (rOut + 2.5), 1.5, 0, 2 * M_PI);
         cairo_stroke(cr);
     }
     cairo_set_line_cap(cr, CAIRO_LINE_CAP_BUTT);

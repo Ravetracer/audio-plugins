@@ -46,6 +46,11 @@ public:
 
     Controller& controller() { return ctl_; }
 
+    // How far the matrix can move a parameter, in stored units relative to
+    // its value: the sum of the routes on it, a bipolar source counted both
+    // ways. False when no route is on it.
+    bool modRange(int idx, double& lo, double& hi) const;
+
     // Called after a completed gesture.
     std::function<void()> onGestureEnd;
     // Called for every value change made through the GUI.

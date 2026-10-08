@@ -1,0 +1,28 @@
+[Substrike]
+format=1
+name=Cardboard Box
+category=Hip Hop
+author=Substrike
+tags=boxy, lo-fi, quirky
+description=A boxy, papery kick: a damped bar resonator and a body that ends almost before it begins.
+[Parameters]
+l1.body.pitch_start=190
+l1.body.pitch_end=70
+l1.body.sweep=40
+l1.body.hold=10
+l1.body.decay=140
+l4.on=On
+l4.level=-4
+l4.resonator.exciter=Impulse
+l4.resonator.model=Bar
+l4.resonator.modes=4
+l4.resonator.tune=140
+l4.resonator.decay=90
+l4.resonator.damping=85
+l4.resonator.brightness=20
+master.slot1.type=EQ
+master.slot1.low=-2
+master.slot1.mid=4
+master.slot1.mid_freq=500
+master.slot1.mid_q=2
+output=-3.6

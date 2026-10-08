@@ -6,8 +6,13 @@
 //   substrike-render --plugin build/Substrike.clap --out kick.wav
 //   substrike-render --param "L1 Pitch Start=1.2 kHz" --param "L1 Body Decay=1.5 s"
 //   substrike-render --param "L2 On=On" --param "L2 Output=Aux" --aux 2
-//   substrike-render --hits 4 --bpm 140 --seconds 2 --key 38
+//   substrike-render --hits 4 --bpm 140 --seconds 2 --key 38 --lead 1000   (the first hit 1000 samples in)
 //   substrike-render --list-params
+//   substrike-render --state preset.substrike --save-state out.substrike
+//   substrike-render --preset techno-concrete        (a factory preset, by load key)
+//   substrike-render --preset a --then-preset b --at 9600   (switch presets mid-render)
+//   substrike-render --list-presets
+//   substrike-render --all-presets --outdir renders --seconds 4
 //   substrike-render --selftest
 
 #include <algorithm>
@@ -17,6 +22,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <functional>
 #include <string>
 #include <vector>
 
@@ -250,9 +256,17 @@ struct Render
     float peak = 0.0f;
 };
 
+// A tempo for the host's transport in render(); 0 leaves the transport out.
+double gTransportTempo = 0.0;
+
+// Called before the block that starts at `pos`, to change the plugin
+// between blocks (a preset switch, as a browser does it).
+using BetweenBlocks = std::function<void(const clap_plugin_t*, uint32_t pos)>;
+
 // Plays `events` (note events with absolute sample times) over `frames`
 // samples in blocks of `block`.
-Render render(const clap_plugin_t* p, double rate, uint32_t block, uint32_t frames, const EventList& events)
+Render render(const clap_plugin_t* p, double rate, uint32_t block, uint32_t frames, const EventList& events,
+              const BetweenBlocks& between = {})
 {
     Render r;
     r.left.assign(frames, 0.0f);
@@ -272,6 +286,8 @@ Render render(const clap_plugin_t* p, double rate, uint32_t block, uint32_t fram
     for (uint32_t pos = 0; pos < frames; pos += block)
     {
         const uint32_t n = std::min(block, frames - pos);
+        if (between)
+            between(p, pos);
         EventList blockEvents;
         while (next < events.events.size() && events.at(static_cast<uint32_t>(next))->time < pos + n)
         {
@@ -296,6 +312,15 @@ Render render(const clap_plugin_t* p, double rate, uint32_t block, uint32_t fram
         const clap_input_events_t in = blockEvents.input();
         proc.in_events = &in;
         proc.out_events = &kOutEvents;
+        clap_event_transport_t transport{};
+        if (gTransportTempo > 0.0)
+        {
+            transport.header.size = sizeof(transport);
+            transport.header.type = CLAP_EVENT_TRANSPORT;
+            transport.flags = CLAP_TRANSPORT_HAS_TEMPO | CLAP_TRANSPORT_IS_PLAYING;
+            transport.tempo = gTransportTempo;
+            proc.transport = &transport;
+        }
         status = p->process(p, &proc);
         if (status == CLAP_PROCESS_ERROR)
         {
@@ -429,6 +454,151 @@ float maxStep(const std::vector<float>& x, size_t from, size_t to)
     for (size_t i = std::max<size_t>(from, 1); i < std::min(to, x.size()); ++i)
         m = std::max(m, std::fabs(x[i] - x[i - 1]));
     return m;
+}
+
+// A state as text, through the plugin's state extension.
+bool loadStateText(const clap_plugin_t* pl, const std::string& text)
+{
+    struct Reader
+    {
+        const std::string* s;
+        size_t pos;
+    } reader{&text, 0};
+    clap_istream_t is{&reader, [](const clap_istream_t* st, void* buf, uint64_t size) -> int64_t {
+                          auto* r = static_cast<Reader*>(st->ctx);
+                          const size_t n = std::min<size_t>(size, r->s->size() - r->pos);
+                          std::memcpy(buf, r->s->data() + r->pos, n);
+                          r->pos += n;
+                          return static_cast<int64_t>(n);
+                      }};
+    const auto* st = static_cast<const clap_plugin_state_t*>(pl->get_extension(pl, CLAP_EXT_STATE));
+    return st->load(pl, &is);
+}
+
+std::string saveStateText(const clap_plugin_t* pl)
+{
+    std::string blob;
+    clap_ostream_t os{&blob, [](const clap_ostream_t* st, const void* buf, uint64_t size) -> int64_t {
+                          static_cast<std::string*>(st->ctx)->append(static_cast<const char*>(buf), size);
+                          return static_cast<int64_t>(size);
+                      }};
+    const auto* st = static_cast<const clap_plugin_state_t*>(pl->get_extension(pl, CLAP_EXT_STATE));
+    st->save(pl, &os);
+    return blob;
+}
+
+// ---------------------------------------------------------------- presets
+
+// A preset as the plugin's discovery provider describes it.
+struct FoundPreset
+{
+    std::string name, loadKey, description;
+    std::vector<std::string> features;
+    bool factory = false;
+};
+
+// Asks the plugin's preset discovery for its factory presets, the way a
+// host's indexer does.
+std::vector<FoundPreset> discoverPresets(const Module& m, std::string* error = nullptr)
+{
+    std::vector<FoundPreset> out;
+    const auto* factory = static_cast<const clap_preset_discovery_factory_t*>(
+        m.entry->get_factory(CLAP_PRESET_DISCOVERY_FACTORY_ID));
+    if (!factory || factory->count(factory) < 1)
+    {
+        if (error)
+            *error = "no preset discovery factory";
+        return out;
+    }
+    struct Indexer
+    {
+        std::vector<std::pair<uint32_t, std::string>> locations;
+        int filetypes = 0;
+    } ix;
+    clap_preset_discovery_indexer_t indexer{};
+    indexer.clap_version = CLAP_VERSION;
+    indexer.name = "substrike-render";
+    indexer.indexer_data = &ix;
+    indexer.declare_filetype = [](const clap_preset_discovery_indexer_t* i, const clap_preset_discovery_filetype_t*) {
+        ++static_cast<Indexer*>(i->indexer_data)->filetypes;
+        return true;
+    };
+    indexer.declare_location = [](const clap_preset_discovery_indexer_t* i, const clap_preset_discovery_location_t* l) {
+        static_cast<Indexer*>(i->indexer_data)->locations.emplace_back(l->kind, l->location ? l->location : "");
+        return true;
+    };
+    indexer.declare_soundpack = [](const clap_preset_discovery_indexer_t*, const clap_preset_discovery_soundpack_t*) {
+        return true;
+    };
+    indexer.get_extension = [](const clap_preset_discovery_indexer_t*, const char*) -> const void* { return nullptr; };
+
+    const auto* desc = factory->get_descriptor(factory, 0);
+    const clap_preset_discovery_provider_t* provider = factory->create(factory, &indexer, desc->id);
+    if (!provider || !provider->init(provider))
+    {
+        if (error)
+            *error = "the preset provider did not start";
+        return out;
+    }
+    struct Receiver
+    {
+        std::vector<FoundPreset>* out;
+        std::string error;
+    } rx{&out, {}};
+    clap_preset_discovery_metadata_receiver_t r{};
+    r.receiver_data = &rx;
+    r.on_error = [](const clap_preset_discovery_metadata_receiver_t* x, int32_t, const char* msg) {
+        static_cast<Receiver*>(x->receiver_data)->error = msg ? msg : "error";
+    };
+    r.begin_preset = [](const clap_preset_discovery_metadata_receiver_t* x, const char* name, const char* key) {
+        FoundPreset f;
+        f.name = name ? name : "";
+        f.loadKey = key ? key : "";
+        static_cast<Receiver*>(x->receiver_data)->out->push_back(f);
+        return true;
+    };
+    r.add_plugin_id = [](const clap_preset_discovery_metadata_receiver_t*, const clap_universal_plugin_id_t*) {};
+    r.set_soundpack_id = [](const clap_preset_discovery_metadata_receiver_t*, const char*) {};
+    r.set_flags = [](const clap_preset_discovery_metadata_receiver_t* x, uint32_t flags) {
+        static_cast<Receiver*>(x->receiver_data)->out->back().factory =
+            (flags & CLAP_PRESET_DISCOVERY_IS_FACTORY_CONTENT) != 0;
+    };
+    r.add_creator = [](const clap_preset_discovery_metadata_receiver_t*, const char*) {};
+    r.set_description = [](const clap_preset_discovery_metadata_receiver_t* x, const char* d) {
+        static_cast<Receiver*>(x->receiver_data)->out->back().description = d ? d : "";
+    };
+    r.set_timestamps = [](const clap_preset_discovery_metadata_receiver_t*, clap_timestamp, clap_timestamp) {};
+    r.add_feature = [](const clap_preset_discovery_metadata_receiver_t* x, const char* f) {
+        static_cast<Receiver*>(x->receiver_data)->out->back().features.push_back(f ? f : "");
+    };
+    r.add_extra_info = [](const clap_preset_discovery_metadata_receiver_t*, const char*, const char*) {};
+    for (const auto& [kind, location] : ix.locations)
+        if (kind == CLAP_PRESET_DISCOVERY_LOCATION_PLUGIN)
+            provider->get_metadata(provider, kind, nullptr, &r);
+    provider->destroy(provider);
+    if (error)
+        *error = ix.filetypes != 1 ? "no file type declared" : rx.error;
+    return out;
+}
+
+// Loads a factory preset through the plugin's preset-load extension.
+bool loadFactoryPreset(const clap_plugin_t* p, const std::string& key)
+{
+    const auto* ext = static_cast<const clap_plugin_preset_load_t*>(p->get_extension(p, CLAP_EXT_PRESET_LOAD));
+    return ext && ext->from_location(p, CLAP_PRESET_DISCOVERY_LOCATION_PLUGIN, nullptr, key.c_str());
+}
+
+bool readTextFile(const std::string& path, std::string& text)
+{
+    std::FILE* f = std::fopen(path.c_str(), "rb");
+    if (!f)
+        return false;
+    char buf[4096];
+    size_t n;
+    while ((n = std::fread(buf, 1, sizeof(buf), f)) > 0)
+        text.append(buf, n);
+    std::fclose(f);
+    return true;
 }
 
 // ------------------------------------------------------------- self-test
@@ -694,32 +864,8 @@ int runSelfTest(const Module& m)
     // --- curves are state: they change the sound, save, load, and a state
     // without them goes back to the default curves
     {
-        auto loadText = [](const clap_plugin_t* pl, const std::string& text) {
-            struct Reader
-            {
-                const std::string* s;
-                size_t pos;
-            } reader{&text, 0};
-            clap_istream_t is{&reader, [](const clap_istream_t* st, void* buf, uint64_t size) -> int64_t {
-                                  auto* r = static_cast<Reader*>(st->ctx);
-                                  const size_t n = std::min<size_t>(size, r->s->size() - r->pos);
-                                  std::memcpy(buf, r->s->data() + r->pos, n);
-                                  r->pos += n;
-                                  return static_cast<int64_t>(n);
-                              }};
-            const auto* st = static_cast<const clap_plugin_state_t*>(pl->get_extension(pl, CLAP_EXT_STATE));
-            return st->load(pl, &is);
-        };
-        auto saveText = [](const clap_plugin_t* pl) {
-            std::string blob;
-            clap_ostream_t os{&blob, [](const clap_ostream_t* st, const void* buf, uint64_t size) -> int64_t {
-                                  static_cast<std::string*>(st->ctx)->append(static_cast<const char*>(buf), size);
-                                  return static_cast<int64_t>(size);
-                              }};
-            const auto* st = static_cast<const clap_plugin_state_t*>(pl->get_extension(pl, CLAP_EXT_STATE));
-            st->save(pl, &os);
-            return blob;
-        };
+        auto loadText = loadStateText;
+        auto saveText = saveStateText;
         EventList one;
         one.add(noteOn(lead, 36, 1.0));
         p = createPlugin(m);
@@ -1007,8 +1153,9 @@ int runSelfTest(const Module& m)
 
     // --- every type's letters read back what they show
     {
-        static const char* kTypes[] = {"Distortion", "Clipper", "Wavefolder", "Bitcrush", "Filter",
-                                       "EQ",         "Compressor", "Transient", "Gate"};
+        static const char* kTypes[] = {"Distortion", "Clipper", "Wavefolder", "Bitcrush", "Filter", "EQ",
+                                       "Compressor", "Transient", "Gate",  "Reverb",   "Delay",  "Warp",
+                                       "Smear",      "Ring Mod",  "Stereo", "Utility", "Limiter"};
         bool ok = true;
         for (const char* type : kTypes)
         {
@@ -1099,8 +1246,9 @@ int runSelfTest(const Module& m)
     // --- every type at its defaults and at both ends of every letter, on a
     //     full band and on a split one: finite, bounded, asleep at the end
     {
-        static const char* kTypes[] = {"Distortion", "Clipper", "Wavefolder", "Bitcrush", "Filter",
-                                       "EQ",         "Compressor", "Transient", "Gate"};
+        static const char* kTypes[] = {"Distortion", "Clipper", "Wavefolder", "Bitcrush", "Filter", "EQ",
+                                       "Compressor", "Transient", "Gate",  "Reverb",   "Delay",  "Warp",
+                                       "Smear",      "Ring Mod",  "Stereo", "Utility", "Limiter"};
         int bad = 0, runs = 0;
         for (const char* type : kTypes)
             for (const char* band : {"Full", "Low+Mid"})
@@ -1116,13 +1264,22 @@ int runSelfTest(const Module& m)
                             set.add(paramValue(id, *end == '0' ? 0.0 : 1.0));
                         flushParams(p, set);
                     }
-                    const Render r = render(p, rate, 512, static_cast<uint32_t>(4.0 * rate), hit);
+                    // The time effects' tails take longer, the master's
+                    // copy of the effect included.
+                    const bool echoes = std::strcmp(type, "Delay") == 0 || std::strcmp(type, "Warp") == 0;
+                    const bool timed = echoes || std::strcmp(type, "Reverb") == 0;
+                    const Render r = render(p, rate, 512, static_cast<uint32_t>((timed ? 12.0 : 4.0) * rate), hit);
                     p->destroy(p);
                     ++runs;
                     // Every output and makeup gain is at its top at "1", on
                     // the lane and on the master, so only the other two
-                    // settings have a level to keep.
-                    if (r.sawNonFinite || (*end != '1' && r.peak > 2.0f) || !r.sleptAtEnd)
+                    // settings have a level to keep. A delay adds its echoes
+                    // to the hit, on the lane and again on the master, so it
+                    // may reach twice as high. At the top of their ranges the
+                    // delays and the reverb ring for longer than the render.
+                    const bool rings = *end == '1' && timed;
+                    const float limit = echoes ? 4.0f : 2.0f;
+                    if (r.sawNonFinite || (*end != '1' && r.peak > limit) || (!r.sleptAtEnd && !rings))
                     {
                         ++bad;
                         std::printf("    %s on %s, letters at %s: peak %g%s%s\n", type, band, *end ? end : "defaults",
@@ -1334,6 +1491,553 @@ int runSelfTest(const Module& m)
         }
     }
 
+    // ================================================ time effects and the rest
+
+    // A single-sample click, so what comes out is the chain's own response.
+    const std::vector<std::string> impulse = {"Output=0", "L1 Source=Click", "L1 Click Type=Impulse",
+                                              "L1 Click Filter=Off"};
+    auto plus = [](std::vector<std::string> v, std::initializer_list<std::string> extra) {
+        v.insert(v.end(), extra.begin(), extra.end());
+        return v;
+    };
+    // The first sample at or after `from` whose magnitude passes `level`.
+    auto onset = [](const std::vector<float>& x, size_t from, float level) -> long {
+        for (size_t i = from; i < x.size(); ++i)
+            if (std::fabs(x[i]) >= level)
+                return static_cast<long>(i);
+        return -1;
+    };
+    const Render click = rendered(impulse, hit);
+    const long clickAt = onset(click.left, 0, 1e-6f);
+    const float clickPeak = click.peak;
+
+    // --- Delay: the hit stays, the echoes follow at the time, the next one
+    //     down by the feedback; Sync follows the host's tempo
+    {
+        const Render r = rendered(plus(impulse, {"L1 Slot 1 Type=Delay", "L1 Slot 1 Time=100", "L1 Slot 1 Feedback=50",
+                                                 "L1 Slot 1 Color=0"}),
+                                  hit, 1.0);
+        const size_t d = 4800, at = static_cast<size_t>(clickAt);
+        bool dry = true;
+        for (size_t i = 0; i < at + d - 10; ++i)
+            dry &= r.left[i] == click.left[i];
+        const double first = peakDb(r.left, at + d - 10, at + d + 10) - 20.0 * std::log10(clickPeak);
+        const double second = peakDb(r.left, at + 2 * d - 10, at + 2 * d + 10) - 20.0 * std::log10(clickPeak);
+        check(dry && std::fabs(first) < 0.01 && std::fabs(second + 6.02) < 0.2 &&
+                  onset(r.left, at + 10, clickPeak * 0.5f) == static_cast<long>(at + d),
+              "Delay 100 ms: the hit untouched, an echo at +4800 samples (" + std::to_string(first) +
+                  " dB) and one at 50 % feedback (" + std::to_string(second) + " dB)");
+
+        gTransportTempo = 140.0;
+        const Render synced = rendered(plus(impulse, {"L1 Slot 1 Type=Delay", "L1 Slot 1 Sync=1/8",
+                                                      "L1 Slot 1 Feedback=0", "L1 Slot 1 Color=0"}),
+                                       hit, 1.0);
+        gTransportTempo = 0.0;
+        const long echo = onset(synced.left, at + 10, clickPeak * 0.5f);
+        check(echo == static_cast<long>(at + std::lround(0.5 * 60.0 / 140.0 * rate)),
+              "Delay synced to 1/8 at 140 BPM echoes after " + std::to_string(echo - static_cast<long>(at)) +
+                  " samples");
+
+        // A long gap between echoes is not the end of the tail.
+        const std::vector<std::string> slow = plus(impulse, {"L1 Slot 1 Type=Delay", "L1 Slot 1 Time=600",
+                                                             "L1 Slot 1 Feedback=40", "L1 Slot 1 Color=-50"});
+        const Render a = rendered(slow, hit, 8.0), b = rendered(slow, hit, 8.0, 37);
+        const size_t e3 = at + 3 * 28800;
+        check(peakDb(a.left, e3 - 200, e3 + 200) > -40.0 && a.sleptAtEnd && a.left == b.left,
+              "a 600 ms delay keeps ringing across its gaps, then sleeps; the same at a block size of 37");
+
+        const Render pp = rendered(plus(impulse, {"L1 Slot 1 Type=Delay", "L1 Slot 1 Time=100",
+                                                  "L1 Slot 1 Feedback=50", "L1 Slot 1 Color=0",
+                                                  "L1 Slot 1 Ping-Pong=100"}),
+                                   hit, 1.0);
+        check(peakDb(pp.left, at + d - 10, at + d + 10) > -1.0 && peakDb(pp.right, at + d - 10, at + d + 10) < -100.0 &&
+                  peakDb(pp.right, at + 2 * d - 10, at + 2 * d + 10) > -7.0 &&
+                  peakDb(pp.left, at + 2 * d - 10, at + 2 * d + 10) < -100.0,
+              "Ping-Pong 100 %: the first echo on the left, the second on the right");
+    }
+
+    // --- Reverb: decays at the time it is given, stereo by Width
+    {
+        auto level = [&](const Render& r, double t0, double t1) {
+            const size_t a = static_cast<size_t>(clickAt) + static_cast<size_t>(t0 * rate);
+            const size_t b = static_cast<size_t>(clickAt) + static_cast<size_t>(t1 * rate);
+            double e = 0.0;
+            for (size_t i = a; i < b; ++i)
+                e += static_cast<double>(r.left[i]) * r.left[i] + static_cast<double>(r.right[i]) * r.right[i];
+            return 10.0 * std::log10(e / static_cast<double>(b - a) + 1e-300);
+        };
+        const Render r = rendered(plus(impulse, {"L1 Slot 1 Type=Reverb", "L1 Slot 1 Decay=1000",
+                                                 "L1 Slot 1 Damping=20000"}),
+                                  hit, 2.0);
+        // 60 dB per second: 18 dB between 0.1 s and 0.4 s.
+        const double fall = level(r, 0.1, 0.15) - level(r, 0.4, 0.45);
+        check(std::fabs(fall / 18.0 - 1.0) < 0.2, "Reverb at 1 s falls " + std::to_string(fall) + " dB from 0.1 s to 0.4 s");
+        double side = 0.0;
+        for (size_t i = 0; i < r.left.size(); ++i)
+            side = std::max(side, static_cast<double>(std::fabs(r.left[i] - r.right[i])));
+        const Render mono = rendered(plus(impulse, {"L1 Slot 1 Type=Reverb", "L1 Slot 1 Width=0"}), hit, 2.0);
+        check(side > 0.01 && mono.left == mono.right && r.sleptAtEnd,
+              "a centred click comes out of the reverb wide, and mono at Width 0; it sleeps after the tail");
+
+        const Render pre = rendered(plus(impulse, {"L1 Slot 1 Type=Reverb", "L1 Slot 1 Pre-Delay=50"}), hit, 2.0);
+        const long first = onset(pre.left, 0, 1e-6f);
+        check(first >= clickAt + 2400, "Pre-Delay 50 ms: nothing for the first " +
+                                             std::to_string(first - clickAt) + " samples");
+
+        // The hit keeps about its level through a full-wet reverb.
+        const Render kick = rendered({"Output=0", "L1 Slot 1 Type=Reverb"}, hit, 3.0);
+        double eIn = 0.0, eOut = 0.0;
+        for (size_t i = 0; i < kick.left.size(); ++i)
+        {
+            eIn += 2.0 * static_cast<double>(unity.left[std::min(i, unity.left.size() - 1)]) *
+                   (i < unity.left.size() ? unity.left[i] : 0.0f);
+            eOut += static_cast<double>(kick.left[i]) * kick.left[i] + static_cast<double>(kick.right[i]) * kick.right[i];
+        }
+        const double gain = 10.0 * std::log10(eOut / eIn);
+        check(std::fabs(gain) < 6.0, "the default kick through the default reverb keeps its energy within 6 dB (" +
+                                         std::to_string(gain) + " dB)");
+    }
+
+    // --- Smear spreads a hit without a tail; it is an allpass, so the
+    //     energy stays
+    {
+        const Render r = rendered(plus(impulse, {"L1 Slot 1 Type=Smear", "L1 Slot 1 Time=10",
+                                                 "L1 Slot 1 Stages=16"}),
+                                  hit, 1.0);
+        double eIn = 0.0, eOut = 0.0;
+        for (size_t i = 0; i < r.left.size(); ++i)
+        {
+            eIn += static_cast<double>(click.left[i]) * click.left[i];
+            eOut += static_cast<double>(r.left[i]) * r.left[i];
+        }
+        check(std::fabs(10.0 * std::log10(eOut / eIn)) < 0.05 && r.peak < 0.5f * clickPeak && r.sleptAtEnd,
+              "Smear keeps the energy (" + std::to_string(10.0 * std::log10(eOut / eIn)) +
+                  " dB), lowers the peak to " + std::to_string(r.peak / clickPeak) + " of it, and stops");
+    }
+
+    // --- Ring Mod and the shifts on a held 48 Hz body
+    {
+        const size_t a = static_cast<size_t>(0.30 * rate), b = static_cast<size_t>(0.45 * rate);
+        auto body = [&](const char* mode) {
+            return rendered({"Output=0", "L1 Body Hold=1 s", "L1 Slot 1 Type=Ring Mod",
+                             std::string("L1 Slot 1 Mode=") + mode, "L1 Slot 1 Frequency=200"},
+                            hit);
+        };
+        const Render ring = body("Ring"), up = body("Shift Up"), down = body("Shift Down");
+        auto tone = [&](const Render& r, double f) { return toneDb(r.left, rate, f, a, b); };
+        check(tone(ring, 152.0) > -10.0 && tone(ring, 248.0) > -10.0 && tone(ring, 48.0) < -40.0,
+              "Ring Mod at 200 Hz turns 48 Hz into 152 and 248 Hz");
+        // Shifted down by more than itself, 48 Hz folds over to 152 Hz.
+        check(tone(up, 248.0) - tone(up, 152.0) > 30.0 && tone(down, 152.0) - tone(down, 248.0) > 30.0 &&
+                  std::fabs(tone(up, 248.0)) < 1.0,
+              "Shift Up moves 48 Hz to 248 Hz (" + std::to_string(tone(up, 248.0) - tone(up, 152.0)) +
+                  " dB over the mirror), Shift Down to -152 Hz (" +
+                  std::to_string(tone(down, 152.0) - tone(down, 248.0)) + " dB)");
+    }
+
+    // --- Stereo and Utility
+    {
+        // Pan comes after the chain, so a stereo source is what the slots see
+        // as stereo: noise at full width.
+        const std::vector<std::string> wide = {"Output=0", "L1 Source=Noise", "L1 Noise Width=100"};
+        const Render noise = rendered(wide, hit);
+        const Render narrow = rendered(plus(wide, {"L1 Slot 1 Type=Stereo", "L1 Slot 1 Width=0"}), hit);
+        const Render haas = rendered({"Output=0", "L1 Slot 1 Type=Stereo", "L1 Slot 1 Haas=10"}, hit);
+        // (+10 ms is a hair under 480 samples once it has been through the
+        // parameter's normalised value.)
+        float off480 = 0.0f;
+        for (size_t i = 480; i < haas.right.size(); ++i)
+            off480 = std::max(off480, std::fabs(haas.right[i] - unity.right[i - 480]));
+        check(narrow.left == narrow.right && !silent(narrow.left) && off480 < 1e-4f && haas.left == unity.left,
+              "Stereo: Width 0 is mono, Haas +10 ms delays the right side by 480 samples");
+
+        const Render inv = rendered({"Output=0", "L1 Slot 1 Type=Utility", "L1 Slot 1 Polarity=Invert"}, hit);
+        const Render off = rendered({"Output=0", "L1 Slot 1 Type=Utility", "L1 Slot 1 Gain=-inf"}, hit);
+        const Render swapped = rendered(plus(wide, {"L1 Slot 1 Type=Utility", "L1 Slot 1 Channels=Swap"}), hit);
+        bool negated = true;
+        for (size_t i = 0; i < inv.left.size(); ++i)
+            negated &= inv.left[i] == -unity.left[i];
+        check(negated && silent(off.left) && swapped.left == noise.right && swapped.right == noise.left,
+              "Utility: Invert negates exactly, -inf is silence, Swap swaps the sides");
+    }
+
+    // --- Warp: the echoes change pitch, play backwards, or come as taps
+    {
+        // A short 400 Hz tone; with no feedback the one echo is the tone
+        // moved by Pitch, 150 ms later.
+        const std::vector<std::string> tone = {"Output=0", "L1 Pitch Start=400", "L1 Pitch End=400",
+                                               "L1 Body Hold=100", "L1 Body Decay=5"};
+        const Render down = rendered(plus(tone, {"L1 Slot 1 Type=Warp", "L1 Slot 1 Time=150", "L1 Slot 1 Feedback=0",
+                                                 "L1 Slot 1 Pitch=-12", "L1 Slot 1 Diffusion=0"}),
+                                     hit);
+        const size_t a = lead + static_cast<size_t>(0.19 * rate), b = lead + static_cast<size_t>(0.24 * rate);
+        const double oct = toneDb(down.left, rate, 200.0, a, b) - toneDb(down.left, rate, 400.0, a, b);
+        check(oct > 20.0, "Warp at -12 st: the echo sounds an octave down (" + std::to_string(oct) + " dB over 400 Hz)");
+
+        // Reverse: a click becomes a swell that ends on the window's turn.
+        const Render rev = rendered(plus(impulse, {"L1 Slot 1 Type=Warp", "L1 Slot 1 Time=100", "L1 Slot 1 Feedback=0",
+                                                   "L1 Slot 1 Pitch=0", "L1 Slot 1 Mode=Reverse",
+                                                   "L1 Slot 1 Diffusion=0"}),
+                                    hit);
+        const Render taps = rendered(plus(impulse, {"L1 Slot 1 Type=Warp", "L1 Slot 1 Time=200", "L1 Slot 1 Feedback=0",
+                                                    "L1 Slot 1 Pitch=0", "L1 Slot 1 Mode=Taps",
+                                                    "L1 Slot 1 Diffusion=0"}),
+                                     hit);
+        const size_t at = static_cast<size_t>(clickAt);
+        check(!rev.sawNonFinite && peakDb(rev.left, at + 10, at + 9600) > -40.0 && rev.sleptAtEnd,
+              "Warp Reverse echoes the click inside two windows and stops");
+        check(onset(taps.left, at + 10, 1e-4f) == static_cast<long>(at + 2400) &&
+                  onset(taps.right, at + 10, 1e-4f) == static_cast<long>(at + 4800),
+              "Warp Taps: the first tap at a quarter of Time on the left, the second at half on the right");
+    }
+
+    // --- Bus lanes
+    {
+        // Lane 1 to its aux only; lane 2 plays it back to the main output.
+        const std::vector<std::string> bus = {"Output=0", "L1 Output=Aux", "L2 On=On", "L2 Source=Bus",
+                                              "L2 Level=0"};
+        const Render post = rendered(bus, hit);
+        check(post.left == unity.left && post.right == unity.right && post.auxL[0] == unity.left,
+              "a bus lane on lane 1 plays lane 1 exactly");
+        const Render muted = rendered(plus(bus, {"L1 Slot 1 Type=Utility", "L1 Slot 1 Gain=-inf"}), hit);
+        const Render pre = rendered(plus(bus, {"L1 Slot 1 Type=Utility", "L1 Slot 1 Gain=-inf", "L2 Bus Tap=Pre Chain"}),
+                                    hit);
+        check(silent(muted.left) && pre.left == unity.left, "Post Chain hears lane 1's chain, Pre Chain hears before it");
+        // The other way round: lane 1 reads lane 2, which runs first.
+        const Render back = rendered({"Output=0", "L1 Source=Bus", "L1 Bus Lane 1=Off", "L1 Bus Lane 2=On", "L2 On=On",
+                                      "L2 Source=Body", "L2 Level=0", "L2 Output=Aux"},
+                                     hit);
+        check(back.left == unity.left, "a bus lane reads a lane with a higher number in the same block");
+        const Render loop = rendered({"Output=0", "L1 Source=Bus", "L1 Bus Lane 2=On", "L2 On=On", "L2 Source=Bus",
+                                      "L3 On=On", "L3 Source=Body", "L3 Level=0"},
+                                     hit);
+        check(!loop.sawNonFinite && loop.left == unity.left && loop.sleptAtEnd,
+              "two bus lanes feeding each other hear silence from each other, and sleep");
+        // Switched off, a bus lane is silent: it has no voices to choke, so
+        // it must stop taking its input.
+        const Render busOff = rendered(plus(bus, {"L2 On=Off"}), hit);
+        check(silent(busOff.left), "a bus lane switched off plays nothing");
+        // Bus lanes summed: lanes 1 and 3 into lane 2.
+        const Render sum = rendered({"Output=0", "L1 Output=Aux", "L3 On=On", "L3 Source=Body", "L3 Level=0",
+                                     "L3 Output=Aux", "L2 On=On", "L2 Source=Bus", "L2 Bus Lane 3=On", "L2 Level=-6.02"},
+                                    hit);
+        float worst = 0.0f;
+        for (size_t i = 0; i < sum.left.size(); ++i)
+            worst = std::max(worst, std::fabs(sum.left[i] - unity.left[i]));
+        check(worst < 1e-3f, "a bus lane sums the lanes switched on (two copies at -6 dB give one)");
+    }
+
+    // --- the transient guard
+    {
+        const Render g = rendered({"Output=0", "L1 Guard Delay=20", "L1 Guard Fade=10"}, hit);
+        bool shut = true, open = true;
+        for (size_t i = 0; i < lead + 960; ++i)
+            shut &= g.left[i] == 0.0f;
+        for (size_t i = lead + 1440; i < g.left.size(); ++i)
+            open &= g.left[i] == unity.left[i];
+        check(shut && open && peakDb(g.left, lead + 960, lead + 1440) > -60.0,
+              "Guard 20 ms + 10 ms: silent for 960 samples after the hit, fading in, exact from 1440 on");
+
+        // A noise lane ducked by the kick on lane 1.
+        auto noise = [&](bool ducked) {
+            std::vector<std::string> v = {"Output=0", "L1 Output=Aux", "L2 On=On", "L2 Source=Noise",
+                                          "L2 Noise Decay=1 s", "L2 Level=0"};
+            if (ducked)
+                v.push_back("L2 Duck Source=Lane 1");
+            return rendered(v, hit);
+        };
+        const Render plain = noise(false), ducked = noise(true);
+        const double dip = peakDb(plain.left, lead + 100, lead + 1000) - peakDb(ducked.left, lead + 100, lead + 1000);
+        const double late = peakDb(plain.left, lead + 33600, lead + 38400) - peakDb(ducked.left, lead + 33600, lead + 38400);
+        check(dip > 12.0 && late < dip - 6.0,
+              "Duck: the noise drops " + std::to_string(dip) + " dB under the kick and recovers as it fades (" +
+                  std::to_string(late) + " dB at 0.7 s)");
+    }
+
+    // --- the rumble from the plan: a bus lane through drive, reverb, drive
+    //     and a low pass, guarded, under a clean kick
+    {
+        const std::vector<std::string> rumble = {
+            "L1 Slot 1 Type=Clipper",     "L2 On=On",                  "L2 Source=Bus",
+            "L2 Slot 1 Type=Distortion",  "L2 Slot 1 Drive=70",        "L2 Slot 2 Type=Reverb",
+            "L2 Slot 2 Decay=1500",       "L2 Slot 3 Type=Distortion", "L2 Slot 3 Model=Fuzz",
+            "L2 Slot 4 Type=Filter",      "L2 Slot 4 Mode=LP 24",      "L2 Slot 4 Cutoff=120",
+            "L2 Slot 5 Type=Gate",        "L2 Slot 5 Mode=Hit",        "L2 Slot 5 Hold=300",
+            "L2 Guard Delay=30",          "L2 Guard Fade=40",          "L2 Duck Source=Lane 1",
+            "L2 Level=-6",                "L3 On=On",                  "L3 Slot 1 Type=Delay",
+            "L3 Slot 1 Sync=1/16",        "L3 Slot 2 Type=Warp",       "L3 Slot 2 Mode=Reverse",
+            "L4 On=On",                   "L4 Slot 1 Type=Smear",      "L4 Slot 2 Type=Ring Mod",
+            "L4 Slot 3 Type=Stereo",      "L4 Slot 3 Haas=-12",        "Master Slot 1 Type=Reverb",
+            "Master Slot 1 Mix=20",       "Master Slot 2 Type=Delay",  "Master Slot 2 Mix=30",
+            "L2 Output=Main+Aux"};
+        EventList many;
+        for (int h = 0; h < 4; ++h)
+            many.add(noteOn(lead + static_cast<uint32_t>(h * 0.25 * rate), 36, 0.9));
+        const Render a = rendered(rumble, many, 6.0, 512);
+        const Render b = rendered(rumble, many, 6.0, 37);
+        check(!a.sawNonFinite && a.left == b.left && a.right == b.right && a.auxL[1] == b.auxL[1] && a.sleptAtEnd &&
+                  peakDb(a.auxL[1], lead, lead + 1400) < -100.0 && peakDb(a.auxL[1], lead + 4800, lead + 12000) > -40.0,
+              "a rumble lane: silent under the click, there in the tail, bit-identical at a block size of 37, asleep");
+    }
+
+    // ========================================================== modulation
+
+    {
+        const size_t a = static_cast<size_t>(0.30 * rate), b = static_cast<size_t>(0.45 * rate);
+        // A macro on the lane's level, full down: the lane is silent at 100 %
+        // and as it was at 0 %.
+        const std::vector<std::string> macro = {"Output=0", "Mod 1 Source=Macro 1", "Mod 1 Destination=L1 Level",
+                                                "Mod 1 Amount=-100"};
+        const Render up = rendered(plus(macro, {"Macro 1=100"}), hit);
+        const Render down = rendered(plus(macro, {"Macro 1=0"}), hit);
+        check(silent(up.left) && down.left == unity.left,
+              "a macro routed to a lane's level at -100 %: silent at 100 %, untouched at 0 %");
+
+        // Velocity onto Pitch End: +10 % of its range at full velocity is
+        // 48 Hz x 100^0.1 = 76 Hz.
+        const std::vector<std::string> vel = {"Output=0", "Mod 1 Source=Velocity", "Mod 1 Destination=L1 Pitch End",
+                                              "Mod 1 Amount=10"};
+        const Render full = rendered(vel, hit);
+        EventList soft;
+        soft.add(noteOn(lead, 36, 0.5));
+        const Render half = rendered(vel, soft);
+        const double ff = measureFrequency(full.left, rate, 0.30, 0.45);
+        const double fh = measureFrequency(half.left, rate, 0.30, 0.45);
+        check(std::fabs(ff / (48.0 * std::pow(100.0, 0.1)) - 1.0) < 0.015 &&
+                  std::fabs(fh / (48.0 * std::pow(100.0, 0.05)) - 1.0) < 0.015,
+              "Velocity to Pitch End: " + std::to_string(ff) + " Hz at full velocity, " + std::to_string(fh) +
+                  " Hz at half");
+
+        // Note: an octave over the root is +0.5; Random changes with every
+        // hit.
+        EventList octave;
+        octave.add(noteOn(lead, 48, 1.0));
+        const Render note = rendered({"Output=0", "Mod 1 Source=Note", "Mod 1 Destination=L1 Pitch End",
+                                      "Mod 1 Amount=20"},
+                                     octave);
+        const double fn = measureFrequency(note.left, rate, 0.30, 0.45);
+        check(std::fabs(fn / (48.0 * std::pow(100.0, 0.1)) - 1.0) < 0.015,
+              "Note to Pitch End: C3 over a C2 root moves it by half the amount (" + std::to_string(fn) + " Hz)");
+
+        EventList two;
+        two.add(noteOn(lead, 36, 1.0));
+        two.add(noteOn(lead + 48000, 36, 1.0));
+        auto sameHits = [&](const Render& r) {
+            for (size_t i = 0; i < 40000; ++i)
+                if (r.left[lead + i] != r.left[lead + 48000 + i])
+                    return false;
+            return true;
+        };
+        const std::vector<std::string> rnd = {"Output=0", "Mod 1 Source=Random", "Mod 1 Destination=L1 Pitch End",
+                                              "Mod 1 Amount=20"};
+        check(!sameHits(rendered(rnd, two, 2.0)), "Random gives every hit its own value");
+
+        // A retriggered LFO repeats with every hit; a free one does not (at a
+        // rate that is not a whole number of cycles between the hits).
+        const std::vector<std::string> lfo = {"Output=0", "LFO 1 Rate=7.3", "Mod 1 Source=LFO 1",
+                                              "Mod 1 Destination=L1 Pitch End", "Mod 1 Amount=15"};
+        const Render retrig = rendered(lfo, two, 2.0);
+        const Render freeRun = rendered(plus(lfo, {"LFO 1 Retrigger=Off"}), two, 2.0);
+        const Render odd = rendered(lfo, two, 2.0, 37);
+        check(sameHits(retrig) && !sameHits(freeRun) && odd.left == retrig.left && retrig.left != full.left,
+              "a retriggered LFO plays every hit alike, a free one does not; bit-identical at a block size of 37");
+
+        // Synced to 1/8 at 120 BPM a square LFO on the level alternates every
+        // 125 ms, counted from the start of the song.
+        const Render sq = rendered({"Output=0", "L1 Body Hold=2 s", "LFO 1 Shape=Square", "LFO 1 Sync=1/8",
+                                    "LFO 1 Retrigger=Off", "Mod 1 Source=LFO 1", "Mod 1 Destination=L1 Level",
+                                    "Mod 1 Amount=-20"},
+                                   hit, 2.0);
+        bool alternates = true;
+        for (int k = 2; k < 12; ++k)
+        {
+            const size_t mid = static_cast<size_t>((k + 0.5) * 0.125 * rate);
+            const double lo = peakDb(sq.left, mid - 1200, mid + 1200);
+            const size_t next = mid + static_cast<size_t>(0.125 * rate);
+            const double hi = peakDb(sq.left, next - 1200, next + 1200);
+            // Even eighths are the square's top half, which turns the level
+            // down.
+            alternates &= (k % 2 == 0 ? hi - lo : lo - hi) > 10.0;
+        }
+        check(alternates, "a synced square LFO switches the level every eighth note at 120 BPM");
+
+        // An envelope: the default curve falls from 1 to 0 over its Time, so
+        // the pitch starts raised and ends where it was.
+        const std::vector<std::string> env = {"Output=0", "L1 Body Hold=1 s", "Env 1 Time=100", "Mod 1 Source=Env 1",
+                                              "Mod 1 Destination=L1 Pitch End", "Mod 1 Amount=30"};
+        const Render e = rendered(env, hit);
+        const double late = measureFrequency(e.left, rate, 0.30, 0.45);
+        check(std::fabs(late / 48.0 - 1.0) < 0.015 && measureFrequency(e.left, rate, lead / rate + 0.0, lead / rate + 0.05) >
+                                                          measureFrequency(unity.left, rate, lead / rate, lead / rate + 0.05) * 1.3,
+              "Env 1 raises Pitch End at the hit and lets go over its Time (" + std::to_string(late) + " Hz at 0.3 s)");
+        const Render looped = rendered(plus(env, {"Env 1 Loop=On"}), hit);
+        check(std::fabs(measureFrequency(looped.left, rate, 0.30, 0.45) / 48.0 - 1.0) > 0.05,
+              "a looped envelope keeps moving after its Time");
+
+        // A follower: lane 2's level ducked by lane 1 through the matrix.
+        const std::vector<std::string> follow = {"Output=0",          "L1 Output=Aux",        "L2 On=On",
+                                                 "L2 Source=Noise",   "L2 Noise Decay=1 s",   "L2 Level=0",
+                                                 "Mod 1 Source=Follow 1", "Mod 1 Destination=L2 Level",
+                                                 "Mod 1 Amount=-60"};
+        const Render fa = rendered(follow, hit), fb = rendered(follow, hit, 1.0, 37);
+        const Render noFollow = rendered({"Output=0", "L1 Output=Aux", "L2 On=On", "L2 Source=Noise",
+                                          "L2 Noise Decay=1 s", "L2 Level=0"},
+                                         hit);
+        const double dip = peakDb(noFollow.left, lead + 2000, lead + 3000) - peakDb(fa.left, lead + 2000, lead + 3000);
+        check(dip > 20.0 && fa.left == fb.left,
+              "Follow 1 to lane 2's level ducks it by " + std::to_string(dip) + " dB; bit-identical at 37");
+
+        // A hit into silence takes its modulated level at once: a velocity
+        // route on a short click's level sounds the same whether the note
+        // comes first thing or after the plugin has idled a while.
+        {
+            const std::vector<std::string> click = {"Output=0", "L1 On=Off", "L2 On=On", "L2 Level=-20",
+                                                    "Mod 1 Source=Velocity", "Mod 1 Destination=L2 Level",
+                                                    "Mod 1 Amount=20"};
+            EventList first, later;
+            first.add(noteOn(0, 36, 1.0));
+            later.add(noteOn(1000, 36, 1.0));
+            const Render a = rendered(click, first), b = rendered(click, later);
+            bool same = true;
+            for (size_t i = 0; i + 1000 < a.left.size(); ++i)
+                same &= a.left[i] == b.left[i + 1000];
+            check(same && !silent(a.left), "a velocity route on a click's level reaches the hit's first sample, "
+                                           "first thing or after a pause alike");
+        }
+
+        // The routes and the envelope curves are saved and come back.
+        p = configured(m, env);
+        loadStateText(p, saveStateText(p) + "mod.env1=0,0,0;0.5,1,0;1,0,0\n");
+        const std::string saved = saveStateText(p);
+        const clap_plugin_t* q = createPlugin(m);
+        const bool loaded = loadStateText(q, saved);
+        const Render r1 = render(p, rate, 512, static_cast<uint32_t>(rate), hit);
+        const Render r2 = render(q, rate, 512, static_cast<uint32_t>(rate), hit);
+        check(loaded && saved.find("mod.route1.dest=L1 Pitch End\n") != std::string::npos &&
+                  saved.find("mod.env1=0,0,0;0.5,1,0;1,0,0\n") != std::string::npos && r1.left == r2.left &&
+                  r1.left != e.left,
+              "routes and envelope curves are saved by name and play back bit-identically");
+        p->destroy(p);
+        q->destroy(q);
+        (void)a;
+        (void)b;
+    }
+
+    // --- the limiters: a slot on a lane, and Limit as the master's Output
+    //     Clip; both hold a hot hit at their ceiling, and the limiter bends
+    //     a held body less than a hard clip does
+    {
+        // (The lane's Level comes after its chain, so the limiter's own Gain
+        // is what drives it.)
+        const Render slotLimit = rendered({"Output=0", "Quality=1x", "L1 Slot 1 Type=Limiter", "L1 Slot 1 Gain=12",
+                                           "L1 Slot 1 Ceiling=-6"},
+                                          hit);
+        const Render slotLimit4x = rendered({"Output=0", "Quality=4x", "L1 Slot 1 Type=Limiter", "L1 Slot 1 Gain=12",
+                                             "L1 Slot 1 Ceiling=-6"},
+                                            hit);
+        check(slotLimit.peak <= 0.5012f && slotLimit.peak > 0.45f && slotLimit4x.peak <= 0.5012f,
+              "a Limiter slot at -6 dB holds a lane turned up 12 dB there (" +
+                  std::to_string(20.0 * std::log10(slotLimit.peak)) + " dB, " +
+                  std::to_string(20.0 * std::log10(slotLimit4x.peak)) + " dB at 4x)");
+        const Render outLimit = rendered({"Output=0", "Quality=4x", "L1 Level=+12", "Output Clip=Limit"}, hit);
+        check(outLimit.peak <= 0.9661f, "Output Clip Limit holds -0.3 dBFS at 4x too");
+        const size_t a = static_cast<size_t>(0.30 * rate), b = static_cast<size_t>(0.45 * rate);
+        const std::vector<std::string> hot = {"Output=0", "Quality=1x", "L1 Level=+12", "L1 Body Hold=1 s"};
+        const Render limited = rendered(plus(hot, {"Output Clip=Limit"}), hit);
+        const Render clipped = rendered(plus(hot, {"Output Clip=Hard"}), hit);
+        auto harm = [&](const Render& r) { return toneDb(r.left, rate, 144.0, a, b) - toneDb(r.left, rate, 48.0, a, b); };
+        check(limited.peak <= 0.9661f && limited.peak > 0.9f && harm(limited) < harm(clipped) - 20.0,
+              "Output Clip Limit holds a +12 dB body at -0.3 dBFS with far fewer harmonics than a clip (" +
+                  std::to_string(harm(limited)) + " against " + std::to_string(harm(clipped)) + " dB)");
+    }
+
+    // ============================================================= presets
+
+    // --- the factory presets, as a host finds and loads them: every one is
+    //     described, loads, plays finite at -1 dBFS and goes to sleep
+    {
+        std::string error;
+        const std::vector<FoundPreset> found = discoverPresets(m, &error);
+        bool described = error.empty() && found.size() >= 100;
+        for (const FoundPreset& f : found)
+            described &= f.factory && !f.name.empty() && !f.description.empty() &&
+                         std::find(f.features.begin(), f.features.end(), "kick") != f.features.end();
+        check(described, std::to_string(found.size()) + " factory presets discovered, each with a name, a description "
+                                                         "and its tags" + (error.empty() ? "" : " (" + error + ")"));
+        int bad = 0;
+        for (const FoundPreset& f : found)
+        {
+            const clap_plugin_t* q = createPlugin(m);
+            const bool loaded = loadFactoryPreset(q, f.loadKey);
+            const Render r = render(q, rate, 512, static_cast<uint32_t>(10.0 * rate), hit);
+            // The state remembers which preset it came from.
+            const bool named = saveStateText(q).find("preset=" + f.name + "\n") != std::string::npos;
+            q->destroy(q);
+            const double peak = 20.0 * std::log10(std::max(r.peak, 1e-9f));
+            if (!loaded || !named || r.sawNonFinite || !r.sleptAtEnd || peak > -0.5 || peak < -1.6)
+            {
+                ++bad;
+                std::printf("    %s: %s%s%speak %.1f dBFS%s\n", f.loadKey.c_str(), loaded ? "" : "not loaded, ",
+                            named ? "" : "name not in the state, ", r.sawNonFinite ? "non-finite, " : "", peak,
+                            r.sleptAtEnd ? "" : ", still sounding after 10 s");
+            }
+        }
+        check(bad == 0, "every factory preset loads through preset-load, is named in the state, peaks at -1 dBFS and "
+                        "ends within 10 s");
+        // A preset switch while the old one still rings: the old sound fades
+        // out over 5 ms as it was, then the new preset starts clean -- no
+        // burst, and from there exactly the new preset alone, 5 ms late. (It
+        // once fed a resonant filter fading out to an empty slot the empty
+        // slot's values, +64 dBFS.)
+        {
+            const uint32_t at = 9728, fade = static_cast<uint32_t>(0.005 * rate);
+            auto play = [&](const std::string& a, const std::string& b, uint32_t noteAt) {
+                const clap_plugin_t* x = createPlugin(m);
+                loadFactoryPreset(x, a);
+                EventList ev;
+                if (!b.empty())
+                    ev.add(noteOn(0, 36, 1.0));
+                ev.add(noteOn(noteAt, 36, 1.0));
+                const Render r = render(x, rate, 512, static_cast<uint32_t>(1.5 * rate), ev,
+                                        [&](const clap_plugin_t* y, uint32_t pos) {
+                                            if (!b.empty() && pos == at)
+                                                loadFactoryPreset(y, b);
+                                        });
+                x->destroy(x);
+                return r;
+            };
+            bool clean = true;
+            for (const auto& [a, b] : std::vector<std::pair<std::string, std::string>>{
+                     {"techno-acid-floor", "acoustic-felt"},
+                     {"rumble-rolling-thunder", "hiphop-cardboard"},
+                     {"techno-dub-chamber", "exp-stutter"}})
+            {
+                const Render sw = play(a, b, at);
+                const Render alone = play(b, "", at + fade);
+                const Render first = play(a, "", 0);
+                float before = 0.0f;
+                for (size_t i = at; i < at + fade; ++i)
+                    before = std::max(before, std::fabs(sw.left[i]));
+                float old = 0.0f;
+                for (size_t i = at - 480; i < at; ++i)
+                    old = std::max(old, std::fabs(first.left[i]));
+                bool same = true;
+                for (size_t i = at + fade; i < sw.left.size(); ++i)
+                    same &= sw.left[i] == alone.left[i];
+                if (sw.sawNonFinite || before > old * 1.05f + 1e-6f || !same)
+                {
+                    clean = false;
+                    std::printf("    %s -> %s: fade peak %g against %g before it%s\n", a.c_str(), b.c_str(), before,
+                                old, same ? "" : ", not the new preset afterwards");
+                }
+            }
+            check(clean, "a preset switch fades the old sound out as it was and starts the new one clean");
+        }
+        const clap_plugin_t* q = createPlugin(m);
+        check(!loadFactoryPreset(q, "no-such-preset"), "an unknown load key is refused");
+        q->destroy(q);
+    }
+
     // --- everything at once: block size still changes nothing
     {
         const std::vector<std::string> all = {
@@ -1365,9 +2069,11 @@ int main(int argc, char** argv)
 {
     std::string pluginPath = "./Substrike.clap", outPath = "kick.wav";
     double seconds = 1.5, bpm = 128.0, rate = 48000.0, velocity = 1.0;
-    int hits = 1, key = 36, aux = 0;
+    int hits = 1, key = 36, aux = 0, lead = 0;
     uint32_t block = 512;
-    bool selfTest = false, listParams = false;
+    bool selfTest = false, listParams = false, listPresets = false, allPresets = false;
+    std::string statePath, saveStatePath, presetKey, outDir = ".", thenPreset;
+    uint32_t thenAt = 0;
     std::vector<std::string> specs;
 
     for (int i = 1; i < argc; ++i)
@@ -1384,6 +2090,8 @@ int main(int argc, char** argv)
             hits = std::max(1, std::atoi(next().c_str()));
         else if (a == "--bpm")
             bpm = std::atof(next().c_str());
+        else if (a == "--lead")
+            lead = std::max(0, std::atoi(next().c_str()));
         else if (a == "--key")
             key = std::atoi(next().c_str());
         else if (a == "--velocity")
@@ -1398,6 +2106,22 @@ int main(int argc, char** argv)
             specs.push_back(next());
         else if (a == "--list-params")
             listParams = true;
+        else if (a == "--state")
+            statePath = next();
+        else if (a == "--save-state")
+            saveStatePath = next();
+        else if (a == "--preset")
+            presetKey = next();
+        else if (a == "--then-preset")
+            thenPreset = next();
+        else if (a == "--at")
+            thenAt = static_cast<uint32_t>(std::max(0, std::atoi(next().c_str())));
+        else if (a == "--list-presets")
+            listPresets = true;
+        else if (a == "--all-presets")
+            allPresets = true;
+        else if (a == "--outdir")
+            outDir = next();
         else if (a == "--selftest")
             selfTest = true;
         else
@@ -1423,8 +2147,64 @@ int main(int argc, char** argv)
     m.factory = static_cast<const clap_plugin_factory_t*>(m.entry->get_factory(CLAP_PLUGIN_FACTORY_ID));
 
     int rc = 0;
+    // Before the parameters: a state or preset file, or a factory preset.
+    auto prepare = [&](const clap_plugin_t* p) {
+        if (!statePath.empty())
+        {
+            std::string text;
+            if (!readTextFile(statePath, text) || !loadStateText(p, text))
+            {
+                std::fprintf(stderr, "cannot load %s\n", statePath.c_str());
+                return false;
+            }
+        }
+        if (!presetKey.empty() && !loadFactoryPreset(p, presetKey))
+        {
+            std::fprintf(stderr, "no factory preset %s\n", presetKey.c_str());
+            return false;
+        }
+        return applyParams(p, specs);
+    };
     if (selfTest)
         rc = runSelfTest(m);
+    else if (listPresets)
+    {
+        std::string error;
+        for (const FoundPreset& f : discoverPresets(m, &error))
+        {
+            std::string tags;
+            for (const std::string& t : f.features)
+                tags += (tags.empty() ? "" : ", ") + t;
+            std::printf("%-28s %-26s %s\n", f.loadKey.c_str(), f.name.c_str(), tags.c_str());
+        }
+        if (!error.empty())
+            std::fprintf(stderr, "%s\n", error.c_str());
+    }
+    else if (allPresets)
+    {
+        // Every factory preset, one hit each, to <outdir>/<load key>.wav.
+        for (const FoundPreset& f : discoverPresets(m))
+        {
+            const clap_plugin_t* p = createPlugin(m);
+            presetKey = f.loadKey;
+            if (!p || !prepare(p))
+            {
+                rc = 1;
+                if (p)
+                    p->destroy(p);
+                continue;
+            }
+            EventList notes;
+            notes.add(noteOn(0, static_cast<int16_t>(key), velocity));
+            const Render r = render(p, rate, block, static_cast<uint32_t>(seconds * rate), notes);
+            p->destroy(p);
+            const std::string path = outDir + "/" + f.loadKey + ".wav";
+            if (!writeWav(path, r.left, r.right, static_cast<uint32_t>(rate)))
+                rc = 1;
+            std::printf("%-28s peak %+6.1f dBFS%s%s\n", f.loadKey.c_str(), 20.0 * std::log10(std::max(r.peak, 1e-9f)),
+                        r.sleptAtEnd ? "" : "  (still sounding)", r.sawNonFinite ? "  !! NON-FINITE" : "");
+        }
+    }
     else if (listParams)
     {
         const clap_plugin_t* p = createPlugin(m);
@@ -1442,20 +2222,49 @@ int main(int argc, char** argv)
     else
     {
         const clap_plugin_t* p = createPlugin(m);
-        if (!p || !applyParams(p, specs))
+        if (!p || !prepare(p))
             rc = 1;
         else
         {
+            if (!saveStatePath.empty())
+            {
+                std::FILE* f = std::fopen(saveStatePath.c_str(), "wb");
+                const std::string text = saveStateText(p);
+                if (!f || std::fwrite(text.data(), 1, text.size(), f) != text.size())
+                    rc = 1;
+                if (f)
+                    std::fclose(f);
+            }
             EventList notes;
             const double step = 60.0 / bpm;
             for (int h = 0; h < hits; ++h)
-                notes.add(noteOn(static_cast<uint32_t>(h * step * rate), static_cast<int16_t>(key), velocity));
-            const Render r = render(p, rate, block, static_cast<uint32_t>(seconds * rate), notes);
+                notes.add(noteOn(static_cast<uint32_t>(lead + h * step * rate), static_cast<int16_t>(key), velocity));
+            // --then-preset: switch to another factory preset at --at (rounded
+            // to the block) and play it there, as the browser does.
+            BetweenBlocks between;
+            if (!thenPreset.empty())
+            {
+                const uint32_t at = thenAt / block * block;
+                notes.add(noteOn(at, static_cast<int16_t>(key), velocity));
+                notes.sort();
+                between = [&, at](const clap_plugin_t* q, uint32_t pos) {
+                    if (pos == at && !loadFactoryPreset(q, thenPreset))
+                        std::fprintf(stderr, "no factory preset %s\n", thenPreset.c_str());
+                };
+            }
+            const Render r = render(p, rate, block, static_cast<uint32_t>(seconds * rate), notes, between);
             const std::vector<float>& wl = aux ? r.auxL[aux - 1] : r.left;
             const std::vector<float>& wr = aux ? r.auxR[aux - 1] : r.right;
             if (!writeWav(outPath, wl, wr, static_cast<uint32_t>(rate)))
                 rc = 1;
-            std::printf("peak %.3f (%+.1f dBFS)%s -> %s\n", r.peak, 20.0 * std::log10(std::max(r.peak, 1e-9f)),
+            float peak = r.peak;
+            if (aux)
+            {
+                peak = 0.0f;
+                for (size_t i = 0; i < wl.size(); ++i)
+                    peak = std::max({peak, std::fabs(wl[i]), std::fabs(wr[i])});
+            }
+            std::printf("peak %.3f (%+.1f dBFS)%s -> %s\n", peak, 20.0 * std::log10(std::max(peak, 1e-9f)),
                         r.sawNonFinite ? "  !! NON-FINITE OUTPUT" : "", outPath.c_str());
             if (r.sawNonFinite)
                 rc = 1;

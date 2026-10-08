@@ -1,0 +1,27 @@
+[Substrike]
+format=1
+name=Cloud Kick
+category=Ambient
+author=Substrike
+tags=ambient, smear, soft
+description=A kick dissolved into a cloud: smeared, diffused and spread wide above the sub.
+[Parameters]
+l1.body.pitch_start=180
+l1.body.pitch_end=48
+l1.body.sweep=90
+l1.body.hold=40
+l1.body.decay=400
+l1.slot1.type=Smear
+l1.slot1.band=Mid+High
+l1.slot1.time=40
+l1.slot1.diffusion=80
+l1.slot1.stages=16
+l1.slot1.width=100
+master.slot1.type=Reverb
+master.slot1.band=Mid+High
+master.slot1.mix=45
+master.slot1.size=80
+master.slot1.decay=3500
+master.slot1.damping=4000
+master.mono_below=120
+output=-2.2

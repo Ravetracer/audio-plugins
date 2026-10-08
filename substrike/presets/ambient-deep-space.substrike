@@ -1,0 +1,28 @@
+[Substrike]
+format=1
+name=Deep Space
+category=Ambient
+author=Substrike
+tags=shimmer, space, cinematic
+description=A kick in a shimmering void: every echo is an octave higher and further away.
+[Parameters]
+l1.body.pitch_start=150
+l1.body.pitch_end=45
+l1.body.sweep=120
+l1.body.hold=40
+l1.body.decay=500
+master.slot1.type=Warp
+master.slot1.band=Mid+High
+master.slot1.mix=50
+master.slot1.time=250
+master.slot1.feedback=45
+master.slot1.pitch=12
+master.slot1.diffusion=70
+master.slot2.type=Reverb
+master.slot2.band=Mid+High
+master.slot2.mix=40
+master.slot2.size=100
+master.slot2.decay=4000
+master.slot2.damping=6000
+master.mono_below=100
+output=-1

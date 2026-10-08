@@ -1,0 +1,27 @@
+[Substrike]
+format=1
+name=Frame Drum
+category=Acoustic
+author=Substrike
+tags=hand drum, frame, tonal
+description=A low frame drum struck by hand: a tuned membrane with a falling pitch, playable across the keys.
+[Parameters]
+l1.on=On
+l1.source=Resonator
+l1.level=0
+l1.resonator.exciter=Mallet
+l1.resonator.model=Membrane
+l1.resonator.modes=6
+l1.resonator.tune=90
+l1.resonator.key_track=100
+l1.resonator.decay=600
+l1.resonator.damping=45
+l1.resonator.brightness=40
+l1.resonator.hardness=35
+l1.resonator.drop=5
+l1.resonator.drop_time=50
+master.slot1.type=Reverb
+master.slot1.mix=12
+master.slot1.size=30
+master.slot1.decay=700
+output=3.3

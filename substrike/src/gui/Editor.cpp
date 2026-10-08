@@ -8,6 +8,8 @@
 #include <filesystem>
 
 #include "CurveEditor.h"
+#include "PresetBrowser.h"
+#include "dsp/Modulation.h"
 #include "Keys.h"
 #include "state/Settings.h"
 #include "substrike.h"
@@ -20,7 +22,7 @@ namespace {
 constexpr float kCellW = 60.0f;
 constexpr float kCellH = 64.0f;
 
-const char* const kSourceNames[] = {"Body", "Click", "Noise", "Resonator"};
+const char* const kSourceNames[] = {"Body", "Click", "Noise", "Resonator", "Bus"};
 
 // "L1 Slot 2 Drive" -> "Drive", "L1 Pitch Start" -> "Pitch Start".
 std::string shortName(const std::string& name)
@@ -219,7 +221,7 @@ public:
             source_->fontSize = 10.5f;
             level_ = add<ParamField>(ctx, ctx.index(pid::lane(lane, pid::LLevel)));
         }
-        else
+        else if (lane == Editor::kMaster)
             level_ = add<ParamField>(ctx, ctx.index(pid::Output));
     }
 
@@ -230,7 +232,8 @@ public:
             power_->setBounds({b.x + 26, b.y + 5, 22, 20});
         if (source_)
             source_->setBounds({b.x + 52, b.y + 5, 84, 20});
-        level_->setBounds({b.right() - 74, b.y + 5, 68, 20});
+        if (level_)
+            level_->setBounds({b.right() - 74, b.y + 5, 68, 20});
     }
 
     void paint(cairo_t* cr) override
@@ -247,6 +250,21 @@ public:
         else if (isHovered())
             strokeRounded(cr, bounds_, 5, theme::outline);
         setFont(cr, 12.0f, true);
+        if (lane_ == Editor::kMod)
+        {
+            drawText(cr, "MODULATION", {bounds_.x + 12, bounds_.y + 5, 120, 20}, Align::Left,
+                     selected ? theme::accentBright : theme::textDim);
+            ParamContext& ctx = ed_.params();
+            int routes = 0;
+            for (int r = 0; r < pid::kNumRoutes; ++r)
+                routes += std::lround(ctx.value(ctx.index(pid::route(r, pid::RSource)))) > 0 &&
+                          std::lround(ctx.value(ctx.index(pid::route(r, pid::RDest)))) > 0;
+            setFont(cr, 10.5f);
+            drawText(cr, routes == 0 ? "no routes" : std::to_string(routes) + (routes == 1 ? " route" : " routes"),
+                     {bounds_.right() - 110, bounds_.y + 5, 104, 20}, Align::Right,
+                     routes ? theme::amp : theme::textFaint);
+            return;
+        }
         if (lane_ < Editor::kMaster)
             drawText(cr, std::to_string(lane_ + 1), {bounds_.x + 8, bounds_.y + 5, 16, 20}, Align::Center,
                      selected ? theme::accentBright : theme::textDim);
@@ -276,6 +294,8 @@ public:
     bool mouseDown(const MouseEvent& e) override { return e.button == 1; }
     std::string tooltip() const override
     {
+        if (lane_ == Editor::kMod)
+            return "LFOs, envelopes, macros and the modulation matrix";
         return lane_ == Editor::kMaster ? "Master chain and output" : "Lane " + std::to_string(lane_ + 1);
     }
 
@@ -351,18 +371,33 @@ private:
 
 // ------------------------------------------------------------ ChainRow
 
-// The six slots of the selected chain, in signal order. Click selects one,
-// drag swaps two, the dot is the slot's on/off, right-click picks a type.
+// The six slots of the selected chain, in signal order, and for a lane its
+// transient guard at the end. Click selects one, drag swaps two slots, the
+// dot is the slot's on/off, right-click picks a type.
 class ChainRow : public Widget
 {
 public:
     explicit ChainRow(Editor& ed) : ed_(ed) {}
 
-    Rect chip(int i) const
+    // The guard's chip is narrower than a slot's.
+    static constexpr float kGuardShare = 0.62f;
+    bool hasGuard() const { return ed_.selectedLane() < Editor::kMaster; }
+    float chipW() const
     {
         const float gap = 14.0f;
-        const float w = (bounds_.w - gap * (dsp::kNumSlots - 1)) / dsp::kNumSlots;
+        const float n = dsp::kNumSlots + (hasGuard() ? kGuardShare : 0.0f);
+        const int gaps = dsp::kNumSlots - 1 + (hasGuard() ? 1 : 0);
+        return (bounds_.w - gap * gaps) / n;
+    }
+    Rect chip(int i) const
+    {
+        const float gap = 14.0f, w = chipW();
         return {bounds_.x + i * (w + gap), bounds_.y, w, bounds_.h};
+    }
+    Rect guardChip() const
+    {
+        const Rect last = chip(dsp::kNumSlots - 1);
+        return {last.right() + 14.0f, bounds_.y, chipW() * kGuardShare, bounds_.h};
     }
     Rect led(int i) const
     {
@@ -379,7 +414,7 @@ public:
             const int type = static_cast<int>(std::lround(ctx.value(ctx.index(ed_.slotId(i, pid::SType)))));
             const bool bypass = ctx.value(ctx.index(ed_.slotId(i, pid::SBypass))) > 0.5;
             const int band = static_cast<int>(std::lround(ctx.value(ctx.index(ed_.slotId(i, pid::SBand)))));
-            const bool selected = ed_.selectedSlot() == i;
+            const bool selected = !ed_.guardSelected() && ed_.selectedSlot() == i;
             const bool target = dragFrom_ >= 0 && dragTo_ == i && dragTo_ != dragFrom_;
             fillRounded(cr, c, 5, selected ? theme::accent.withAlpha(0.16f) : theme::panelLight);
             strokeRounded(cr, c, 5,
@@ -409,7 +444,7 @@ public:
                 cairo_fill(cr);
             }
             // The signal runs left to right.
-            if (i + 1 < dsp::kNumSlots)
+            if (i + 1 < dsp::kNumSlots || hasGuard())
             {
                 const float ax = c.right() + 4, ay = c.cy();
                 setColor(cr, theme::textFaint);
@@ -420,13 +455,41 @@ public:
                 cairo_fill(cr);
             }
         }
+        if (hasGuard())
+            paintGuard(cr);
     }
+
+    void paintGuard(cairo_t* cr)
+    {
+        ParamContext& ctx = ed_.params();
+        const int l = ed_.selectedLane();
+        const Rect c = guardChip();
+        const bool selected = ed_.guardSelected();
+        auto value = [&](pid::LaneField f) { return ctx.value(ctx.index(pid::lane(l, f))); };
+        const bool active = value(pid::LGuardDelay) > 0.0 || value(pid::LGuardFade) > 0.0 ||
+                            std::lround(value(pid::LDuckSource)) > 0;
+        fillRounded(cr, c, 5, selected ? theme::amp.withAlpha(0.14f) : theme::panel);
+        strokeRounded(cr, c, 5,
+                      selected ? theme::amp.withAlpha(0.8f) : (hover_ == kGuard ? theme::textFaint : theme::outline));
+        setFont(cr, 11.0f, active);
+        drawText(cr, "Guard", {c.x, c.y + 4, c.w, c.h - 8}, Align::Center, active ? theme::text : theme::textFaint);
+        if (active)
+        {
+            setColor(cr, theme::amp);
+            cairo_arc(cr, c.right() - 12, c.y + 12, 4.0, 0, 2 * M_PI);
+            cairo_fill(cr);
+        }
+    }
+
+    static constexpr int kGuard = dsp::kNumSlots;
 
     int chipAt(float x, float y) const
     {
         for (int i = 0; i < dsp::kNumSlots; ++i)
             if (chip(i).contains(x, y))
                 return i;
+        if (hasGuard() && guardChip().contains(x, y))
+            return kGuard;
         return -1;
     }
 
@@ -435,6 +498,13 @@ public:
         const int i = chipAt(e.x, e.y);
         if (i < 0)
             return false;
+        if (i == kGuard)
+        {
+            if (e.button != 1)
+                return false;
+            ed_.selectGuard();
+            return true;
+        }
         ParamContext& ctx = ed_.params();
         const int typeIdx = ctx.index(ed_.slotId(i, pid::SType));
         if (e.button == 3 || (e.button == 1 && e.clicks == 2))
@@ -468,7 +538,9 @@ public:
     {
         if (dragFrom_ < 0)
             return;
-        const int to = chipAt(e.x, std::clamp(e.y, bounds_.y + 1, bounds_.bottom() - 1));
+        int to = chipAt(e.x, std::clamp(e.y, bounds_.y + 1, bounds_.bottom() - 1));
+        if (to == kGuard)
+            to = -1;
         if (to != dragTo_)
         {
             dragTo_ = to;
@@ -505,6 +577,8 @@ public:
             return dragTo_ >= 0 && dragTo_ != dragFrom_
                        ? "Swap slot " + std::to_string(dragFrom_ + 1) + " with slot " + std::to_string(dragTo_ + 1)
                        : std::string();
+        if (hover_ == kGuard)
+            return "The transient guard: a fade-in window after each hit, and a duck";
         return hover_ >= 0 ? "Drag onto another slot to swap them, right-click for a type" : std::string();
     }
 
@@ -512,6 +586,216 @@ private:
     Editor& ed_;
     int hover_ = -1;
     int dragFrom_ = -1, dragTo_ = -1;
+};
+
+// ------------------------------------------------------------ LfoView
+
+// Two cycles of the selected LFO's shape, from its start phase.
+class LfoView : public Widget
+{
+public:
+    explicit LfoView(Editor& ed) : ed_(ed) {}
+    int lfo = 0;
+
+    void paint(cairo_t* cr) override
+    {
+        fillRounded(cr, bounds_, 4, theme::plot);
+        const Rect r = bounds_.reduced(10, 22);
+        ParamContext& ctx = ed_.params();
+        setColor(cr, theme::outline.withAlpha(0.6f));
+        cairo_rectangle(cr, r.x, std::round(r.cy()), r.w, 1);
+        cairo_fill(cr);
+        const auto shape = static_cast<dsp::LfoShape>(std::lround(ctx.plain(ctx.index(pid::lfo(lfo, pid::LfoShape)))));
+        const double phase = ctx.plain(ctx.index(pid::lfo(lfo, pid::LfoPhase))) / 360.0;
+        dsp::Lfo l(0x51ull + static_cast<uint64_t>(lfo));
+        const int cols = std::max(2, static_cast<int>(r.w));
+        for (int x = 0; x <= cols; ++x)
+        {
+            l.position = phase + 2.0 * x / cols;
+            const float y = r.cy() - static_cast<float>(l.value(shape)) * r.h * 0.5f;
+            if (x == 0)
+                cairo_move_to(cr, r.x, y);
+            else
+                cairo_line_to(cr, r.x + x, y);
+        }
+        setColor(cr, theme::accent);
+        cairo_set_line_width(cr, 1.6);
+        cairo_stroke(cr);
+        setFont(cr, 10.5f);
+        const int sync = static_cast<int>(std::lround(ctx.plain(ctx.index(pid::lfo(lfo, pid::LfoSync)))));
+        const std::string speed = sync > 0 ? ctx.text(ctx.index(pid::lfo(lfo, pid::LfoSync))) + " per cycle"
+                                           : ctx.text(ctx.index(pid::lfo(lfo, pid::LfoRate)));
+        const bool retrig = ctx.value(ctx.index(pid::lfo(lfo, pid::LfoRetrigger))) > 0.5;
+        drawText(cr, "two cycles  \xc2\xb7  " + speed + (retrig ? "  \xc2\xb7  restarts with every note" : "  \xc2\xb7  free running"),
+                 {bounds_.x + 8, bounds_.y + 2, bounds_.w - 16, 16}, Align::Left, theme::textDim);
+    }
+
+private:
+    Editor& ed_;
+};
+
+// ------------------------------------------------------------ DestButton
+
+// A route's destination: its name as it is now (a slot's letter by its
+// type's name for it); click for the list of destinations, right-click or
+// Ctrl-click clears it.
+class DestButton : public Widget
+{
+public:
+    DestButton(Editor& ed, int route) : ed_(ed), route_(route) {}
+
+    int paramIndex() const { return ed_.params().index(pid::route(route_, pid::RDest)); }
+
+    std::string text() const
+    {
+        ParamContext& ctx = ed_.params();
+        const int v = static_cast<int>(std::lround(ctx.value(paramIndex())));
+        if (v <= 0)
+            return "No destination";
+        const int target = ctx.table().destinations()[static_cast<size_t>(v - 1)];
+        // A letter its slot's type has no use for is shown by its slot only.
+        const ParamDef& d = ctx.def(target);
+        return d.name;
+    }
+
+    void paint(cairo_t* cr) override
+    {
+        const bool off = std::lround(ed_.params().value(paramIndex())) <= 0;
+        fillRounded(cr, bounds_, 4, isHovered() ? theme::panelLight.mix(Color(1, 1, 1, 1), 0.04f) : theme::panelLight);
+        strokeRounded(cr, bounds_, 4, theme::outline);
+        setFont(cr, 10.5f);
+        drawText(cr, text(), bounds_.reduced(8, 0), Align::Left, off ? theme::textFaint : theme::text);
+    }
+
+    bool mouseDown(const MouseEvent& e) override
+    {
+        ParamContext& ctx = ed_.params();
+        const int idx = paramIndex();
+        if (e.button == 3 || (e.button == 1 && (e.mods & ModCtrl)))
+        {
+            ctx.change(idx, 0.0);
+            return true;
+        }
+        if (e.button != 1)
+            return false;
+        showMenu(root(), ed_.destinationMenu([&ctx, idx](int v) { ctx.change(idx, static_cast<double>(v)); }), e.x,
+                 e.y);
+        return true;
+    }
+
+    int boundParam() const override { return paramIndex(); }
+    std::string tooltip() const override { return "Click for a destination, right-click to clear"; }
+
+private:
+    Editor& ed_;
+    int route_;
+};
+
+// ------------------------------------------------------------ MatrixPanel
+
+// Sixteen routes of the matrix, in two columns: source, destination, amount
+// and curve. The page (1-16, 17-32) is the editor's.
+class MatrixPanel : public Widget
+{
+public:
+    static constexpr int kPerPage = 16;
+
+    explicit MatrixPanel(Editor& ed) : ed_(ed) {}
+
+    void build()
+    {
+        clearChildren();
+        rows_.clear();
+        ParamContext& ctx = ed_.params();
+        for (int i = 0; i < kPerPage; ++i)
+        {
+            const int r = ed_.matrixPage() * kPerPage + i;
+            Row row;
+            row.route = r;
+            row.source = add<ParamSelector>(ctx, ctx.index(pid::route(r, pid::RSource)));
+            row.source->fontSize = 10.5f;
+            row.dest = add<DestButton>(ed_, r);
+            row.amount = add<ParamField>(ctx, ctx.index(pid::route(r, pid::RAmount)));
+            row.amount->accent = theme::amp;
+            row.curve = add<ParamField>(ctx, ctx.index(pid::route(r, pid::RCurve)));
+            rows_.push_back(row);
+        }
+        layout();
+    }
+
+    // The panel covers the whole section: the page tabs share the title
+    // line, the column heads and the rows come under it.
+    Rect pageTab(int i) const { return {bounds_.right() - 124 + i * 62.0f, bounds_.y + 2, 58, 20}; }
+    static constexpr float kHeads = 28.0f, kRows = 44.0f;
+
+    void layout() override
+    {
+        const float colW = (bounds_.w - 16) / 2, rowH = std::min(26.0f, (bounds_.h - kRows - 4) / 8);
+        for (size_t i = 0; i < rows_.size(); ++i)
+        {
+            const int col = static_cast<int>(i) / 8, line = static_cast<int>(i) % 8;
+            const float x = bounds_.x + col * (colW + 16), y = bounds_.y + kRows + line * rowH;
+            const float w = colW - 26;
+            Row& r = rows_[i];
+            r.source->setBounds({x + 26, y + 2, w * 0.24f, rowH - 4});
+            r.dest->setBounds({x + 30 + w * 0.24f, y + 2, w * 0.44f, rowH - 4});
+            r.amount->setBounds({x + 34 + w * 0.68f, y + 2, w * 0.16f - 4, rowH - 4});
+            r.curve->setBounds({x + 34 + w * 0.84f, y + 2, w * 0.16f - 4, rowH - 4});
+        }
+    }
+
+    void paint(cairo_t* cr) override
+    {
+        setFont(cr, 9.5f, true);
+        const float colW = (bounds_.w - 16) / 2;
+        for (int col = 0; col < 2; ++col)
+        {
+            const float x = bounds_.x + col * (colW + 16), w = colW - 26;
+            const float y = bounds_.y + kHeads;
+            drawText(cr, "SOURCE", {x + 26, y, w * 0.24f, 14}, Align::Left, theme::textFaint);
+            drawText(cr, "DESTINATION", {x + 30 + w * 0.24f, y, w * 0.44f, 14}, Align::Left, theme::textFaint);
+            drawText(cr, "AMOUNT", {x + 34 + w * 0.68f, y, w * 0.16f, 14}, Align::Left, theme::textFaint);
+            drawText(cr, "CURVE", {x + 34 + w * 0.84f, y, w * 0.16f, 14}, Align::Left, theme::textFaint);
+        }
+        setFont(cr, 10.0f, true);
+        for (const Row& r : rows_)
+        {
+            const Rect b = r.source->bounds();
+            drawText(cr, std::to_string(r.route + 1), {b.x - 26, b.y, 22, b.h}, Align::Right, theme::textFaint);
+        }
+        for (int i = 0; i < 2; ++i)
+        {
+            const Rect t = pageTab(i);
+            const bool on = ed_.matrixPage() == i;
+            fillRounded(cr, t, 4, on ? theme::accent.withAlpha(0.2f) : theme::panelLight);
+            strokeRounded(cr, t, 4, on ? theme::accent.withAlpha(0.8f) : theme::outline);
+            setFont(cr, 10.0f, on);
+            drawText(cr, i == 0 ? "1-16" : "17-32", t, Align::Center, on ? theme::text : theme::textDim);
+        }
+    }
+
+    bool mouseDown(const MouseEvent& e) override
+    {
+        for (int i = 0; i < 2; ++i)
+            if (pageTab(i).contains(e.x, e.y))
+            {
+                ed_.selectMatrixPage(i);
+                return true;
+            }
+        return false;
+    }
+
+private:
+    struct Row
+    {
+        int route = 0;
+        ParamSelector* source = nullptr;
+        DestButton* dest = nullptr;
+        ParamField* amount = nullptr;
+        ParamField* curve = nullptr;
+    };
+    Editor& ed_;
+    std::vector<Row> rows_;
 };
 
 // ------------------------------------------------------------ Editor
@@ -541,7 +825,7 @@ Editor::Editor(Controller& controller) : controller_(controller), ctx_(controlle
     logicalH_ = std::max(static_cast<float>(s.getDouble("gui_height", kBaseH)), kMinH);
     scale_ = NativeWindow::systemScale() * s.getDouble("gui_scaling", 1.0);
 
-    for (int i = 0; i <= kMaster; ++i)
+    for (int i = 0; i <= kMod; ++i)
         rows_[static_cast<size_t>(i)] = add<LaneRow>(*this, i);
     hitStrip_ = add<HitStrip>(*this);
     playButton_ = add<Button>("Play", [this] { audition(); });
@@ -560,6 +844,19 @@ Editor::Editor(Controller& controller) : controller_(controller), ctx_(controlle
     scope_ = add<Scope>(*this);
     chain_ = add<ChainRow>(*this);
     slotGrid_ = add<ControlGrid>(ctx_);
+    for (int i = 0; i < static_cast<int>(modTabs_.size()); ++i)
+    {
+        const bool lfo = i < pid::kNumLfos;
+        modTabs_[static_cast<size_t>(i)] =
+            add<Button>((lfo ? "LFO " : "Env ") + std::to_string((lfo ? i : i - pid::kNumLfos) + 1),
+                        [this, i] { selectModTab(i); });
+        modTabs_[static_cast<size_t>(i)]->fontSize = 10.5f;
+    }
+    lfoView_ = add<LfoView>(*this);
+    matrix_ = add<MatrixPanel>(*this);
+    presetBar_ = add<PresetBar>(*this);
+    browser_ = add<PresetBrowser>(*this);
+    browser_->setVisible(false);
 
     grabKeyboard = [this] { window_.grabKeyboard(); };
     setBounds({0, 0, logicalW_, logicalH_});
@@ -583,7 +880,14 @@ Editor::Structure Editor::structure() const
     Structure s;
     s.lane = lane_;
     s.slot = selectedSlot();
+    s.guard = guardSelected();
     s.tab = curveTab_;
+    if (lane_ == kMod)
+    {
+        s.modTab = modTab_;
+        s.page = matrixPage_;
+        return s;
+    }
     if (lane_ < kMaster)
         s.source = static_cast<int>(std::lround(ctx_.value(ctx_.index(pid::lane(lane_, pid::LSource)))));
     s.slotType = static_cast<int>(std::lround(ctx_.value(ctx_.index(slotId(s.slot, pid::SType)))));
@@ -606,6 +910,12 @@ void Editor::buildStrip()
 {
     using namespace pid;
     strip_->clear();
+    if (lane_ == kMod)
+    {
+        for (int m = 0; m < pid::kNumMacros; ++m)
+            strip_->control(macro(m), "Macro " + std::to_string(m + 1));
+        return;
+    }
     if (lane_ == kMaster)
     {
         strip_->control(Output, "Output");
@@ -637,15 +947,43 @@ void Editor::buildSource()
     using namespace pid;
     source_->clear();
     macros_->clear();
-    const bool master = lane_ == kMaster;
-    const int src = master ? -1 : static_cast<int>(std::lround(ctx_.value(ctx_.index(lane(lane_, LSource)))));
+    const bool master = lane_ == kMaster, mod = lane_ == kMod;
+    const int src = master || mod ? -1 : static_cast<int>(std::lround(ctx_.value(ctx_.index(lane(lane_, LSource)))));
     const bool body = src == static_cast<int>(dsp::Source::Body);
-    curve_->setVisible(body);
+    const bool env = mod && modTab_ >= pid::kNumLfos;
+    curve_->setVisible(body || env);
+    curve_->setEnv(env ? modTab_ - pid::kNumLfos : -1);
     macros_->setVisible(body);
-    scope_->setVisible(!body);
+    scope_->setVisible(!body && !mod);
     scope_->channel = master ? 0 : lane_ + 1;
+    lfoView_->setVisible(mod && !env);
+    for (size_t i = 0; i < modTabs_.size(); ++i)
+    {
+        modTabs_[i]->setVisible(mod);
+        modTabs_[i]->setActive(static_cast<int>(i) == modTab_);
+    }
     if (master)
         return;
+    if (mod)
+    {
+        if (env)
+        {
+            const int k = modTab_ - pid::kNumLfos;
+            source_->control(modEnv(k, EnvTime), "Time");
+            source_->control(modEnv(k, EnvLoop), "Loop");
+        }
+        else
+        {
+            const int k = modTab_;
+            lfoView_->lfo = k;
+            source_->control(lfo(k, LfoShape), "Shape", 1.3f);
+            source_->control(lfo(k, LfoRate), "Rate");
+            source_->control(lfo(k, LfoSync), "Sync", 1.2f);
+            source_->control(lfo(k, LfoPhase), "Phase");
+            source_->control(lfo(k, LfoRetrigger), "Retrigger", 1.2f);
+        }
+        return;
+    }
     const int l = lane_;
     auto c = [&](LaneField f, const char* label, float span = 1.0f) { source_->control(lane(l, f), label, span); };
     switch (static_cast<dsp::Source>(src))
@@ -716,6 +1054,12 @@ void Editor::buildSource()
         c(ResDrop, "Drop");
         c(ResDropTime, "Drop Time");
         break;
+    case dsp::Source::Bus:
+        for (int b = 0; b < dsp::kNumLanes; ++b)
+            if (b != l)
+                source_->control(lane(l, BusLane) + static_cast<uint32_t>(b), "Lane " + std::to_string(b + 1));
+        c(BusTap, "Tap", 1.6f);
+        break;
     }
 }
 
@@ -723,6 +1067,25 @@ void Editor::buildSlot()
 {
     using namespace pid;
     slotGrid_->clear();
+    chain_->setVisible(lane_ != kMod);
+    slotGrid_->setVisible(lane_ != kMod);
+    matrix_->setVisible(lane_ == kMod);
+    if (lane_ == kMod)
+    {
+        matrix_->build();
+        return;
+    }
+    if (guardSelected())
+    {
+        const int l = lane_;
+        slotGrid_->control(lane(l, LGuardDelay), "Delay");
+        slotGrid_->control(lane(l, LGuardFade), "Fade");
+        slotGrid_->gap(0.4f);
+        slotGrid_->control(lane(l, LDuckSource), "Duck", 1.3f);
+        slotGrid_->control(lane(l, LDuckDepth), "Depth");
+        slotGrid_->control(lane(l, LDuckRelease), "Release");
+        return;
+    }
     const int s = selectedSlot();
     slotGrid_->control(slotId(s, SType), "Type", 1.5f);
     const int type = static_cast<int>(std::lround(ctx_.value(ctx_.index(slotId(s, SType)))));
@@ -758,7 +1121,7 @@ void Editor::buildSlot()
 
 void Editor::selectLane(int lane)
 {
-    lane = std::clamp(lane, 0, kMaster);
+    lane = std::clamp(lane, 0, kMod);
     if (lane != lane_)
     {
         lane_ = lane;
@@ -769,11 +1132,162 @@ void Editor::selectLane(int lane)
 void Editor::selectSlot(int slot)
 {
     slot = std::clamp(slot, 0, dsp::kNumSlots - 1);
-    if (slot != selectedSlot())
+    if (slot != selectedSlot() || guardSelected())
     {
         slot_[static_cast<size_t>(lane_)] = slot;
+        guard_[static_cast<size_t>(lane_)] = false;
         markDirty();
     }
+}
+
+void Editor::selectGuard()
+{
+    if (lane_ < kMaster && !guardSelected())
+    {
+        guard_[static_cast<size_t>(lane_)] = true;
+        markDirty();
+    }
+}
+
+void Editor::selectModTab(int tab)
+{
+    tab = std::clamp(tab, 0, pid::kNumLfos + pid::kNumModEnvs - 1);
+    if (tab != modTab_)
+    {
+        modTab_ = tab;
+        markDirty();
+    }
+}
+
+void Editor::selectMatrixPage(int page)
+{
+    page = std::clamp(page, 0, pid::kNumRoutes / MatrixPanel::kPerPage - 1);
+    if (page != matrixPage_)
+    {
+        matrixPage_ = page;
+        markDirty();
+    }
+}
+
+bool Editor::addRoute(ModSource source, int index)
+{
+    const int dest = ctx_.table().destinationOf(index);
+    if (dest <= 0)
+        return false;
+    for (int r = 0; r < pid::kNumRoutes; ++r)
+    {
+        const int s = ctx_.index(pid::route(r, pid::RSource)), d = ctx_.index(pid::route(r, pid::RDest));
+        if (std::lround(ctx_.value(s)) > 0 || std::lround(ctx_.value(d)) > 0)
+            continue;
+        const int a = ctx_.index(pid::route(r, pid::RAmount)), c = ctx_.index(pid::route(r, pid::RCurve));
+        ctx_.change(s, static_cast<double>(source));
+        ctx_.change(d, static_cast<double>(dest));
+        ctx_.change(a, ctx_.table().fromPlain(a, 25.0));
+        ctx_.change(c, ctx_.defaultValue(c));
+        return true;
+    }
+    return false;
+}
+
+std::vector<MenuItem> Editor::destinationMenu(std::function<void(int)> pick)
+{
+    const ParamTable& t = ctx_.table();
+    const std::vector<int>& dests = t.destinations();
+    // "L1 Slot 2 Cutoff" -> "Cutoff", "L1 Pitch Start" -> "Pitch Start".
+    auto item = [&](int index) {
+        MenuItem it;
+        it.label = shortName(ctx_.def(index).name);
+        const int v = t.destinationOf(index);
+        it.action = [pick, v] { pick(v); };
+        return it;
+    };
+    auto group = [&](const std::string& module, const std::string& label) {
+        MenuItem m;
+        m.label = label;
+        for (int index : dests)
+        {
+            if (t.def(index).module != module)
+                continue;
+            // A letter its slot's type has no use for is left out.
+            if (t.def(index).typeParam >= 0 && ctx_.def(index).key == t.def(index).key)
+                continue;
+            m.submenu.push_back(item(index));
+        }
+        return m;
+    };
+    auto slots = [&](std::vector<MenuItem>& out, const std::string& prefix, auto typeId) {
+        for (int s = 0; s < dsp::kNumSlots; ++s)
+        {
+            const int type = static_cast<int>(std::lround(ctx_.value(ctx_.index(typeId(s)))));
+            if (type == 0)
+                continue;
+            const std::string n = std::to_string(s + 1);
+            out.push_back(group(prefix + "/Slot " + n,
+                                "Slot " + n + ": " + ctx_.def(ctx_.index(typeId(s))).labels[static_cast<size_t>(type)]));
+        }
+    };
+
+    std::vector<MenuItem> items;
+    items.push_back({"None", [pick] { pick(0); }});
+    items.push_back({"", {}, false, true, true});
+    for (int l = 0; l < dsp::kNumLanes; ++l)
+    {
+        const std::string lane = "Lane " + std::to_string(l + 1);
+        MenuItem top;
+        top.label = lane;
+        top.submenu.push_back(group(lane, "Lane"));
+        const int src = static_cast<int>(std::lround(ctx_.value(ctx_.index(pid::lane(l, pid::LSource)))));
+        if (src != static_cast<int>(dsp::Source::Bus))
+            top.submenu.push_back(group(lane + "/" + kSourceNames[std::clamp(src, 0, 3)], kSourceNames[std::clamp(src, 0, 3)]));
+        slots(top.submenu, lane, [l](int s) { return pid::slot(l, s, pid::SType); });
+        items.push_back(std::move(top));
+    }
+    MenuItem master;
+    master.label = "Master";
+    master.submenu.push_back(group("Master", "Output"));
+    slots(master.submenu, "Master", [](int s) { return pid::masterSlot(s, pid::SType); });
+    items.push_back(std::move(master));
+    return items;
+}
+
+void Editor::showModMenu(int index, float x, float y)
+{
+    const int dest = ctx_.table().destinationOf(index);
+    std::vector<MenuItem> items;
+    items.push_back({"Modulate " + shortName(ctx_.def(index).name), {}, false, false});
+    const ParamDef& sources = ctx_.table().def(ctx_.index(pid::route(0, pid::RSource)));
+    MenuItem add;
+    add.label = "Add";
+    for (int s = 1; s < static_cast<int>(ModSource::Count); ++s)
+        add.submenu.push_back({sources.labels[static_cast<size_t>(s)], [this, s, index] {
+                                   if (!addRoute(static_cast<ModSource>(s), index))
+                                       notify("All 32 routes are in use");
+                               }});
+    items.push_back(std::move(add));
+    // The routes already on it, each with its amount and a way to remove it.
+    for (int r = 0; r < pid::kNumRoutes; ++r)
+    {
+        const int si = ctx_.index(pid::route(r, pid::RSource)), di = ctx_.index(pid::route(r, pid::RDest));
+        const int src = static_cast<int>(std::lround(ctx_.value(si)));
+        if (src <= 0 || std::lround(ctx_.value(di)) != dest)
+            continue;
+        const int ai = ctx_.index(pid::route(r, pid::RAmount));
+        MenuItem it;
+        it.label = "Mod " + std::to_string(r + 1) + ": " + ctx_.text(si) + ", " + ctx_.text(ai);
+        it.submenu.push_back({"Show in the matrix", [this, r] {
+                                  selectLane(kMod);
+                                  selectMatrixPage(r / MatrixPanel::kPerPage);
+                              }});
+        it.submenu.push_back({"Remove", [this, si, di, ai] {
+                                  ctx_.change(si, 0.0);
+                                  ctx_.change(di, 0.0);
+                                  ctx_.change(ai, ctx_.defaultValue(ai));
+                              }});
+        if (items.size() == 2)
+            items.push_back({"", {}, false, true, true});
+        items.push_back(std::move(it));
+    }
+    showMenu(this, std::move(items), x, y);
 }
 
 void Editor::selectCurveTab(int tab)
@@ -828,33 +1342,45 @@ void Editor::layout()
     menuButton_->setBounds({W - 42, 8, 30, 28});
     exportButton_->setBounds({W - 112, 8, 64, 28});
     playButton_->setBounds({W - 170, 8, 52, 28});
-    hitStrip_->setBounds({S.strip.x, 8, W - 170 - 8 - S.strip.x, 28});
+    presetBar_->setBounds({S.strip.x, 8, 250, 28});
+    hitStrip_->setBounds({S.strip.x + 258, 8, W - 170 - 8 - S.strip.x - 258, 28});
+    browser_->setBounds({S.strip.x, 46, W - S.strip.x - 12, H - 58});
 
     // Rack: eight lanes and the master, sharing the height.
     const Rect R = S.rack;
     const float top = R.y + 28, gap = 5;
-    const float rowH = (R.bottom() - 8 - top - gap * kMaster) / (kMaster + 1);
-    for (int i = 0; i <= kMaster; ++i)
+    const float rowH = (R.bottom() - 8 - top - gap * kMod) / (kMod + 1);
+    for (int i = 0; i <= kMod; ++i)
         rows_[static_cast<size_t>(i)]->setBounds({R.x + 8, top + i * (rowH + gap), R.w - 16, rowH});
 
     strip_->setBounds({S.strip.x, S.strip.y + 28, S.strip.w, S.strip.h - 30});
 
     const Rect src = S.source;
-    const bool body = curve_->isVisible();
+    const bool body = curve_->isVisible() && lane_ != kMod;
     const float left = lane_ == kMaster ? 0.0f : (body ? 6.3f * kCellW + 20 : 4.6f * kCellW + 20);
-    source_->setBounds({src.x, src.y + 30, left, src.h - 34});
+    source_->setBounds({src.x, src.y + (lane_ == kMod ? 62 : 30), left, src.h - (lane_ == kMod ? 66 : 34)});
+    for (size_t i = 0; i < modTabs_.size(); ++i)
+        modTabs_[i]->setBounds({src.x + 10 + i * 56.0f, src.y + 28, 52, 22});
     const Rect right{src.x + left + 4, src.y + 10, src.w - left - 14, src.h - 18};
     curve_->setBounds({right.x, right.y, right.w, right.h - kCellH - 10});
     macros_->setBounds({right.x + 40, right.bottom() - kCellH, right.w - 40, kCellH});
     scope_->setBounds(lane_ == kMaster ? Rect{src.x + 10, src.y + 30, src.w - 20, src.h - 40}
                                        : Rect{right.x, right.y + 20, right.w, right.h - 20});
 
+    if (lane_ == kMod)
+    {
+        // The modulators' editors start under their tabs.
+        const Rect mr{src.x + left + 4, src.y + 56, src.w - left - 14, src.h - 64};
+        curve_->setBounds(mr);
+        lfoView_->setBounds(mr);
+    }
     const Rect C = S.chain;
+    matrix_->setBounds({C.x + 8, C.y + 4, C.w - 16, C.h - 8});
     chain_->setBounds({C.x + 10, C.y + 30, C.w - 20, 46});
     slotGrid_->setBounds({C.x, C.y + 90, C.w, C.h - 92});
 }
 
-Rect Editor::laneRowBounds(int lane) const { return rows_[static_cast<size_t>(std::clamp(lane, 0, kMaster))]->bounds(); }
+Rect Editor::laneRowBounds(int lane) const { return rows_[static_cast<size_t>(std::clamp(lane, 0, kMod))]->bounds(); }
 
 void Editor::paint(cairo_t* cr)
 {
@@ -873,6 +1399,16 @@ void Editor::paint(cairo_t* cr)
         drawText(cr, title, {r.x + 12, r.y + 6, r.w - 24, 18}, Align::Left, theme::accent);
     };
     section(S.rack, "LANES");
+    if (lane_ == kMod)
+    {
+        section(S.strip, "MACROS");
+        section(S.source, "MODULATORS");
+        section(S.chain, "MATRIX");
+        setFont(cr, 10.5f);
+        drawText(cr, "Right-click any knob to modulate it", {S.chain.x + 120, S.chain.y + 6, 300, 18}, Align::Left,
+                 theme::textFaint);
+        return;
+    }
     if (lane_ == kMaster)
     {
         section(S.strip, "MASTER");
@@ -884,7 +1420,7 @@ void Editor::paint(cairo_t* cr)
         const std::string lane = "LANE " + std::to_string(lane_ + 1);
         section(S.strip, lane);
         const int src = static_cast<int>(std::lround(ctx_.value(ctx_.index(pid::lane(lane_, pid::LSource)))));
-        std::string name = kSourceNames[std::clamp(src, 0, 3)];
+        std::string name = kSourceNames[std::clamp(src, 0, 4)];
         for (auto& ch : name)
             ch = static_cast<char>(std::toupper(static_cast<unsigned char>(ch)));
         section(S.source, name);
@@ -898,8 +1434,8 @@ void Editor::paint(cairo_t* cr)
     }
     // Under the chain: which slot the controls below belong to.
     setFont(cr, 10.5f, true);
-    drawText(cr, "SLOT " + std::to_string(selectedSlot() + 1), {S.chain.x + 12, S.chain.y + 78, 120, 14},
-             Align::Left, theme::textDim);
+    drawText(cr, guardSelected() ? std::string("GUARD") : "SLOT " + std::to_string(selectedSlot() + 1),
+             {S.chain.x + 12, S.chain.y + 78, 120, 14}, Align::Left, theme::textDim);
     setColor(cr, theme::outline);
     cairo_rectangle(cr, S.chain.x + 60, S.chain.y + 85, S.chain.w - 72, 1);
     cairo_fill(cr);
@@ -940,14 +1476,35 @@ void Editor::onMouseDown(const MouseEvent& e)
 {
     // A click anywhere in a rack row selects it, its controls included.
     if (!hasOverlay())
-        for (int i = 0; i <= kMaster; ++i)
+        for (int i = 0; i <= kMod; ++i)
             if (rows_[static_cast<size_t>(i)]->bounds().contains(e.x, e.y))
                 selectLane(i);
+    // Right-click on a knob: its modulation.
+    if (e.button == 3 && !hasOverlay())
+        if (auto* k = dynamic_cast<Knob*>(hitTest(e.x, e.y)))
+            if (ctx_.table().destinationOf(k->paramIndex()) > 0)
+            {
+                showModMenu(k->paramIndex(), e.x, e.y);
+                return;
+            }
     handleMouseDown(e);
 }
 
 bool Editor::keyDown(const KeyEvent& e)
 {
+    if (browser_->isVisible() && !hasOverlay())
+    {
+        if (e.keysym == key::Escape)
+        {
+            togglePresetBrowser();
+            return true;
+        }
+        if (e.keysym == key::Up || e.keysym == key::Down)
+        {
+            browser_->step(e.keysym == key::Up ? -1 : 1);
+            return true;
+        }
+    }
     if (e.keysym == key::Escape)
     {
         closeAllOverlays();
@@ -957,6 +1514,74 @@ bool Editor::keyDown(const KeyEvent& e)
 }
 
 void Editor::audition() { controller_.audition(); }
+
+bool Editor::presetBrowserOpen() const { return browser_->isVisible(); }
+
+void Editor::togglePresetBrowser()
+{
+    const bool open = !browser_->isVisible();
+    if (open)
+        browser_->refresh();
+    browser_->setVisible(open);
+    markDirty();
+}
+
+void Editor::loadPreset(const PresetInfo& p)
+{
+    StateDocument doc;
+    bool ok = false;
+    if (p.factory)
+    {
+        const char* text = factoryPresetText(p.key);
+        ok = text && parseState(text, doc);
+    }
+    else
+        ok = readPresetFile(p.key, doc);
+    if (!ok)
+    {
+        notify("Cannot read " + p.name);
+        return;
+    }
+    controller_.loadDocument(doc, p.name);
+    if (Settings::get().getDouble("preset_audition", 1.0) > 0.5)
+        controller_.audition();
+    markDirty();
+}
+
+void Editor::stepPreset(int step)
+{
+    if (!browser_->isVisible())
+        browser_->refresh();
+    browser_->step(step);
+}
+
+void Editor::savePresetAs()
+{
+    const Rect anchor = presetBar_->bounds();
+    auto ed = std::make_unique<TextEditor>(controller_.presetName(), [this](const std::string& typed) {
+        std::string name = typed;
+        while (!name.empty() && name.back() == ' ')
+            name.pop_back();
+        if (name.empty())
+            return;
+        StateDocument doc = controller_.currentDocument();
+        const std::string path = writeUserPreset(name, doc);
+        if (path.empty())
+        {
+            notify("Could not save " + name);
+            return;
+        }
+        controller_.loadDocument(doc, name);
+        browser_->refresh();
+        notify("Saved " + name);
+    });
+    ed->setBounds({anchor.x, anchor.y, anchor.w, anchor.h});
+    Widget* raw = ed.get();
+    pushOverlay(std::move(ed));
+    setKeyFocus(raw);
+    if (grabKeyboard)
+        grabKeyboard();
+}
 
 std::string Editor::exportHit(const std::string& requested)
 {
@@ -1055,6 +1680,14 @@ void Editor::showMainMenu()
                      },
                      normalise});
     items.push_back({"Export Hit...", [this] { saveHitAs(); }});
+    items.push_back({"", nullptr, false, true, true});
+    const bool play = Settings::get().getDouble("preset_audition", 1.0) > 0.5;
+    items.push_back({"Play Presets When Loaded", [play] {
+                         Settings::get().set("preset_audition", play ? 0.0 : 1.0);
+                         Settings::get().save();
+                     },
+                     play});
+    items.push_back({"Save Preset As...", [this] { savePresetAs(); }});
     items.push_back({"", nullptr, false, true, true});
     items.push_back({std::string(kPluginName) + " " + kPluginVersion, nullptr, false, false});
     showMenu(this, std::move(items), menuButton_->bounds().right() - 220, menuButton_->bounds().bottom() + 4);

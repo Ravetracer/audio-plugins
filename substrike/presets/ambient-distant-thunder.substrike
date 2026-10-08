@@ -1,0 +1,31 @@
+[Substrike]
+format=1
+name=Distant Thunder
+category=Ambient
+author=Substrike
+tags=ambient, reverb, cinematic
+description=A kick heard from far away: mostly room, low and rolling, like thunder over hills.
+[Parameters]
+l1.body.pitch_start=160
+l1.body.pitch_end=42
+l1.body.sweep=150
+l1.body.hold=50
+l1.body.decay=500
+l3.on=On
+l3.level=-18
+l3.noise.color=Brown
+l3.noise.filter=Low Pass
+l3.noise.cutoff=300
+l3.noise.attack=10
+l3.noise.hold=50
+l3.noise.decay=600
+master.slot1.type=Reverb
+master.slot1.mix=60
+master.slot1.size=100
+master.slot1.decay=3500
+master.slot1.damping=1200
+master.slot1.predelay=40
+master.slot2.type=Filter
+master.slot2.mode=LP 12
+master.slot2.cutoff=1500
+output=-0.9

@@ -1,0 +1,27 @@
+[Substrike]
+format=1
+name=Stadium
+category=Pop
+author=Substrike
+tags=big, reverb, anthemic
+description=A big anthemic kick with a hall around its top: the low end stays dry, the reverb sits above it.
+[Parameters]
+l1.body.pitch_start=384
+l1.body.pitch_end=50
+l1.body.sweep=120
+l1.body.hold=40
+l1.body.decay=420
+l4.on=On
+l4.level=-12
+l4.resonator.exciter=Mallet
+l4.resonator.tune=85
+l4.resonator.decay=300
+master.slot1.type=Reverb
+master.slot1.band=Mid+High
+master.slot1.mix=35
+master.slot1.size=85
+master.slot1.decay=2200
+master.slot1.damping=6000
+master.slot1.predelay=12
+master.mono_below=120
+output=-1.5

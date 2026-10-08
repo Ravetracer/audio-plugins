@@ -1,0 +1,23 @@
+[Substrike]
+format=1
+name=Laser Thud
+category=Experimental
+author=Substrike
+tags=fm, metallic, laser
+description=A metallic FM thud: an inharmonic modulator and feedback ring over the drop.
+[Parameters]
+l1.body.pitch_start=600
+l1.body.pitch_end=50
+l1.body.sweep=80
+l1.body.hold=40
+l1.body.decay=350
+l1.body.fm_amount=60
+l1.body.fm_ratio=3.5
+l1.body.fm_decay=80
+l1.body.feedback=30
+l1.slot1.type=Filter
+l1.slot1.mode=LP 24
+l1.slot1.cutoff=4000
+l1.slot1.env=3
+l1.slot1.env_decay=80
+output=-1.6

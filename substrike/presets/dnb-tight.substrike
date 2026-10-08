@@ -1,0 +1,27 @@
+[Substrike]
+format=1
+name=Tight Roller
+category=Drum & Bass
+author=Substrike
+tags=dnb, tight, punchy
+description=A tight drum and bass kick at 80 Hz: all punch, no tail, so the bass owns the low end.
+[Parameters]
+l1.body.pitch_start=800
+l1.body.pitch_end=80
+l1.body.sweep=52
+l1.body.sweep_curve=70
+l1.body.hold=10
+l1.body.decay=130
+l2.on=On
+l2.level=-4
+l2.click.type=Noise
+l2.click.decay=3
+l2.click.filter=Band Pass
+l2.click.cutoff=4500
+l2.click.reso=20
+l1.slot1.type=Transient
+l1.slot1.attack=60
+l1.slot1.sustain=-30
+l1.slot2.type=Clipper
+l1.slot2.drive=5
+output=-5.2

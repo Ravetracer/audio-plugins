@@ -1,0 +1,28 @@
+[Substrike]
+format=1
+name=Dusty Knock
+category=Hip Hop
+author=Substrike
+tags=knock, acoustic, warm
+description=A knocking kick with a skin: a resonator membrane over a short body, darkened like an old record.
+[Parameters]
+l1.body.pitch_start=170
+l1.body.pitch_end=58
+l1.body.sweep=50
+l1.body.hold=20
+l1.body.decay=220
+l4.on=On
+l4.level=-6
+l4.resonator.exciter=Mallet
+l4.resonator.model=Membrane
+l4.resonator.tune=72
+l4.resonator.decay=260
+l4.resonator.damping=55
+l4.resonator.hardness=60
+master.slot1.type=Filter
+master.slot1.mode=LP 12
+master.slot1.cutoff=4000
+master.slot2.type=Distortion
+master.slot2.model=Tube
+master.slot2.drive=20
+output=-2.3

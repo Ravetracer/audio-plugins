@@ -17,7 +17,7 @@ namespace substrike {
 //   1 - 999        global
 //   1000 * (L + 1) lane L (0-7): + 0-99 lane, + 100-199 Body, + 200-299
 //                  Click, + 300-399 Noise, + 400-499 Resonator, + 500-599
-//                  spare, + 600-899 the six effect slots (50 each)
+//                  Bus, + 600-899 the six effect slots (50 each)
 //   9000 - 9999    master chain
 //   10000 -        modulation
 namespace pid {
@@ -49,6 +49,11 @@ enum LaneField : uint32_t
     LVariation = 11,
     LXoverLow = 12,
     LXoverHigh = 13,
+    LGuardDelay = 14,
+    LGuardFade = 15,
+    LDuckSource = 16,
+    LDuckDepth = 17,
+    LDuckRelease = 18,
 
     BodyPitchStart = 100,
     BodyPitchEnd = 101,
@@ -103,6 +108,9 @@ enum LaneField : uint32_t
     ResHardness = 408,
     ResDrop = 409,
     ResDropTime = 410,
+
+    BusLane = 500, // .. 507: one switch per lane
+    BusTap = 508,
 };
 
 constexpr uint32_t kLaneBlock = 1000;
@@ -124,7 +132,52 @@ constexpr uint32_t slot(int l, int s, uint32_t f)
     return lane(l, LEnabled) + 600 + kSlotBlock * static_cast<uint32_t>(s) + f;
 }
 constexpr uint32_t masterSlot(int s, uint32_t f) { return 9000 + kSlotBlock * static_cast<uint32_t>(s) + f; }
+
+// Modulation. A route of the matrix: 10 ids each from 10000; an LFO: 20 each
+// from 11000; an envelope: 20 each from 11200; the macros from 11400.
+constexpr int kNumRoutes = 32;
+constexpr int kNumLfos = 4;
+constexpr int kNumModEnvs = 4;
+constexpr int kNumMacros = 8;
+enum RouteField : uint32_t
+{
+    RSource = 0,
+    RDest = 1,
+    RAmount = 2,
+    RCurve = 3,
+};
+enum LfoField : uint32_t
+{
+    LfoShape = 0,
+    LfoRate = 1,
+    LfoSync = 2,
+    LfoPhase = 3,
+    LfoRetrigger = 4,
+};
+enum EnvField : uint32_t
+{
+    EnvTime = 0,
+    EnvLoop = 1,
+};
+constexpr uint32_t route(int r, RouteField f) { return 10000 + 10 * static_cast<uint32_t>(r) + f; }
+constexpr uint32_t lfo(int k, LfoField f) { return 11000 + 20 * static_cast<uint32_t>(k) + f; }
+constexpr uint32_t modEnv(int k, EnvField f) { return 11200 + 20 * static_cast<uint32_t>(k) + f; }
+constexpr uint32_t macro(int m) { return 11400 + static_cast<uint32_t>(m); }
 } // namespace pid
+
+// What a route reads, in the order its Source parameter lists them.
+enum class ModSource : int
+{
+    Off = 0,
+    Velocity,
+    Note,
+    Random,
+    Lfo1,
+    Env1 = Lfo1 + pid::kNumLfos,
+    Macro1 = Env1 + pid::kNumModEnvs,
+    Follow1 = Macro1 + pid::kNumMacros,
+    Count = Follow1 + dsp::kNumLanes,
+};
 
 enum class Kind : uint8_t
 {
@@ -162,6 +215,9 @@ struct ParamDef
     // A slot's A-F: the table index of the slot's Type, and which letter.
     int typeParam = -1;
     int letter = -1;
+    // A route's Destination: its labels are the destinations' names, one per
+    // entry of ParamTable::destinations() after "Off".
+    bool isDestination = false;
 };
 
 class ParamTable
@@ -201,6 +257,13 @@ public:
     // Whether this is a slot's Type, which the letters hang off.
     bool isSlotType(int index) const { return isType_[static_cast<size_t>(index)]; }
 
+    // What a route can modulate: every continuous, automatable parameter
+    // outside the modulation block, as table indices. A Destination's value
+    // v > 0 means destinations()[v - 1].
+    const std::vector<int>& destinations() const { return destinations_; }
+    // The destination value for a parameter, 0 if it cannot be modulated.
+    int destinationOf(int index) const { return destinationOf_[static_cast<size_t>(index)]; }
+
 private:
     ParamTable();
     std::vector<ParamDef> defs_;
@@ -211,6 +274,8 @@ private:
     std::vector<bool> isType_;
     std::vector<ParamDef> views_;
     std::unordered_map<std::string, std::vector<int>> byViewKey_; // key -> indices into views_
+    std::vector<int> destinations_;
+    std::vector<int> destinationOf_;
 };
 
 std::string noteName(int midi);
@@ -219,5 +284,9 @@ bool isOff(const ParamDef& d, double plain);
 // Convert a full set of stored values (indexed by ParamTable index) into
 // engine parameters.
 dsp::EngineParams buildEngineParams(const double* values);
+// Writes the one parameter `index` into `p`, from `values` (a slot letter is
+// read the way its slot's type defines it). Modulation parameters write
+// nothing: the player reads those itself.
+void assignParam(dsp::EngineParams& p, int index, const double* values);
 
 } // namespace substrike

@@ -1,0 +1,32 @@
+[Substrike]
+format=1
+name=Cassette Wobble
+category=Lo-Fi
+author=Substrike
+tags=cassette, wobble, detuned
+description=A worn cassette: the pitch wobbles slowly from hit to hit and the top is gone.
+[Parameters]
+l1.body.pitch_start=210
+l1.body.pitch_end=50
+l1.body.sweep=80
+l1.body.hold=30
+l1.body.decay=360
+mod.lfo1.shape=Sine
+mod.lfo1.rate=0.6
+mod.lfo1.retrigger=Off
+mod.lfo2.shape=Smooth
+mod.lfo2.rate=3.5
+mod.lfo2.retrigger=Off
+mod.route1.source=LFO 1
+mod.route1.dest=L1 Pitch End
+mod.route1.amount=3
+mod.route2.source=LFO 2
+mod.route2.dest=L1 Pitch Start
+mod.route2.amount=2
+master.slot1.type=Filter
+master.slot1.mode=LP 24
+master.slot1.cutoff=3500
+master.slot2.type=Distortion
+master.slot2.model=Soft Clip
+master.slot2.drive=25
+output=0

@@ -1,0 +1,26 @@
+[Substrike]
+format=1
+name=Classic Tok
+category=Trance
+author=Substrike
+tags=classic, knock, short
+description=A classic late-nineties trance kick: short, knocky and tight on the low end.
+[Parameters]
+l1.body.pitch_start=672
+l1.body.pitch_end=55
+l1.body.sweep=75
+l1.body.sweep_curve=70
+l1.body.hold=25
+l1.body.decay=250
+l2.on=On
+l2.level=-2
+l2.click.type=Blip
+l2.click.decay=2
+l2.click.pitch=1600
+l2.click.sweep=1.5
+l2.click.filter=Off
+l1.slot1.type=EQ
+l1.slot1.mid=3
+l1.slot1.mid_freq=900
+l1.slot1.mid_q=2
+output=-3.9

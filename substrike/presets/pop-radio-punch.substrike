@@ -1,0 +1,32 @@
+[Substrike]
+format=1
+name=Radio Punch
+category=Pop
+author=Substrike
+tags=punchy, polished, radio
+description=A polished, radio-ready kick: tight low end, a clear beater and a compressor holding it all together.
+[Parameters]
+l1.body.pitch_start=448
+l1.body.pitch_end=56
+l1.body.sweep=90
+l1.body.hold=25
+l1.body.decay=280
+l2.on=On
+l2.level=-6
+l2.click.type=Noise
+l2.click.decay=3
+l2.click.filter=Band Pass
+l2.click.cutoff=3500
+l2.click.reso=20
+master.slot1.type=Compressor
+master.slot1.threshold=-16
+master.slot1.ratio=4
+master.slot1.attack=12
+master.slot1.release=80
+master.slot1.makeup=3
+master.slot2.type=EQ
+master.slot2.low=2
+master.slot2.mid=-2
+master.slot2.mid_freq=350
+master.slot2.high=2
+output=-6.1

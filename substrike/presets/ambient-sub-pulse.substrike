@@ -1,0 +1,19 @@
+[Substrike]
+format=1
+name=Sub Pulse
+category=Ambient
+author=Substrike
+tags=sub, soft, minimal
+description=Barely a kick: a soft sub pulse with a slow attack, for music that breathes.
+[Parameters]
+l1.body.pitch_start=60
+l1.body.pitch_end=42
+l1.body.sweep=200
+l1.body.attack=12
+l1.body.hold=80
+l1.body.decay=900
+l1.body.decay_curve=30
+l1.slot1.type=Filter
+l1.slot1.mode=LP 12
+l1.slot1.cutoff=400
+output=-1

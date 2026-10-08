@@ -1,0 +1,23 @@
+[Substrike]
+format=1
+name=Tight Pop
+category=Pop
+author=Substrike
+tags=tight, short, clean
+description=A short, clean kick for busy pop productions.
+[Parameters]
+l1.body.pitch_start=512
+l1.body.pitch_end=62
+l1.body.sweep=68
+l1.body.hold=15
+l1.body.decay=180
+l2.on=On
+l2.level=-8
+l2.click.type=Blip
+l2.click.decay=1.5
+l2.click.pitch=2800
+l2.click.filter=Off
+l1.slot1.type=EQ
+l1.slot1.low=1
+l1.slot1.high=2
+output=-1.6

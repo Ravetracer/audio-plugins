@@ -56,7 +56,7 @@ audio-plugins/
 | 1 | **SäureKiste** | `saeure-kiste/` | 0.15.2 | Linux, Windows | CLAP, VST3 | a Roland TB-303 model, from the 1982 service notes, plus Robin Whittle's Devil Fish modification |
 | 2 | **RumpelKiste** | `rumpel-kiste/` | 0.2.1 | Linux, Windows | CLAP, VST3 | a Roland TR-909 model, from the 1984 service notes, with SäureKiste's sequencer and drive stage |
 | 3 | **Aurum** | `aurum/` | 0.3.1 | Linux, Windows | CLAP, VST3 | a clean-room algorithmic reverb (FDN, allpass ring, plate) with a per-frequency decay contour; own DSP and GUI, see *Aurum* below |
-| 4 | **Substrike** | `substrike/` | 0.4.0 | Linux, Windows | CLAP, VST3 | a layered kick drum designer for every style; standalone like Aurum, see *Substrike* below |
+| 4 | **Substrike** | `substrike/` | 0.8.0 | Linux, Windows | CLAP, VST3 | a layered kick drum designer for every style; standalone like Aurum, see *Substrike* below |
 
 Naming follows the plugin, not a pattern: the CMake project, the installed
 artifact and the display name are CamelCase (`SaeureKiste`), the folder is
@@ -432,17 +432,26 @@ across plugin folders.
 `docs/PLAN.md` is the source of truth: the design (8 lanes x 6 effect slots
 plus a master chain, per-slot band select, Bus lanes and a transient guard for
 rumble, per-lane aux outputs, hit export with drag-and-drop, a violet theme)
-and the eight phases. Phases 1-4 are done as of 0.4.0: the CLAP and VST3
-build, eight lanes with the Body, Click, Noise and Resonator sources, per-lane
+and the eight phases. Phases 1-7 are done as of 0.7.0: the CLAP and VST3
+build, eight lanes with the Body, Click, Noise, Resonator and Bus sources, per-lane
 delay, polarity, note filter, transpose, Variation and pitch link, the eight
-per-lane aux outputs, six effect slots per lane and on the master (nine
-types, band select, oversampling), mono below and an output clip, plain-text
+per-lane aux outputs, six effect slots per lane and on the master (sixteen
+types including Reverb, Delay, Warp, Smear, Ring Mod, Stereo and Utility,
+band select, oversampling), the transient guard (fade-in window and duck)
+at the end of every lane, mono below and an output clip, modulation (four
+LFOs, four curve envelopes, eight macros, velocity, note, random and lane
+followers through a 32-route matrix, applied by `plugin/Player` on a
+32-sample grid of the host's steady time), limiters (a slot type and the
+master's Output Clip), 117 factory presets with a browser, CLAP preset
+discovery and preset-load, the `substrike-metrics` tool, plain-text
 state, the offline renderer and self-test, and the editor: a lane rack on
 the left, the selected lane's strip, source, Body pitch/amp breakpoint curves
 and chain on the right (accent `#8F7CF7`), a hit preview rendered on a worker
 thread, Play, and the hit export by file and by drag and drop (an XDND
 source in `X11Window`, OLE `DoDragDrop` in `Win32Window`; Aurum's backends
-only accept drops). Undo/redo is not there yet.
+only accept drops). Undo/redo is not there yet. A bus lane reads other
+lanes in the same block: the engine orders the lanes by what they read
+each process call, so no input is a block late.
 
 What to know before working there:
 
@@ -459,6 +468,12 @@ What to know before working there:
 - **Breakpoint curves are state, macros are parameters.** Every curve is
   scaled by automatable macro parameters (start, end, time, curvature), so a
   drawn curve stays automatable.
+- **Factory presets are sparse** (`presets/*.substrike` list only what
+  differs from the defaults), so **a parameter's default must never
+  change** without rendering every preset before and after
+  (`substrike-render --all-presets --outdir ...`). `substrike-preset-check`
+  must report no problems. Regenerated presets go through
+  `presets-backup/` (gitignored), never a delete.
 - **The renderer is the test harness.** `build/substrike-render --selftest`
   loads the built `.clap` through the CLAP API; `install.sh` runs it. It also
   runs the Windows build under wine -- with a scratch `WINEPREFIX`, never the
@@ -527,6 +542,12 @@ cd vst3sdk && git submodule update --init base pluginterfaces public.sdk && cd .
 
 Reference versions in use: `clap` 1.2.10, `clap-wrapper` v0.16.0,
 `clap-validator` 0.4.1, `vst3sdk` 3.8.1.
+
+clap-validator 0.4.1 deadlocks in its `preset-discovery-crawl` and
+`preset-discovery-load` tests on any plugin that lists presets with load keys
+(presets compiled into the plugin, as Substrike's are): its `begin_preset()`
+holds a lock that its `flush_preset()` takes again. It hangs at zero CPU,
+forever. Exclude the two with `-x "preset-discovery-(crawl|load)"`.
 
 `clap-wrapper` needs one patch to build against VST3 3.8; it is kept in
 `shared/patches/` because `CLAP/` is gitignored and a fresh clone would lose it.

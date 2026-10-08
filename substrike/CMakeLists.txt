@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.21)
-project(Substrike VERSION 0.4.0 LANGUAGES C CXX)
+project(Substrike VERSION 0.8.0 LANGUAGES C CXX)
 
 # Substrike builds as a CLAP and, through the clap-wrapper, as a VST3, for
 # Linux and Windows (cross-compiled with mingw-w64). Like Aurum it does not use
@@ -86,25 +86,44 @@ else()
     set(SUBSTRIKE_WINDOW_SOURCE src/gui/X11Window.cpp)
 endif()
 
+# The factory presets, compiled in: presets/*.substrike as a header of string
+# literals. A preset added or removed is picked up at the next configure; an
+# edit to one at the next build.
+file(GLOB SUBSTRIKE_PRESET_FILES CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/presets/*.substrike")
+set(SUBSTRIKE_PRESET_HEADER "${CMAKE_CURRENT_BINARY_DIR}/generated/FactoryPresetData.h")
+add_custom_command(
+    OUTPUT "${SUBSTRIKE_PRESET_HEADER}"
+    COMMAND "${CMAKE_COMMAND}" -DPRESET_DIR="${CMAKE_CURRENT_SOURCE_DIR}/presets"
+            -DOUTPUT="${SUBSTRIKE_PRESET_HEADER}" -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/embed_presets.cmake"
+    DEPENDS ${SUBSTRIKE_PRESET_FILES} "${CMAKE_CURRENT_SOURCE_DIR}/cmake/embed_presets.cmake"
+    COMMENT "Embedding the factory presets")
+add_custom_target(substrike-presets DEPENDS "${SUBSTRIKE_PRESET_HEADER}")
+
 add_library(substrike-impl STATIC
     src/dsp/Engine.cpp
     src/dsp/Sources.cpp
     src/dsp/Drive.cpp
     src/dsp/Effects.cpp
+    src/dsp/TimeEffects.cpp
     src/plugin/Params.cpp
     src/plugin/HitRender.cpp
+    src/plugin/Player.cpp
     src/plugin/SubstrikePlugin.cpp
     src/state/StateIO.cpp
     src/state/Settings.cpp
+    src/state/Presets.cpp
+    src/state/PresetProvider.cpp
     src/gui/Widget.cpp
     src/gui/Widgets.cpp
     src/gui/FileDialog.cpp
     src/gui/HitPreview.cpp
     src/gui/CurveEditor.cpp
     src/gui/Editor.cpp
+    src/gui/PresetBrowser.cpp
     ${SUBSTRIKE_WINDOW_SOURCE}
 )
-target_include_directories(substrike-impl PUBLIC src)
+target_include_directories(substrike-impl PUBLIC src "${CMAKE_CURRENT_BINARY_DIR}/generated")
+add_dependencies(substrike-impl substrike-presets)
 # Lets src/substrike.h static_assert that kPluginVersion matches project().
 target_compile_definitions(substrike-impl PUBLIC SUBSTRIKE_CMAKE_VERSION="${PROJECT_VERSION}")
 target_link_libraries(substrike-impl PUBLIC clap substrike-gui-deps Threads::Threads)
@@ -173,6 +192,17 @@ if (SUBSTRIKE_BUILD_TOOLS)
     target_link_libraries(substrike-render PRIVATE clap ${CMAKE_DL_LIBS})
     substrike_static_runtime(substrike-render)
     add_dependencies(substrike-render Substrike)
+
+    # Kick metrics (pitch, envelope, click, harmonics) from WAV files: what the
+    # factory presets are checked against the reference set with.
+    add_executable(substrike-metrics tools/metrics.cpp)
+    substrike_static_runtime(substrike-metrics)
+
+    # Parses every factory preset and reports what it got wrong: unknown
+    # keys, values out of range, missing metadata.
+    add_executable(substrike-preset-check tests/preset_check.cpp)
+    target_link_libraries(substrike-preset-check PRIVATE substrike-impl)
+    substrike_static_runtime(substrike-preset-check)
 
     # The editor rendered offscreen to a PNG, with frame timings.
     add_executable(substrike-gui-snapshot tests/gui_snapshot.cpp)

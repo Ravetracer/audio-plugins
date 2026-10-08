@@ -24,7 +24,18 @@ double follower(double ms, double rate) { return std::exp(-1.0 / samples(ms, rat
 
 bool slotValueIsChoice(SlotType t, int i)
 {
-    return i == 0 && (t == SlotType::Distortion || t == SlotType::Filter || t == SlotType::Gate);
+    switch (t)
+    {
+    case SlotType::Distortion:
+    case SlotType::Filter:
+    case SlotType::Gate:
+    case SlotType::Ring: return i == 0;
+    case SlotType::Delay: return i == 1;
+    case SlotType::Warp: return i == 1 || i == 4;
+    case SlotType::Smear: return i == 2;
+    case SlotType::Utility: return i == 1 || i == 2;
+    default: return false;
+    }
 }
 
 bool slotIsOversampled(SlotType t)
@@ -433,7 +444,11 @@ void TransientFx::prepare(double sampleRate)
     reset();
 }
 
-void TransientFx::reset() { eFastA_ = eSlowA_ = eFastR_ = eSlowR_ = 0.0; }
+void TransientFx::reset()
+{
+    eFastA_ = eSlowA_ = eFastR_ = eSlowR_ = 0.0;
+    gainDb_ = 0.0;
+}
 
 void TransientFx::set(const double* v)
 {
@@ -447,6 +462,7 @@ void TransientFx::set(const double* v)
     fastRel_ = follower(10.0, rate_);
     slowRel_ = follower(10.0 * speed, rate_);
     out_ = dbToGain(v[3]);
+    gainGlide_ = 1.0 - follower(0.3, rate_);
 }
 
 void TransientFx::process(float* l, float* r, int n)
@@ -460,10 +476,16 @@ void TransientFx::process(float* l, float* r, int n)
         follow(eFastR_, x, relAtk_, fastRel_);
         follow(eSlowR_, x, relAtk_, slowRel_);
         constexpr double eps = 1e-6;
-        const double onset = 20.0 * std::log10((eFastA_ + eps) / (eSlowA_ + eps));
-        const double tail = 20.0 * std::log10((eSlowR_ + eps) / (eFastR_ + eps));
-        const double db = std::clamp(attack_ * onset + sustain_ * tail, -24.0, 24.0);
-        const double g = dbToGain(db) * out_;
+        // Each contrast is taken up to 12 dB: from silence the slow follower
+        // starts at nothing and the onset ratio is huge for the first
+        // samples, which would turn an attack into a spike. So Attack and
+        // Sustain are a share of a 12 dB lift or cut, and the gain glides
+        // over a third of a millisecond.
+        const double onset = std::clamp(20.0 * std::log10((eFastA_ + eps) / (eSlowA_ + eps)), 0.0, 12.0);
+        const double tail = std::clamp(20.0 * std::log10((eSlowR_ + eps) / (eFastR_ + eps)), 0.0, 12.0);
+        const double db = attack_ * onset + sustain_ * tail;
+        gainDb_ += gainGlide_ * (db - gainDb_);
+        const double g = dbToGain(gainDb_) * out_;
         l[i] = static_cast<float>(l[i] * g);
         r[i] = static_cast<float>(r[i] * g);
     }
@@ -546,6 +568,54 @@ void GateFx::process(float* l, float* r, int n)
     }
 }
 
+// -------------------------------------------------------------------- Limiter
+
+void LimiterFx::prepare(double sampleRate)
+{
+    rate_ = sampleRate;
+    holdSamples_ = static_cast<int>(0.025 * sampleRate);
+    reset();
+}
+
+void LimiterFx::set(const double* v)
+{
+    in_ = dbToGain(v[0]);
+    ceiling_ = dbToGain(v[1]);
+    release_ = follower(v[2], rate_);
+}
+
+void LimiterFx::setFixed(double ceiling, double releaseMs)
+{
+    in_ = 1.0;
+    ceiling_ = ceiling;
+    release_ = follower(releaseMs, rate_);
+}
+
+void LimiterFx::process(float* l, float* r, int n)
+{
+    for (int i = 0; i < n; ++i)
+    {
+        const double a = l[i] * in_, b = r[i] * in_;
+        const double peak = std::max(std::fabs(a), std::fabs(b));
+        const double want = peak > ceiling_ ? ceiling_ / peak : 1.0;
+        // Down at once, held for a period of the lowest kick, then back up
+        // over the release: without the hold the gain would rise between
+        // the peaks of every cycle and ride the waveform. Both sides alike,
+        // so the image does not move.
+        if (want <= gain_)
+        {
+            gain_ = want;
+            hold_ = holdSamples_;
+        }
+        else if (hold_ > 0)
+            --hold_;
+        else
+            gain_ = want + release_ * (gain_ - want);
+        l[i] = static_cast<float>(a * gain_);
+        r[i] = static_cast<float>(b * gain_);
+    }
+}
+
 // ----------------------------------------------------------------------- Slot
 
 Effect& Slot::effect(SlotType t)
@@ -560,6 +630,14 @@ Effect& Slot::effect(SlotType t)
     case SlotType::Compressor: return compressor_;
     case SlotType::Transient: return transient_;
     case SlotType::Gate: return gate_;
+    case SlotType::Reverb: return reverb_;
+    case SlotType::Delay: return delay_;
+    case SlotType::Warp: return warp_;
+    case SlotType::Smear: return smear_;
+    case SlotType::Ring: return ring_;
+    case SlotType::Stereo: return stereo_;
+    case SlotType::Utility: return utility_;
+    case SlotType::Limiter: return limiter_;
     case SlotType::Clipper:
     case SlotType::Off:
     default: return clipper_;
@@ -574,16 +652,42 @@ void Slot::prepare(double sampleRate, int oversampling)
     osR_.setFactor(oversampling);
     stepCoef_ = 1.0 - std::exp(-kStep / (kGlideMs * 0.001 * sampleRate));
     mixCoef_ = 1.0 - std::exp(-1.0 / (kGlideMs * 0.001 * sampleRate));
+    size_t need = 0;
     for (int t = 1; t < kNumSlotTypes; ++t)
     {
         const SlotType type = static_cast<SlotType>(t);
         effect(type).prepare(slotIsOversampled(type) ? sampleRate * osL_.factor() : sampleRate);
+        need = std::max(need, effect(type).memory(sampleRate));
     }
+    // Only a new rate changes the size, and only activation brings one; a
+    // new oversampling factor re-prepares on the audio thread and must not
+    // allocate. (The time effects run at the base rate.)
+    if (memory_.size() != need)
+    {
+        memory_.assign(need, 0.0f);
+        memoryDirty_ = false;
+    }
+    for (int t = 1; t < kNumSlotTypes; ++t)
+        if (effect(static_cast<SlotType>(t)).memory(sampleRate) > 0)
+            effect(static_cast<SlotType>(t)).attach(memory_.data());
     reset();
+}
+
+void Slot::clearMemory()
+{
+    if (memoryDirty_)
+        std::fill(memory_.begin(), memory_.end(), 0.0f);
+    memoryDirty_ = false;
+}
+
+int Slot::silentHold() const
+{
+    return live_ ? const_cast<Slot*>(this)->effect(type_).silentHold() : 0;
 }
 
 void Slot::reset()
 {
+    clearMemory();
     for (int t = 1; t < kNumSlotTypes; ++t)
         effect(static_cast<SlotType>(t)).reset();
     osL_.reset();
@@ -628,6 +732,7 @@ void Slot::glide(const SlotParams& p, const SlotEnv& e, bool snap)
         xL_.setup(xoverLow_, hi, rate_);
         xR_.setup(xoverLow_, hi, rate_);
     }
+    effect(type_).setTempo(e.tempo);
     effect(type_).set(cur_.data());
 }
 
@@ -636,6 +741,7 @@ void Slot::wake(const SlotParams& p, const SlotEnv& e)
     live_ = true;
     type_ = p.type;
     band_ = p.band;
+    clearMemory();
     effect(type_).reset();
     osL_.reset();
     osR_.reset();
@@ -668,6 +774,7 @@ void Slot::process(float* l, float* r, int n, const SlotParams& p, const SlotEnv
     if (p.type != SlotType::Off && p.type != type_)
     {
         type_ = p.type;
+        clearMemory();
         effect(type_).reset();
         glide(p, e, true);
     }
@@ -683,7 +790,11 @@ void Slot::process(float* l, float* r, int n, const SlotParams& p, const SlotEnv
     int i = 0, h = 0;
     while (i < n)
     {
-        if (counter_ == 0)
+        // A slot switched to Off keeps its old effect running while it fades
+        // out, with the values that effect had: the letters it would glide
+        // to now are an empty slot's, which mean nothing (or something wild)
+        // to the old effect.
+        if (counter_ == 0 && p.type != SlotType::Off)
             glide(p, e, false);
         while (h < hitCount && hits[h] <= i)
         {
@@ -736,6 +847,7 @@ void Slot::segment(float* l, float* r, int n, double target)
     wetL_ = selL_;
     wetR_ = selR_;
     Effect& fx = effect(type_);
+    memoryDirty_ |= fx.memory(rate_) > 0;
     if (slotIsOversampled(type_) && osL_.factor() > 1)
     {
         const int m = n * osL_.factor();

@@ -1,0 +1,33 @@
+[Substrike]
+format=1
+name=Punchy Boom
+category=Trap
+author=Substrike
+tags=sub, punchy, click
+description=A boom with a proper kick in front of it: a clicky transient layer over a long tuned sub. Root C1.
+[Parameters]
+root_note=C1
+l1.body.pitch_start=70
+l1.body.pitch_end=32.7
+l1.body.sweep=40
+l1.body.key_track=100
+l1.body.hold=150
+l1.body.decay=1400
+l5.on=On
+l5.level=-4
+l5.body.pitch_start=400
+l5.body.pitch_end=60
+l5.body.sweep=35
+l5.body.hold=5
+l5.body.decay=90
+l2.on=On
+l2.level=-10
+l2.click.type=Blip
+l2.click.decay=2
+l2.click.pitch=2500
+l2.click.sweep=2
+l2.click.filter=Off
+l1.slot1.type=Distortion
+l1.slot1.model=Soft Clip
+l1.slot1.drive=25
+output=-4.2

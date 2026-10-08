@@ -1,0 +1,34 @@
+[Substrike]
+format=1
+name=Hydraulic
+category=Industrial
+author=Substrike
+tags=noise, sweep, machine
+description=A machine hit: a downward noise sweep with a body underneath, like a press coming down.
+[Parameters]
+l1.body.pitch_start=320
+l1.body.pitch_end=45
+l1.body.sweep=180
+l1.body.hold=50
+l1.body.decay=350
+l3.on=On
+l3.level=-10
+l3.noise.color=White
+l3.noise.filter=Band Pass
+l3.noise.cutoff=400
+l3.noise.reso=50
+l3.noise.filter_env=4
+l3.noise.env_decay=120
+l3.noise.hold=20
+l3.noise.decay=220
+l3.slot1.type=Distortion
+l3.slot1.model=Fuzz
+l3.slot1.drive=40
+l3.slot1.output=-6
+master.slot1.type=Compressor
+master.slot1.threshold=-18
+master.slot1.ratio=5
+master.slot1.attack=5
+master.slot1.release=100
+master.slot1.makeup=3
+output=-3.5

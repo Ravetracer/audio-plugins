@@ -1,0 +1,28 @@
+[Substrike]
+format=1
+name=Head Nod
+category=Hip Hop
+author=Substrike
+tags=punchy, round, boom bap
+description=A round, head-nodding kick: a tuned body with a velocity-sensitive punch.
+[Parameters]
+l1.body.pitch_start=240
+l1.body.pitch_end=52
+l1.body.sweep=70
+l1.body.hold=35
+l1.body.decay=360
+l2.on=On
+l2.level=-14
+l2.click.type=Noise
+l2.click.decay=5
+l2.click.filter=Band Pass
+l2.click.cutoff=2000
+l1.slot1.type=Transient
+l1.slot1.attack=12
+l1.on=On
+l1.level=0
+l1.velocity=80
+mod.route1.source=Velocity
+mod.route1.dest=L1 Slot 1 A
+mod.route1.amount=14
+output=-6.1

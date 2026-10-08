@@ -1,0 +1,18 @@
+[Substrike]
+format=1
+name=Goa Drop
+category=Psytrance
+author=Substrike
+tags=goa, zap, tonal
+description=A goa kick that drops from very high: a zap of a sweep into a round, short body.
+[Parameters]
+l1.body.pitch_start=2400
+l1.body.pitch_end=55
+l1.body.sweep=90
+l1.body.sweep_curve=75
+l1.body.hold=15
+l1.body.decay=170
+l1.slot1.type=EQ
+l1.slot1.low=2
+l1.slot1.high=2
+output=-1.4

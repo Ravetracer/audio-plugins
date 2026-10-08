@@ -1,0 +1,27 @@
+[Substrike]
+format=1
+name=Follower Duck
+category=Showcase
+author=Substrike
+tags=follower, duck, noise
+description=A noise wash that the kick pushes out of the way: lane 1's follower turns lane 3 down, with no sidechain cable.
+[Parameters]
+l1.body.pitch_start=300
+l1.body.pitch_end=50
+l1.body.sweep=80
+l1.body.hold=30
+l1.body.decay=300
+l3.on=On
+l3.level=-16
+l3.noise.color=Pink
+l3.noise.filter=Band Pass
+l3.noise.cutoff=1500
+l3.noise.reso=20
+l3.noise.attack=30
+l3.noise.hold=400
+l3.noise.decay=500
+mod.route1.source=Follow 1
+mod.route1.dest=L3 Level
+mod.route1.amount=-70
+mod.route1.curve=60
+output=-1

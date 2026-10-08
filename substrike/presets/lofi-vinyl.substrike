@@ -1,0 +1,33 @@
+[Substrike]
+format=1
+name=Vinyl Kick
+category=Lo-Fi
+author=Substrike
+tags=vinyl, crackle, dusty
+description=A kick sampled off a scratchy record: crackle, a narrow band and a little hiss.
+[Parameters]
+l1.body.pitch_start=180
+l1.body.pitch_end=55
+l1.body.sweep=60
+l1.body.hold=30
+l1.body.decay=300
+l3.on=On
+l3.level=-28
+l3.noise.color=Crackle
+l3.noise.density=60
+l3.noise.filter=Band Pass
+l3.noise.cutoff=2500
+l3.noise.hold=250
+l3.noise.decay=150
+master.slot1.type=Filter
+master.slot1.mix=35
+master.slot1.mode=Band Pass
+master.slot1.cutoff=900
+master.slot1.reso=0
+master.slot2.type=Filter
+master.slot2.mode=HP 12
+master.slot2.cutoff=35
+master.slot3.type=Bitcrush
+master.slot3.bits=13
+master.slot3.rate=32000
+output=2.1

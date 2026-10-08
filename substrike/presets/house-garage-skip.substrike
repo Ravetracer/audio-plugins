@@ -1,0 +1,25 @@
+[Substrike]
+format=1
+name=Garage Skip
+category=House
+author=Substrike
+tags=garage, tight, punchy
+description=A tight, skippy garage kick at 65 Hz, short enough to swing.
+[Parameters]
+l1.body.pitch_start=360
+l1.body.pitch_end=65
+l1.body.sweep=45
+l1.body.sweep_curve=65
+l1.body.hold=20
+l1.body.decay=200
+l2.on=On
+l2.level=-12
+l2.click.type=Blip
+l2.click.decay=2
+l2.click.pitch=1800
+l2.click.sweep=2
+l2.click.filter=Off
+l1.slot1.type=Transient
+l1.slot1.attack=28
+l1.slot1.sustain=-20
+output=-4.3

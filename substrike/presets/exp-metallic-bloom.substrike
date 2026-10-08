@@ -1,0 +1,27 @@
+[Substrike]
+format=1
+name=Metallic Bloom
+category=Experimental
+author=Substrike
+tags=metallic, shift, reverb
+description=A kick that blooms into metal: its top is frequency-shifted and sent into a bright room.
+[Parameters]
+l1.body.pitch_start=300
+l1.body.pitch_end=50
+l1.body.sweep=80
+l1.body.hold=30
+l1.body.decay=320
+l1.slot1.type=Ring Mod
+l1.slot1.band=Mid+High
+l1.slot1.mode=Shift Up
+l1.slot1.freq=330
+l1.slot1.env=2
+l1.slot1.env_decay=200
+l1.slot2.type=Reverb
+l1.slot2.band=Mid+High
+l1.slot2.mix=45
+l1.slot2.size=60
+l1.slot2.decay=2400
+l1.slot2.damping=12000
+l1.xover_low=200
+output=-1.3

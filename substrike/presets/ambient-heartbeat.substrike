@@ -1,0 +1,29 @@
+[Substrike]
+format=1
+name=Heartbeat
+category=Ambient
+author=Substrike
+tags=heartbeat, soft, double
+description=A heartbeat: a soft first beat and a quieter second one 100 ms later, from one note.
+[Parameters]
+l1.body.pitch_start=110
+l1.body.pitch_end=48
+l1.body.sweep=60
+l1.body.hold=30
+l1.body.decay=250
+l5.on=On
+l5.level=-7
+l5.delay=100
+l5.body.pitch_start=100
+l5.body.pitch_end=50
+l5.body.sweep=60
+l5.body.hold=20
+l5.body.decay=220
+master.slot1.type=Filter
+master.slot1.mode=LP 12
+master.slot1.cutoff=1200
+master.slot2.type=Reverb
+master.slot2.mix=15
+master.slot2.size=30
+master.slot2.decay=800
+output=-0.1

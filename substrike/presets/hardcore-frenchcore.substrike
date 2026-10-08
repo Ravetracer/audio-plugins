@@ -1,0 +1,33 @@
+[Substrike]
+format=1
+name=Frenchcore Punch
+category=Hardcore
+author=Substrike
+tags=frenchcore, punchy, tonal
+description=A frenchcore kick: a big punch with a short, ringing distorted tail that you can play as a melody.
+[Parameters]
+l1.body.pitch_start=3500
+l1.body.pitch_end=60
+l1.body.sweep=300
+l1.body.key_track=100
+l1.body.hold=140
+l1.body.decay=160
+l2.on=On
+l2.level=-8
+l2.click.type=Zap
+l2.click.decay=2
+l2.click.pitch=5000
+l2.click.sweep=4
+l1.slot1.type=Distortion
+l1.slot1.model=Valve Stack
+l1.slot1.drive=90
+l1.slot1.output=-8
+l1.slot2.type=Filter
+l1.slot2.mode=Peak
+l1.slot2.cutoff=220
+l1.slot2.reso=40
+l1.slot2.gain=6
+master.clip=Hard
+output=0.1
+[Curves]
+l1.pitch=0,1,0;0.005,0.78,0;0.03,0.35,0.3;0.15,0.1,0.2;1,0,0

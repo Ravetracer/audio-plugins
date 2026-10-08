@@ -1,0 +1,25 @@
+[Substrike]
+format=1
+name=Glide Boom
+category=Trap
+author=Substrike
+tags=sub, glide, tuned
+description=A boom that slides down into its note after the attack, like a portamento into each hit. Root C1.
+[Parameters]
+root_note=C1
+l1.body.pitch_start=100
+l1.body.pitch_end=32.7
+l1.body.sweep=40
+l1.body.key_track=100
+l1.body.hold=180
+l1.body.decay=1800
+mod.env1.time=260
+mod.route1.source=Env 1
+mod.route1.dest=L1 Pitch End
+mod.route1.amount=12
+l1.slot1.type=Distortion
+l1.slot1.model=Tube
+l1.slot1.drive=30
+output=-2.2
+[Curves]
+mod.env1=0,1,0.4;1,0,0

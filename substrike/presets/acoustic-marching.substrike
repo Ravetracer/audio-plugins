@@ -1,0 +1,27 @@
+[Substrike]
+format=1
+name=Marching Bass
+category=Acoustic
+author=Substrike
+tags=acoustic, marching, big
+description=A big marching bass drum in an open space.
+[Parameters]
+l1.on=On
+l1.source=Resonator
+l1.level=0
+l1.resonator.exciter=Mallet
+l1.resonator.model=Membrane
+l1.resonator.modes=8
+l1.resonator.tune=45
+l1.resonator.decay=1200
+l1.resonator.damping=40
+l1.resonator.brightness=30
+l1.resonator.hardness=50
+l1.resonator.drop=2
+master.slot1.type=Reverb
+master.slot1.mix=30
+master.slot1.size=90
+master.slot1.decay=2800
+master.slot1.damping=4000
+master.slot1.predelay=20
+output=4.1

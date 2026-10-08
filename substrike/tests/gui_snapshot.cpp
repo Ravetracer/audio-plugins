@@ -2,7 +2,7 @@
 // reports what a full repaint costs.
 //
 //   substrike-gui-snapshot out.png [--scale 1.5] [--size 1344x864]
-//       [--state file.substrike] [--lane 1..8|master] [--slot 1..6] [--tab pitch|amp]
+//       [--state file.substrike] [--lane 1..8|master|mod] [--mod-tab 1..8] [--slot 1..6|guard] [--tab pitch|amp]
 
 #include <chrono>
 #include <cstdio>
@@ -31,9 +31,25 @@ public:
     void setCurve(int index, const dsp::Curve& c) override { curves[static_cast<size_t>(index)] = c; }
     void audition() override {}
     double sampleRate() const override { return 48000.0; }
+    void loadDocument(const StateDocument& doc, const std::string& name) override
+    {
+        values = doc.values;
+        curves = doc.curves;
+        preset = name;
+    }
+    StateDocument currentDocument() const override
+    {
+        StateDocument d;
+        d.values = values;
+        d.curves = curves;
+        d.meta["preset"] = preset;
+        return d;
+    }
+    std::string presetName() const override { return preset; }
 
     std::vector<double> values;
     std::array<dsp::Curve, dsp::kNumCurves> curves{};
+    std::string preset = "Init";
 };
 
 bool writeImage(cairo_surface_t* s, const char* path)
@@ -73,6 +89,7 @@ int main(int argc, char** argv)
     float width = 0, height = 0;
     std::string statePath, lane = "1", tab = "pitch";
     int slot = 1;
+    int modTab = 1;
     for (int i = 1; i < argc; ++i)
     {
         const std::string a = argv[i];
@@ -86,7 +103,12 @@ int main(int argc, char** argv)
         else if (a == "--lane")
             lane = next();
         else if (a == "--slot")
-            slot = std::atoi(next().c_str());
+        {
+            const std::string v = next();
+            slot = v == "guard" ? 0 : std::atoi(v.c_str());
+        }
+        else if (a == "--mod-tab")
+            modTab = std::atoi(next().c_str());
         else if (a == "--tab")
             tab = next();
         else
@@ -113,8 +135,14 @@ int main(int argc, char** argv)
     ed.setScale(scale);
     if (width > 0 && height > 0)
         ed.setPhysicalSize(static_cast<int>(width * scale), static_cast<int>(height * scale));
-    ed.selectLane(lane == "master" ? gui::Editor::kMaster : std::atoi(lane.c_str()) - 1);
-    ed.selectSlot(slot - 1);
+    ed.selectLane(lane == "master" ? gui::Editor::kMaster
+                  : lane == "mod"  ? gui::Editor::kMod
+                                   : std::atoi(lane.c_str()) - 1);
+    ed.selectModTab(modTab - 1);
+    if (slot > 0)
+        ed.selectSlot(slot - 1);
+    else
+        ed.selectGuard();
     ed.selectCurveTab(tab == "amp" ? 1 : 0);
     ed.settlePreview();
 

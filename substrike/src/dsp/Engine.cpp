@@ -67,6 +67,7 @@ void Lane::prepare(double sampleRate)
     for (ClickVoice& v : click_)
         v.prepare(sampleRate);
     quietLimit_ = std::max(1, static_cast<int>(kTailQuietMs * 0.001 * sampleRate));
+    levelFall_ = std::exp(-1.0 / (0.05 * sampleRate));
     reset();
 }
 
@@ -90,17 +91,28 @@ void Lane::reset()
         v.kill();
     pendingCount_ = 0;
     primed_ = false;
+    snapGain_ = false;
     hits_ = 0;
     for (Slot& s : slots_)
         s.reset();
     tail_ = false;
     quiet_ = 0;
+    preEnd_ = postEnd_ = 0;
+    window_ = INT64_MAX / 2;
+    duckEnv_ = 0.0;
+    ducking_ = false;
+    level_ = 0.0;
 }
 
 void Lane::trigger(int semitones, double velocity, int delay)
 {
     if (pendingCount_ == kMaxPending)
         return;
+    // A hit into silence takes its level and pan as they are now, rather
+    // than gliding there from where they were while the lane slept: a
+    // per-note modulation of the level has to reach the hit's first sample.
+    if (!voicesActive() && !tail_)
+        snapGain_ = true;
     pending_[static_cast<size_t>(pendingCount_++)] = {std::max(delay, 0), semitones, velocity};
 }
 
@@ -158,6 +170,7 @@ void Lane::fire(const Pending& pending, const Context& c)
         break;
     }
     case Source::Noise: freeVoice(noise_).start(hit); break;
+    case Source::Bus: break; // its sound comes in from the other lanes
     case Source::Resonator:
     {
         const ResonatorParams& r = p.resonator;
@@ -202,13 +215,22 @@ int Lane::process(const Bus& main, const Bus& aux, int n, const Context& c)
     const double sign = p.invert ? -1.0 : 1.0;
     const double targetL = sign * p.gain * std::min(1.0, 1.0 - p.pan);
     const double targetR = sign * p.gain * std::min(1.0, 1.0 + p.pan);
-    if (!primed_ || !active())
+    const int busEnd = c.busL ? std::min(c.busEnd, n) : 0;
+    if (!primed_ || !active() || snapGain_)
     {
         gainL_ = targetL;
         gainR_ = targetR;
         primed_ = true;
-        if (!active())
+        snapGain_ = false;
+        if (!active() && busEnd <= 0)
+        {
+            preEnd_ = postEnd_ = 0;
+            // Sample by sample, as when it sounds, so the value does not
+            // depend on how the time was cut into blocks.
+            for (int i = 0; i < n && level_ > 0.0; ++i)
+                level_ = level_ * levelFall_ < 1e-9 ? 0.0 : level_ * levelFall_;
             return 0;
+        }
     }
     std::fill(l_.begin(), l_.begin() + n, 0.0f);
     std::fill(r_.begin(), r_.begin() + n, 0.0f);
@@ -240,24 +262,43 @@ int Lane::process(const Bus& main, const Bus& aux, int n, const Context& c)
     for (int i = 0; i < pendingCount_; ++i)
         pending_[static_cast<size_t>(i)].at -= n;
 
+    // A bus lane's input joins whatever its old source still fades out.
+    if (busEnd > 0)
+    {
+        for (int i = 0; i < busEnd; ++i)
+        {
+            l_[static_cast<size_t>(i)] += c.busL[i];
+            r_[static_cast<size_t>(i)] += c.busR[i];
+        }
+        soundEnd_ = std::max(soundEnd_, busEnd);
+    }
+    std::copy(l_.begin(), l_.begin() + n, preL_.begin());
+    std::copy(r_.begin(), r_.begin() + n, preR_.begin());
+    preEnd_ = soundEnd_;
+
     // The chain, then the check for the end of its tail. The tail ends on the
     // sample its output has been quiet for long enough, counted from where the
     // voices stopped, so where it ends does not depend on the block size.
-    const SlotEnv env{c.sampleRate, p.xoverLow, p.xoverHigh};
+    const SlotEnv env{c.sampleRate, p.xoverLow, p.xoverHigh, c.tempo};
     bool live = false;
+    int hold = 0;
     for (int s = 0; s < kNumSlots; ++s)
     {
-        slots_[static_cast<size_t>(s)].process(l_.data(), r_.data(), n, p.slots[static_cast<size_t>(s)], env,
-                                               fired_.data(), firedCount_);
-        live |= slots_[static_cast<size_t>(s)].live();
+        Slot& slot = slots_[static_cast<size_t>(s)];
+        slot.process(l_.data(), r_.data(), n, p.slots[static_cast<size_t>(s)], env, fired_.data(), firedCount_);
+        live |= slot.live();
+        hold = std::max(hold, slot.silentHold());
     }
-    const bool sounding = voicesActive();
+    // An input that sounds to the end of the chunk may go on into the next.
+    const bool sounding = voicesActive() || busEnd >= n;
     int end = sounding ? n : soundEnd_;
     tail_ = false;
     if (live)
     {
         const int from = sounding ? n : soundEnd_;
-        const int silent = findSilence(l_.data(), r_.data(), from, n, quiet_, quietLimit_);
+        // A delay waits for its next echo in silence: the chain has rung
+        // out only once it has been quiet for longer than that.
+        const int silent = findSilence(l_.data(), r_.data(), from, n, quiet_, quietLimit_ + hold);
         if (silent >= 0)
         {
             std::fill(l_.begin() + silent + 1, l_.begin() + n, 0.0f);
@@ -275,6 +316,15 @@ int Lane::process(const Bus& main, const Bus& aux, int n, const Context& c)
     }
     else
         quiet_ = 0;
+    // The guard comes after the check for the end, so a lane held silent by
+    // its window does not count as rung out.
+    guard(n, c);
+    postEnd_ = end;
+    for (int i = 0; i < n; ++i)
+    {
+        const double x = std::max(std::fabs(l_[static_cast<size_t>(i)]), std::fabs(r_[static_cast<size_t>(i)]));
+        level_ = x > level_ ? x : (level_ * levelFall_ < 1e-9 ? 0.0 : level_ * levelFall_);
+    }
 
     const bool toMain = p.output != Output::Aux;
     const bool toAux = p.output != Output::Main || c.tap;
@@ -298,6 +348,67 @@ int Lane::process(const Bus& main, const Bus& aux, int n, const Context& c)
     return end;
 }
 
+void Lane::follow(const float* l, const float* r, int end, int n, const LaneParams& p, double sampleRate)
+{
+    const int src = p.guard.duckSource;
+    ducking_ = src >= 0 && p.guard.duckDepth > 0.0;
+    if (!ducking_)
+    {
+        duckEnv_ = 0.0;
+        return;
+    }
+    // A peak follower: half a millisecond up, the release down.
+    const double up = 1.0 - std::exp(-1.0 / (0.0005 * sampleRate));
+    const double down = std::exp(-1.0 / std::max(p.guard.duckReleaseMs * 0.001 * sampleRate, 1.0));
+    const double depth = std::clamp(p.guard.duckDepth, 0.0, 1.0);
+    for (int i = 0; i < n; ++i)
+    {
+        const double x = i < end ? std::max(std::fabs(l[i]), std::fabs(r[i])) : 0.0;
+        duckEnv_ = x > duckEnv_ ? duckEnv_ + up * (x - duckEnv_) : duckEnv_ * down;
+        if (duckEnv_ < 1e-9)
+            duckEnv_ = 0.0;
+        duck_[static_cast<size_t>(i)] = static_cast<float>(1.0 - depth * std::min(duckEnv_, 1.0));
+    }
+}
+
+void Lane::guard(int n, const Context& c)
+{
+    const GuardParams& g = c.params->guard;
+    const int64_t delay = static_cast<int64_t>(std::lround(g.delayMs * 0.001 * c.sampleRate));
+    const int64_t fade = static_cast<int64_t>(std::lround(g.fadeMs * 0.001 * c.sampleRate));
+    const bool windowed = delay > 0 || fade > 0;
+    int h = 0;
+    for (int i = 0; i < n; ++i)
+    {
+        while (h < firedCount_ && fired_[static_cast<size_t>(h)] <= i)
+        {
+            window_ = 0;
+            ++h;
+        }
+        double gain = 1.0;
+        if (windowed && window_ < delay + fade)
+        {
+            if (window_ < delay)
+                gain = 0.0;
+            else
+            {
+                // A raised cosine from 0 to 1 over the fade.
+                const double x = static_cast<double>(window_ - delay) / static_cast<double>(fade);
+                gain = 0.5 - 0.5 * std::cos(3.14159265358979323846 * x);
+            }
+        }
+        if (window_ < INT64_MAX / 2)
+            ++window_;
+        if (ducking_)
+            gain *= duck_[static_cast<size_t>(i)];
+        if (gain != 1.0)
+        {
+            l_[static_cast<size_t>(i)] = static_cast<float>(l_[static_cast<size_t>(i)] * gain);
+            r_[static_cast<size_t>(i)] = static_cast<float>(r_[static_cast<size_t>(i)] * gain);
+        }
+    }
+}
+
 // --------------------------------------------------------------------- Engine
 
 void Engine::prepare(double sampleRate)
@@ -315,7 +426,14 @@ void Engine::prepare(double sampleRate)
         s.prepare(sampleRate, oversampling_);
     clipL_.setFactor(oversampling_);
     clipR_.setFactor(oversampling_);
+    prepareLimit();
     reset();
+}
+
+void Engine::prepareLimit()
+{
+    outLimit_.prepare(sampleRate_);
+    outLimit_.setFixed(std::pow(10.0, -0.3 / 20.0), 60.0);
 }
 
 void Engine::resetMaster()
@@ -326,6 +444,7 @@ void Engine::resetMaster()
     monoR_.reset();
     clipL_.reset();
     clipR_.reset();
+    outLimit_.reset();
     masterHit_ = false;
     masterTail_ = false;
     masterQuiet_ = 0;
@@ -342,6 +461,9 @@ void Engine::reset()
 void Engine::noteOn(int key, double velocity, const EngineParams& p)
 {
     const int semitones = key - p.rootNote;
+    // Into silence the output level is taken as it is, like a lane's.
+    if (idle())
+        snapOutput_ = true;
     masterHit_ = true;
     for (int l = 0; l < kNumLanes; ++l)
     {
@@ -374,13 +496,15 @@ void Engine::master(const Bus& main, int n, int lanesEnd, const EngineParams& p)
     const int hit = 0;
     const bool hitNow = masterHit_;
     masterHit_ = false;
-    const SlotEnv env{sampleRate_, p.masterXoverLow, p.masterXoverHigh};
+    const SlotEnv env{sampleRate_, p.masterXoverLow, p.masterXoverHigh, tempo_};
     bool live = false;
+    int hold = 0;
     for (int s = 0; s < kNumSlots; ++s)
     {
-        master_[static_cast<size_t>(s)].process(main.l, main.r, n, p.master[static_cast<size_t>(s)], env, &hit,
-                                                hitNow ? 1 : 0);
-        live |= master_[static_cast<size_t>(s)].live();
+        Slot& slot = master_[static_cast<size_t>(s)];
+        slot.process(main.l, main.r, n, p.master[static_cast<size_t>(s)], env, &hit, hitNow ? 1 : 0);
+        live |= slot.live();
+        hold = std::max(hold, slot.silentHold());
     }
 
     // Mono below: the low band of an LR4 split goes to both sides as its mid.
@@ -411,10 +535,18 @@ void Engine::master(const Bus& main, int n, int lanesEnd, const EngineParams& p)
     else
         monoFreq_ = 0.0;
 
-    // The output clip, at full scale, oversampled like the drive slots.
-    if (p.clip != OutputClip::Off)
+    // The output clip, at full scale and oversampled like the drive slots;
+    // or the limiter, at the base rate so its ceiling is exact.
+    if (p.clip == OutputClip::Limit)
     {
-        if (clip_ == OutputClip::Off)
+        if (clip_ != p.clip)
+            outLimit_.reset();
+        outLimit_.process(main.l, main.r, n);
+        live = true;
+    }
+    else if (p.clip != OutputClip::Off)
+    {
+        if (clip_ != p.clip)
         {
             clipL_.reset();
             clipR_.reset();
@@ -446,7 +578,7 @@ void Engine::master(const Bus& main, int n, int lanesEnd, const EngineParams& p)
         masterQuiet_ = 0;
         return;
     }
-    const int silent = findSilence(main.l, main.r, lanesEnd, n, masterQuiet_, quietLimit_);
+    const int silent = findSilence(main.l, main.r, lanesEnd, n, masterQuiet_, quietLimit_ + hold);
     if (silent >= 0)
     {
         std::fill(main.l + silent + 1, main.l + n, 0.0f);
@@ -459,10 +591,11 @@ void Engine::master(const Bus& main, int n, int lanesEnd, const EngineParams& p)
 
 void Engine::process(const Bus* buses, int n, const EngineParams& p)
 {
-    if (!primed_)
+    if (!primed_ || snapOutput_)
     {
         outGain_ = p.outGain;
         primed_ = true;
+        snapOutput_ = false;
     }
     // A new quality setting re-prepares every chain; it is not automatable,
     // so this happens when someone picks it, not in the middle of a song.
@@ -475,6 +608,7 @@ void Engine::process(const Bus* buses, int n, const EngineParams& p)
             s.prepare(sampleRate_, oversampling_);
         clipL_.setFactor(oversampling_);
         clipR_.setFactor(oversampling_);
+        prepareLimit();
         resetMaster();
     }
 
@@ -495,7 +629,43 @@ void Engine::process(const Bus* buses, int n, const EngineParams& p)
         t.keyTrack = sp.body.keyTrack;
         t.ratio = std::exp2(lp.transpose / 12.0) * (src != i ? std::exp2(sp.transpose / 12.0) : 1.0);
         t.curve = &lanes_[static_cast<size_t>(src)].pitchCurve();
-        ctx[static_cast<size_t>(i)] = {sampleRate_, smoothCoef_, fadeSamples_, i, &lp, t, p.tapLanes};
+        ctx[static_cast<size_t>(i)] = {sampleRate_, smoothCoef_, fadeSamples_, i,      &lp, t, p.tapLanes,
+                                       tempo_,      nullptr,     nullptr,      0};
+    }
+
+    // The order the lanes run in: every lane after the lanes it reads (a bus
+    // lane's inputs, a duck's source), otherwise by number. A lane in a loop
+    // runs when nothing else can, and reads silence from the lanes after it.
+    std::array<int, kNumLanes> order{};
+    std::array<int, kNumLanes> rank{};
+    {
+        auto reads = [&](int i, int j) {
+            const LaneParams& lp = p.lanes[static_cast<size_t>(i)];
+            if (i == j)
+                return false;
+            return (lp.source == Source::Bus && lp.bus.from[static_cast<size_t>(j)]) || lp.guard.duckSource == j;
+        };
+        std::array<bool, kNumLanes> done{};
+        for (int k = 0; k < kNumLanes; ++k)
+        {
+            int pick = -1;
+            for (int i = 0; i < kNumLanes && pick < 0; ++i)
+            {
+                if (done[static_cast<size_t>(i)])
+                    continue;
+                bool ready = true;
+                for (int j = 0; j < kNumLanes; ++j)
+                    ready &= done[static_cast<size_t>(j)] || !reads(i, j);
+                if (ready)
+                    pick = i;
+            }
+            for (int i = 0; i < kNumLanes && pick < 0; ++i)
+                if (!done[static_cast<size_t>(i)])
+                    pick = i;
+            done[static_cast<size_t>(pick)] = true;
+            order[static_cast<size_t>(k)] = pick;
+            rank[static_cast<size_t>(pick)] = k;
+        }
     }
 
     for (int pos = 0; pos < n; pos += Lane::kChunk)
@@ -508,16 +678,55 @@ void Engine::process(const Bus* buses, int n, const EngineParams& p)
         }
         const Bus main{buses[0].l + pos, buses[0].r + pos};
         int lanesEnd = 0;
-        for (int i = 0; i < kNumLanes; ++i)
+        for (int k = 0; k < kNumLanes; ++k)
         {
+            const int i = order[static_cast<size_t>(k)];
             const LaneParams& lp = p.lanes[static_cast<size_t>(i)];
             Lane& lane = lanes_[static_cast<size_t>(i)];
+            Lane::Context& c = ctx[static_cast<size_t>(i)];
             // A lane switched off while it sounds fades out rather than
             // stopping dead.
             if (!lp.enabled)
                 lane.choke(fadeSamples_);
+            // Only the lanes that ran before this one in this chunk have
+            // anything to give it.
+            auto ran = [&](int j) { return j != i && rank[static_cast<size_t>(j)] < k; };
+            // A lane switched off takes no more input; what its chain still
+            // holds rings out like any lane's tail.
+            if (lp.source == Source::Bus && lp.enabled)
+            {
+                int busEnd = 0;
+                std::fill(busL_.begin(), busL_.begin() + m, 0.0f);
+                std::fill(busR_.begin(), busR_.begin() + m, 0.0f);
+                for (int j = 0; j < kNumLanes; ++j)
+                {
+                    if (!lp.bus.from[static_cast<size_t>(j)] || !ran(j))
+                        continue;
+                    const Lane& from = lanes_[static_cast<size_t>(j)];
+                    const int end = lp.bus.post ? from.postEnd() : from.preEnd();
+                    const float* fl = lp.bus.post ? from.postL() : from.preL();
+                    const float* fr = lp.bus.post ? from.postR() : from.preR();
+                    for (int s = 0; s < end; ++s)
+                    {
+                        busL_[static_cast<size_t>(s)] += fl[s];
+                        busR_[static_cast<size_t>(s)] += fr[s];
+                    }
+                    busEnd = std::max(busEnd, end);
+                }
+                c.busL = busL_.data();
+                c.busR = busR_.data();
+                c.busEnd = busEnd;
+            }
+            const int duck = lp.guard.duckSource;
+            if (duck >= 0 && duck < kNumLanes && ran(duck))
+            {
+                const Lane& from = lanes_[static_cast<size_t>(duck)];
+                lane.follow(from.postL(), from.postR(), from.postEnd(), m, lp, sampleRate_);
+            }
+            else
+                lane.follow(nullptr, nullptr, 0, m, lp, sampleRate_);
             const Bus aux{buses[1 + i].l + pos, buses[1 + i].r + pos};
-            const int end = lane.process(main, aux, m, ctx[static_cast<size_t>(i)]);
+            const int end = lane.process(main, aux, m, c);
             // Only a lane that reaches the main output keeps the master busy.
             if (lp.output != Output::Aux)
                 lanesEnd = std::max(lanesEnd, end);

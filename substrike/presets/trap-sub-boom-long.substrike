@@ -1,0 +1,27 @@
+[Substrike]
+format=1
+name=Sub Boom Long
+category=Trap
+author=Substrike
+tags=sub, boom, tuned, long
+description=A long tuned sub boom: it follows the keys, so play it as a bassline. Root note C1.
+[Parameters]
+root_note=C1
+l1.body.pitch_start=90
+l1.body.pitch_end=32.7
+l1.body.sweep=60
+l1.body.sweep_curve=50
+l1.body.key_track=100
+l1.body.hold=200
+l1.body.decay=2200
+l1.body.decay_curve=30
+l2.on=On
+l2.level=-16
+l2.click.type=Noise
+l2.click.decay=3
+l2.click.filter=High Pass
+l2.click.cutoff=3000
+l1.slot1.type=Distortion
+l1.slot1.model=Soft Clip
+l1.slot1.drive=20
+output=-0.3

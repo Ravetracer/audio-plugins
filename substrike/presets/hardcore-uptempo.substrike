@@ -1,0 +1,28 @@
+[Substrike]
+format=1
+name=Uptempo Crunch
+category=Hardcore
+author=Substrike
+tags=uptempo, crunch, tonal
+description=An uptempo kick with a tonal, crunchy tail that follows the keys, root C2.
+[Parameters]
+l1.body.pitch_start=3000
+l1.body.pitch_end=58
+l1.body.sweep=300
+l1.body.key_track=100
+l1.body.hold=180
+l1.body.decay=120
+l1.slot1.type=Distortion
+l1.slot1.model=Crunch
+l1.slot1.drive=80
+l1.slot1.output=-6
+l1.slot2.type=Wavefolder
+l1.slot2.band=Mid+High
+l1.slot2.drive=12
+l1.slot2.shape=30
+l1.slot3.type=Clipper
+l1.slot3.drive=8
+master.clip=Hard
+output=-2.5
+[Curves]
+l1.pitch=0,1,0;0.005,0.78,0;0.03,0.35,0.3;0.15,0.1,0.2;1,0,0

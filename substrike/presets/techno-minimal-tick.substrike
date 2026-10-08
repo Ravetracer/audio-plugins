@@ -1,0 +1,28 @@
+[Substrike]
+format=1
+name=Minimal Tick
+category=Techno
+author=Substrike
+tags=short, tight, minimal
+description=A short, tight kick for minimal grooves: a quick knock at 60 Hz that leaves room for everything else.
+[Parameters]
+l1.body.pitch_start=608
+l1.body.pitch_end=60
+l1.body.sweep=60
+l1.body.sweep_curve=65
+l1.body.hold=15
+l1.body.decay=170
+l1.body.decay_curve=55
+l2.on=On
+l2.level=-6
+l2.click.type=Blip
+l2.click.decay=1.5
+l2.click.pitch=3000
+l2.click.sweep=1.5
+l2.click.filter=Off
+l1.slot1.type=EQ
+l1.slot1.low=-2
+l1.slot1.mid=2
+l1.slot1.mid_freq=180
+l1.slot1.high=2
+output=-2.3

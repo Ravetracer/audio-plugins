@@ -1,0 +1,25 @@
+[Substrike]
+format=1
+name=Deep Round
+category=House
+author=Substrike
+tags=deep, round, soft
+description=A deep house kick: a round sine at 55 Hz with a soft attack and a gentle tail.
+[Parameters]
+l1.body.pitch_start=200
+l1.body.pitch_end=55
+l1.body.sweep=70
+l1.body.sweep_curve=50
+l1.body.hold=40
+l1.body.decay=330
+l1.body.decay_curve=50
+l2.on=On
+l2.level=-20
+l2.click.type=Noise
+l2.click.decay=3
+l2.click.filter=Band Pass
+l2.click.cutoff=2500
+l1.slot1.type=Distortion
+l1.slot1.model=Soft Clip
+l1.slot1.drive=12
+output=0.3

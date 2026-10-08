@@ -1,0 +1,25 @@
+[Substrike]
+format=1
+name=Forest Knock
+category=Psytrance
+author=Substrike
+tags=psy, woody, dark
+description=A woody forest-psy knock: a bar resonator struck on top of a short body.
+[Parameters]
+l1.body.pitch_start=608
+l1.body.pitch_end=60
+l1.body.sweep=60
+l1.body.hold=10
+l1.body.decay=140
+l4.on=On
+l4.level=-8
+l4.resonator.exciter=Impulse
+l4.resonator.model=Bar
+l4.resonator.modes=5
+l4.resonator.tune=180
+l4.resonator.decay=70
+l4.resonator.damping=75
+l4.resonator.brightness=50
+master.slot1.type=Clipper
+master.slot1.drive=4
+output=-1

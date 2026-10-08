@@ -1,0 +1,33 @@
+[Substrike]
+format=1
+name=Industrial Hardcore
+category=Hardcore
+author=Substrike
+tags=industrial, dark, reverb
+description=A dark industrial hardcore kick: distorted, then thrown into a short metal room and distorted again.
+[Parameters]
+l1.body.pitch_start=2500
+l1.body.pitch_end=50
+l1.body.sweep=350
+l1.body.hold=160
+l1.body.decay=220
+l1.slot1.type=Distortion
+l1.slot1.model=Rectifier
+l1.slot1.drive=70
+l1.slot1.output=-6
+l1.slot2.type=Reverb
+l1.slot2.mix=40
+l1.slot2.size=20
+l1.slot2.decay=600
+l1.slot2.damping=8000
+l1.slot3.type=Distortion
+l1.slot3.model=Fuzz
+l1.slot3.drive=50
+l1.slot3.output=-6
+l1.slot4.type=Filter
+l1.slot4.mode=LP 24
+l1.slot4.cutoff=3500
+master.clip=Hard
+output=10.2
+[Curves]
+l1.pitch=0,1,0;0.005,0.78,0;0.03,0.35,0.3;0.15,0.1,0.2;1,0,0

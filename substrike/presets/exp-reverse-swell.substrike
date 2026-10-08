@@ -1,0 +1,24 @@
+[Substrike]
+format=1
+name=Reverse Swell
+category=Experimental
+author=Substrike
+tags=reverse, warp, swell
+description=The kick, then itself backwards: a reversed echo swells up 300 ms after each hit.
+[Parameters]
+l1.body.pitch_start=280
+l1.body.pitch_end=50
+l1.body.sweep=80
+l1.body.hold=30
+l1.body.decay=280
+l1.slot1.type=Warp
+l1.slot1.mix=80
+l1.slot1.time=300
+l1.slot1.feedback=20
+l1.slot1.pitch=0
+l1.slot1.mode=Reverse
+l1.slot1.diffusion=20
+l1.slot2.type=Filter
+l1.slot2.mode=HP 12
+l1.slot2.cutoff=60
+output=-1.4

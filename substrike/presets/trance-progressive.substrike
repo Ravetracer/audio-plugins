@@ -1,0 +1,23 @@
+[Substrike]
+format=1
+name=Progressive Round
+category=Trance
+author=Substrike
+tags=round, smooth, progressive
+description=A smooth progressive kick with a rounded attack and a warm tail.
+[Parameters]
+l1.body.pitch_start=352
+l1.body.pitch_end=50
+l1.body.sweep=165
+l1.body.sweep_curve=50
+l1.body.hold=45
+l1.body.decay=420
+l1.body.wave=Triangle
+l1.body.shape=10
+l1.slot1.type=Filter
+l1.slot1.mode=LP 12
+l1.slot1.cutoff=3000
+l1.slot2.type=Distortion
+l1.slot2.model=Tube
+l1.slot2.drive=20
+output=-2.4

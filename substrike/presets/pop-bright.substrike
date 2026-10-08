@@ -1,0 +1,30 @@
+[Substrike]
+format=1
+name=Bright Beater
+category=Pop
+author=Substrike
+tags=bright, clicky, modern
+description=A modern kick with a bright, papery beater that cuts through dense mixes.
+[Parameters]
+l1.body.pitch_start=480
+l1.body.pitch_end=55
+l1.body.sweep=90
+l1.body.hold=25
+l1.body.decay=260
+l2.on=On
+l2.level=-2
+l2.click.type=Noise
+l2.click.decay=6
+l2.click.filter=High Pass
+l2.click.cutoff=2500
+l2.click.reso=20
+l3.on=On
+l3.level=-24
+l3.noise.color=White
+l3.noise.filter=High Pass
+l3.noise.cutoff=8000
+l3.noise.decay=30
+master.slot1.type=EQ
+master.slot1.high=4
+master.slot1.tilt=2
+output=-8.1

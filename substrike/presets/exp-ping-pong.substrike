@@ -1,0 +1,28 @@
+[Substrike]
+format=1
+name=Ping Pong Hall
+category=Experimental
+author=Substrike
+tags=stereo, delay, wide
+description=A kick whose top bounces left and right across a hall while the low end stays in the middle.
+[Parameters]
+l1.body.pitch_start=320
+l1.body.pitch_end=50
+l1.body.sweep=70
+l1.body.hold=30
+l1.body.decay=300
+l2.on=On
+l2.level=-10
+l2.click.type=Noise
+l2.click.decay=5
+l2.click.filter=High Pass
+l2.click.cutoff=3000
+master.slot1.type=Delay
+master.slot1.band=High
+master.slot1.mix=50
+master.slot1.sync=1/8
+master.slot1.feedback=50
+master.slot1.color=10
+master.slot1.ping_pong=100
+master.mono_below=150
+output=-1.2

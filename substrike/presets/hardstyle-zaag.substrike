@@ -1,0 +1,35 @@
+[Substrike]
+format=1
+name=Zaag Tail
+category=Hardstyle
+author=Substrike
+tags=hardstyle, saw, screech
+description=A hardstyle kick with a buzzing saw tail that bends up and down under an envelope.
+[Parameters]
+l1.body.pitch_start=2500
+l1.body.pitch_end=52
+l1.body.sweep=400
+l1.body.key_track=100
+l1.body.hold=300
+l1.body.decay=150
+l1.body.wave=Saw
+l1.body.shape=30
+mod.env1.time=400
+mod.route1.source=Env 1
+mod.route1.dest=L1 Pitch End
+mod.route1.amount=8
+l1.slot1.type=Filter
+l1.slot1.mode=LP 24
+l1.slot1.cutoff=900
+l1.slot1.reso=30
+l1.slot2.type=Distortion
+l1.slot2.model=Valve Stack
+l1.slot2.drive=70
+l1.slot2.output=-6
+l1.slot3.type=Clipper
+l1.slot3.drive=8
+master.clip=Hard
+output=-1.5
+[Curves]
+l1.pitch=0,1,0;0.004,0.8,0;0.02,0.45,0.3;0.08,0.12,0;0.35,0.17,-0.2;1,0,0.2
+mod.env1=0,0,0;0.2,0,0;0.5,1,-0.4;1,0.3,0.3

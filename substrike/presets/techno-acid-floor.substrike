@@ -1,0 +1,29 @@
+[Substrike]
+format=1
+name=Acid Floor
+category=Techno
+author=Substrike
+tags=squelchy, resonant, acid
+description=A kick with an acid edge: a squarish body through a resonant lowpass whose envelope snaps shut with every hit.
+[Parameters]
+l1.body.pitch_start=464
+l1.body.pitch_end=50
+l1.body.sweep=135
+l1.body.hold=30
+l1.body.decay=380
+l1.body.wave=Square
+l1.body.shape=30
+l1.slot1.type=Filter
+l1.slot1.mode=LP 24
+l1.slot1.cutoff=180
+l1.slot1.reso=65
+l1.slot1.env=4.5
+l1.slot1.env_decay=70
+l1.slot2.type=Distortion
+l1.slot2.model=Crunch
+l1.slot2.drive=30
+l1.slot2.output=-3
+l1.slot3.type=EQ
+l1.slot3.low=4
+l1.slot3.high=-2
+output=2.7

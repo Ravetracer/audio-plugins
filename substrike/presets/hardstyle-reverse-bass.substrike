@@ -1,0 +1,43 @@
+[Substrike]
+format=1
+name=Reverse Bass Kick
+category=Hardstyle
+author=Substrike
+tags=hardstyle, reverse bass, offbeat
+description=A kick with its own reverse-bass swell: a second lane swells in after the hit and cuts off on the next beat at 150 BPM.
+[Parameters]
+l1.body.pitch_start=3000
+l1.body.pitch_end=55
+l1.body.sweep=300
+l1.body.hold=60
+l1.body.decay=150
+l1.slot1.type=Distortion
+l1.slot1.model=Valve Stack
+l1.slot1.drive=70
+l1.slot1.output=-6
+l5.on=On
+l5.level=-3
+l5.body.pitch_start=58
+l5.body.pitch_end=55
+l5.body.sweep=50
+l5.body.attack=100
+l5.body.hold=190
+l5.body.decay=12
+l5.body.wave=Saw
+l5.body.shape=50
+l5.slot1.type=Filter
+l5.slot1.mode=LP 24
+l5.slot1.cutoff=500
+l5.slot1.reso=30
+l5.slot1.env=-2
+l5.slot1.env_decay=300
+l5.slot2.type=Distortion
+l5.slot2.model=Fuzz
+l5.slot2.drive=60
+l5.slot2.output=-6
+l5.guard.delay=100
+l5.guard.fade=60
+master.clip=Hard
+output=3.3
+[Curves]
+l1.pitch=0,1,0;0.005,0.78,0;0.03,0.35,0.3;0.15,0.1,0.2;1,0,0

@@ -1,0 +1,30 @@
+[Substrike]
+format=1
+name=Dub Chamber
+category=Techno
+author=Substrike
+tags=dub, echo, deep
+description=A soft dub techno kick whose echoes fall back into a dark room: a dotted-eighth delay with a closing lowpass in its feedback.
+[Parameters]
+l1.body.pitch_start=352
+l1.body.pitch_end=47
+l1.body.sweep=150
+l1.body.hold=40
+l1.body.decay=400
+l1.body.decay_curve=40
+l1.slot1.type=Delay
+l1.slot1.band=Mid+High
+l1.slot1.mix=45
+l1.slot1.sync=1/8D
+l1.slot1.feedback=45
+l1.slot1.color=-55
+l1.slot1.drive=20
+l1.slot2.type=Reverb
+l1.slot2.mix=18
+l1.slot2.size=60
+l1.slot2.decay=1800
+l1.slot2.damping=3000
+l1.slot2.low_cut=200
+l1.slot3.type=EQ
+l1.slot3.low=2
+output=-0.9

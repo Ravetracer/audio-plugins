@@ -158,9 +158,17 @@ struct Shape
 
 const std::vector<std::string>& slotTypeLabels()
 {
-    static const std::vector<std::string> labels = {"Off",    "Distortion", "Clipper",    "Wavefolder", "Bitcrush",
-                                                    "Filter", "EQ",         "Compressor", "Transient",  "Gate"};
+    static const std::vector<std::string> labels = {
+        "Off",    "Distortion", "Clipper", "Wavefolder", "Bitcrush", "Filter",  "EQ",     "Compressor", "Transient",
+        "Gate",   "Reverb",     "Delay",   "Warp",       "Smear",    "Ring Mod", "Stereo", "Utility", "Limiter"};
     return labels;
+}
+
+// A Sync letter's choices; dsp::syncBeats() has their lengths.
+std::vector<std::string> syncChoices()
+{
+    return {"Free", "1/64", "1/32T", "1/32", "1/16T", "1/16", "1/16D", "1/8T",
+            "1/8",  "1/8D", "1/4T",  "1/4",  "1/4D",  "1/2",  "1/2D",  "1/1"};
 }
 
 const std::vector<std::vector<Shape>>& slotShapes()
@@ -230,6 +238,56 @@ const std::vector<std::vector<Shape>>& slotShapes()
             {"hold", "Hold", Scale::Cubic, 0, 2000, "ms", 50},
             {"release", "Release", Scale::Log, 1, 5000, "ms", 100},
             {"range", "Range", Scale::Linear, -80, 0, "dB", -80, {}, true},
+        },
+        {
+            {"size", "Size", Scale::Linear, 0, 100, "%", 40},
+            {"decay", "Decay", Scale::Log, 50, 10000, "ms", 800},
+            {"damping", "Damping", Scale::Log, 500, 20000, "Hz", 6000},
+            {"predelay", "Pre-Delay", Scale::Cubic, 0, 250, "ms", 0},
+            {"low_cut", "Low Cut", Scale::Log, 20, 1000, "Hz", 20, {}, true},
+            {"width", "Width", Scale::Linear, 0, 100, "%", 100},
+        },
+        {
+            {"time", "Time", Scale::Log, 1, 2000, "ms", 250},
+            {"sync", "Sync", Scale::Linear, 0, 15, "", 0, syncChoices()},
+            {"feedback", "Feedback", Scale::Linear, 0, 95, "%", 35},
+            {"color", "Color", Scale::Linear, -100, 100, "%", -30},
+            {"drive", "Drive", Scale::Linear, 0, 100, "%", 0},
+            {"ping_pong", "Ping-Pong", Scale::Linear, 0, 100, "%", 0},
+        },
+        {
+            {"time", "Time", Scale::Log, 1, 2000, "ms", 300},
+            {"sync", "Sync", Scale::Linear, 0, 15, "", 0, syncChoices()},
+            {"feedback", "Feedback", Scale::Linear, 0, 95, "%", 40},
+            {"pitch", "Pitch", Scale::Linear, -12, 12, "st", -5},
+            {"mode", "Mode", Scale::Linear, 0, 2, "", 0, {"Forward", "Reverse", "Taps"}},
+            {"diffusion", "Diffusion", Scale::Linear, 0, 100, "%", 30},
+        },
+        {
+            {"time", "Time", Scale::Log, 0.5, 80, "ms", 12},
+            {"diffusion", "Diffusion", Scale::Linear, 0, 100, "%", 70},
+            {"stages", "Stages", Scale::Linear, 0, 3, "", 1, {"4", "8", "12", "16"}},
+            {"width", "Width", Scale::Linear, 0, 100, "%", 0},
+        },
+        {
+            {"mode", "Mode", Scale::Linear, 0, 2, "", 0, {"Ring", "Shift Up", "Shift Down"}},
+            {"freq", "Frequency", Scale::Log, 1, 5000, "Hz", 100},
+            {"env", "Env", Scale::Linear, -8, 8, "oct", 0},
+            {"env_decay", "Env Decay", Scale::Log, 5, 5000, "ms", 100},
+        },
+        {
+            {"width", "Width", Scale::Linear, 0, 200, "%", 100},
+            {"haas", "Haas", Scale::Linear, -30, 30, "ms", 0},
+        },
+        {
+            {"gain", "Gain", Scale::Linear, -48, 24, "dB", 0, {}, true},
+            {"polarity", "Polarity", Scale::Linear, 0, 1, "", 0, {"Normal", "Invert"}},
+            {"channels", "Channels", Scale::Linear, 0, 4, "", 0, {"Stereo", "Mono", "Swap", "Left", "Right"}},
+        },
+        {
+            {"gain", "Gain", Scale::Linear, 0, 24, "dB", 0},
+            {"ceiling", "Ceiling", Scale::Linear, -24, 0, "dB", -0.3},
+            {"release", "Release", Scale::Log, 5, 1000, "ms", 80},
         },
     };
     return shapes;
@@ -328,7 +386,7 @@ ParamTable::ParamTable()
         add(continuous(pid::lane(l, LVelocity), k + "velocity", p + "Velocity", lane, Scale::Linear, 0.0, 100.0, "%",
                        50.0));
         add(enumeration(pid::lane(l, LSource), k + "source", p + "Source", lane,
-                        {"Body", "Click", "Noise", "Resonator"}, static_cast<int>(kSources[l])));
+                        {"Body", "Click", "Noise", "Resonator", "Bus"}, static_cast<int>(kSources[l])));
         add(continuous(pid::lane(l, LDelay), k + "delay", p + "Delay", lane, Scale::Cubic, 0.0, 100.0, "ms", 0.0));
         add(boolean(pid::lane(l, LInvert), k + "invert", p + "Invert", lane, false));
         add(enumeration(pid::lane(l, LNote), k + "note", p + "Note", lane, laneNotes, 0));
@@ -343,6 +401,21 @@ ParamTable::ParamTable()
                        "Hz", 150.0));
         add(continuous(pid::lane(l, LXoverHigh), k + "xover_high", p + "Crossover High", lane, Scale::Log, 500.0,
                        12000.0, "Hz", 2500.0));
+        // The transient guard at the end of the chain: a window that keeps
+        // the lane silent for a while after each hit and then fades it in,
+        // and a duck driven by another lane.
+        add(continuous(pid::lane(l, LGuardDelay), k + "guard.delay", p + "Guard Delay", lane, Scale::Cubic, 0.0,
+                       500.0, "ms", 0.0));
+        add(continuous(pid::lane(l, LGuardFade), k + "guard.fade", p + "Guard Fade", lane, Scale::Cubic, 0.0, 500.0,
+                       "ms", 0.0));
+        std::vector<std::string> duckFrom{"Off"};
+        for (int d = 0; d < dsp::kNumLanes; ++d)
+            duckFrom.push_back("Lane " + std::to_string(d + 1));
+        add(enumeration(pid::lane(l, LDuckSource), k + "duck.source", p + "Duck Source", lane, duckFrom, 0));
+        add(continuous(pid::lane(l, LDuckDepth), k + "duck.depth", p + "Duck Depth", lane, Scale::Linear, 0.0, 100.0,
+                       "%", 100.0));
+        add(continuous(pid::lane(l, LDuckRelease), k + "duck.release", p + "Duck Release", lane, Scale::Log, 5.0,
+                       2000.0, "ms", 120.0));
 
         // The defaults are a plain, solid club kick: a fast drop from the low
         // mids onto a sub around G0, with a medium tail.
@@ -448,6 +521,17 @@ ParamTable::ParamTable()
         add(continuous(pid::lane(l, ResDropTime), k + "resonator.drop_time", p + "Resonator Drop Time", res,
                        Scale::Log, 1.0, 1000.0, "ms", 30.0));
 
+        // A bus lane plays the sum of the lanes switched on here, taken
+        // before or after their chains. Lane 1 is the usual source.
+        const std::string bus = lane + "/Bus";
+        for (int b = 0; b < dsp::kNumLanes; ++b)
+        {
+            const std::string bn = std::to_string(b + 1);
+            add(boolean(pid::lane(l, BusLane) + static_cast<uint32_t>(b), k + "bus.lane" + bn, p + "Bus Lane " + bn,
+                        bus, b == 0));
+        }
+        add(enumeration(pid::lane(l, BusTap), k + "bus.tap", p + "Bus Tap", bus, {"Pre Chain", "Post Chain"}, 1));
+
         for (int s = 0; s < dsp::kNumSlots; ++s)
         {
             const std::string sn = std::to_string(s + 1);
@@ -468,7 +552,77 @@ ParamTable::ParamTable()
     defs_.push_back(continuous(MonoBelow, "master.mono_below", "Mono Below", "Master", Scale::Log, 20.0, 500.0, "Hz",
                                20.0));
     defs_.back().floorIsOff = true;
-    defs_.push_back(enumeration(OutputClip, "master.clip", "Output Clip", "Master", {"Off", "Soft", "Hard"}, 0));
+    // Limit is a peak limiter at -0.3 dBFS, the others clip at full scale.
+    defs_.push_back(enumeration(OutputClip, "master.clip", "Output Clip", "Master", {"Off", "Soft", "Hard", "Limit"}, 0));
+
+    // Modulation: the macros, the LFOs, the envelopes, then the routes, whose
+    // Destination lists everything above that can be modulated.
+    for (int m = 0; m < kNumMacros; ++m)
+    {
+        const std::string n = std::to_string(m + 1);
+        defs_.push_back(continuous(macro(m), "mod.macro" + n, "Macro " + n, "Modulation/Macros", Scale::Linear, 0.0,
+                                   100.0, "%", 0.0));
+    }
+    std::vector<std::string> lfoSync = syncChoices();
+    lfoSync.push_back("2/1");
+    lfoSync.push_back("4/1");
+    for (int k = 0; k < kNumLfos; ++k)
+    {
+        const std::string n = std::to_string(k + 1);
+        const std::string key = "mod.lfo" + n + ".", name = "LFO " + n + " ", module = "Modulation/LFO " + n;
+        defs_.push_back(enumeration(lfo(k, LfoShape), key + "shape", name + "Shape", module,
+                                    {"Sine", "Triangle", "Saw Up", "Saw Down", "Square", "S&H", "Smooth"}, 0));
+        defs_.push_back(continuous(lfo(k, LfoRate), key + "rate", name + "Rate", module, Scale::Log, 0.01, 200.0, "Hz",
+                                   4.0));
+        defs_.push_back(enumeration(lfo(k, LfoSync), key + "sync", name + "Sync", module, lfoSync, 0));
+        defs_.push_back(continuous(lfo(k, LfoPhase), key + "phase", name + "Phase", module, Scale::Linear, 0.0, 360.0,
+                                   "deg", 0.0));
+        defs_.push_back(boolean(lfo(k, LfoRetrigger), key + "retrigger", name + "Retrigger", module, true));
+    }
+    for (int k = 0; k < kNumModEnvs; ++k)
+    {
+        const std::string n = std::to_string(k + 1);
+        const std::string key = "mod.env" + n + ".", name = "Env " + n + " ", module = "Modulation/Env " + n;
+        defs_.push_back(continuous(modEnv(k, EnvTime), key + "time", name + "Time", module, Scale::Log, 1.0, 10000.0,
+                                   "ms", 300.0));
+        defs_.push_back(boolean(modEnv(k, EnvLoop), key + "loop", name + "Loop", module, false));
+    }
+    std::vector<std::string> sources{"Off", "Velocity", "Note", "Random"};
+    for (int k = 0; k < kNumLfos; ++k)
+        sources.push_back("LFO " + std::to_string(k + 1));
+    for (int k = 0; k < kNumModEnvs; ++k)
+        sources.push_back("Env " + std::to_string(k + 1));
+    for (int m = 0; m < kNumMacros; ++m)
+        sources.push_back("Macro " + std::to_string(m + 1));
+    for (int l = 0; l < dsp::kNumLanes; ++l)
+        sources.push_back("Follow " + std::to_string(l + 1));
+    std::vector<std::string> dests{"Off"};
+    for (const ParamDef& d : defs_)
+        if (d.kind == Kind::Continuous && d.automatable && d.id < 10000)
+        {
+            destinations_.push_back(static_cast<int>(&d - defs_.data()));
+            dests.push_back(d.name);
+        }
+    for (int r = 0; r < kNumRoutes; ++r)
+    {
+        const std::string n = std::to_string(r + 1);
+        const std::string key = "mod.route" + n + ".", name = "Mod " + n + " ", module = "Modulation/Matrix";
+        defs_.push_back(enumeration(route(r, RSource), key + "source", name + "Source", module, sources, 0));
+        defs_.back().automatable = false;
+        defs_.push_back(enumeration(route(r, RDest), key + "dest", name + "Destination", module, dests, 0));
+        defs_.back().automatable = false;
+        defs_.back().isDestination = true;
+        // Of the destination's whole range, either way.
+        defs_.push_back(continuous(route(r, RAmount), key + "amount", name + "Amount", module, Scale::Linear, -100.0,
+                                   100.0, "%", 0.0));
+        // Bends the source: above 0 it rises early, below 0 late.
+        defs_.push_back(continuous(route(r, RCurve), key + "curve", name + "Curve", module, Scale::Linear, -100.0,
+                                   100.0, "%", 0.0));
+    }
+
+    destinationOf_.assign(defs_.size(), 0);
+    for (size_t v = 0; v < destinations_.size(); ++v)
+        destinationOf_[static_cast<size_t>(destinations_[v])] = static_cast<int>(v + 1);
 
     uint32_t maxId = 0;
     for (const ParamDef& d : defs_)
@@ -717,130 +871,156 @@ std::optional<double> ParamTable::fromText(const ParamDef& d, const std::string&
     return fromPlain(d, v);
 }
 
-dsp::EngineParams buildEngineParams(const double* values)
+void assignParam(dsp::EngineParams& p, int index, const double* values)
 {
     const ParamTable& t = ParamTable::get();
-    auto plain = [&](uint32_t id) {
-        const int i = t.indexOf(id);
-        return t.toPlain(i, values[i]);
-    };
-    auto gain = [&](uint32_t id) {
-        const int i = t.indexOf(id);
-        const double db = t.toPlain(i, values[i]);
-        return t.def(i).floorIsOff && isOff(t.def(i), db) ? 0.0 : std::pow(10.0, db / 20.0);
-    };
+    const ParamDef& d = t.def(index);
+    const uint32_t id = d.id;
+    // The value in the parameter's unit; a level's floor is silence.
+    const double plain = ParamTable::toPlain(t.effective(index, values), values[index]);
+    const auto gain = [&] { return d.floorIsOff && isOff(d, plain) ? 0.0 : std::pow(10.0, plain / 20.0); };
+    const auto idx = [&] { return static_cast<int>(plain); };
 
-    auto slot = [&](uint32_t base, dsp::SlotParams& s) {
+    auto slot = [&](dsp::SlotParams& s, uint32_t field) {
         using namespace pid;
-        s.type = static_cast<dsp::SlotType>(static_cast<int>(plain(base + SType)));
-        s.band = static_cast<dsp::Band>(static_cast<int>(plain(base + SBand)));
-        s.mix = plain(base + SMix) / 100.0;
-        s.bypass = plain(base + SBypass) > 0.5;
-        for (int k = 0; k < dsp::kSlotValues; ++k)
+        switch (field)
         {
-            const int i = t.indexOf(base + SValueA + static_cast<uint32_t>(k));
-            s.v[static_cast<size_t>(k)] = ParamTable::toPlain(t.effective(i, values), values[i]);
+        case SType: s.type = static_cast<dsp::SlotType>(idx()); break;
+        case SBand: s.band = static_cast<dsp::Band>(idx()); break;
+        case SMix: s.mix = plain / 100.0; break;
+        case SBypass: s.bypass = plain > 0.5; break;
+        default:
+            if (field >= SValueA && field < SValueA + dsp::kSlotValues)
+                s.v[field - SValueA] = plain;
+            break;
         }
     };
 
+    switch (id)
+    {
+    case pid::Output: p.outGain = gain(); return;
+    case pid::RootNote: p.rootNote = idx(); return;
+    case pid::Quality: p.oversampling = 1 << idx(); return;
+    case pid::MasterXoverLow: p.masterXoverLow = plain; return;
+    case pid::MasterXoverHigh: p.masterXoverHigh = plain; return;
+    case pid::MonoBelow: p.monoBelow = isOff(d, plain) ? 0.0 : plain; return;
+    case pid::OutputClip: p.clip = static_cast<dsp::OutputClip>(idx()); return;
+    default: break;
+    }
+    if (id >= 9000 && id < 9000 + pid::kSlotBlock * dsp::kNumSlots)
+    {
+        slot(p.master[(id - 9000) / pid::kSlotBlock], (id - 9000) % pid::kSlotBlock);
+        return;
+    }
+    if (id < pid::kLaneBlock || id >= pid::kLaneBlock * (dsp::kNumLanes + 1))
+        return; // modulation: the player reads it itself
+
+    using namespace pid;
+    const int l = static_cast<int>(id / kLaneBlock) - 1;
+    const uint32_t f = id % kLaneBlock;
+    dsp::LaneParams& lp = p.lanes[static_cast<size_t>(l)];
+    if (f >= 600 && f < 600 + kSlotBlock * dsp::kNumSlots)
+    {
+        slot(lp.slots[(f - 600) / kSlotBlock], (f - 600) % kSlotBlock);
+        return;
+    }
+    if (f >= BusLane && f < BusLane + dsp::kNumLanes)
+    {
+        lp.bus.from[f - BusLane] = plain > 0.5;
+        return;
+    }
+    const double pct = plain / 100.0;
+    dsp::BodyParams& b = lp.body;
+    dsp::ClickParams& c = lp.click;
+    dsp::NoiseParams& nz = lp.noise;
+    dsp::ResonatorParams& r = lp.resonator;
+    switch (static_cast<LaneField>(f))
+    {
+    case LEnabled: lp.enabled = plain > 0.5; break;
+    case LLevel: lp.gain = gain(); break;
+    case LPan: lp.pan = pct; break;
+    case LVelocity: lp.velocity = pct; break;
+    case LSource: lp.source = static_cast<dsp::Source>(idx()); break;
+    case LDelay: lp.delayMs = plain; break;
+    case LInvert: lp.invert = plain > 0.5; break;
+    case LNote: lp.note = idx() - 1; break;
+    case LOutput: lp.output = static_cast<dsp::Output>(idx()); break;
+    case LPitchLink: lp.pitchLink = idx() - 1; break;
+    case LTranspose: lp.transpose = plain; break;
+    case LVariation: lp.variation = pct; break;
+    case LXoverLow: lp.xoverLow = plain; break;
+    case LXoverHigh: lp.xoverHigh = plain; break;
+    case LGuardDelay: lp.guard.delayMs = plain; break;
+    case LGuardFade: lp.guard.fadeMs = plain; break;
+    case LDuckSource: lp.guard.duckSource = idx() - 1; break;
+    case LDuckDepth: lp.guard.duckDepth = pct; break;
+    case LDuckRelease: lp.guard.duckReleaseMs = plain; break;
+
+    case BodyPitchStart: b.pitchStart = plain; break;
+    case BodyPitchEnd: b.pitchEnd = plain; break;
+    case BodySweep: b.sweepMs = plain; break;
+    case BodySweepCurve: b.sweepCurve = pct; break;
+    case BodyKeyTrack: b.keyTrack = pct; break;
+    case BodyAttack: b.attackMs = plain; break;
+    case BodyHold: b.holdMs = plain; break;
+    case BodyDecay: b.decayMs = plain; break;
+    case BodyDecayCurve: b.decayCurve = pct; break;
+    case BodyPhase: b.phase = plain / 360.0; break;
+    case BodyWave: b.wave = static_cast<dsp::Wave>(idx()); break;
+    case BodyShape: b.shape = pct; break;
+    case BodyTilt: b.tilt = pct; break;
+    case BodyEven: b.even = pct; break;
+    case BodyStretch: b.stretch = pct; break;
+    case BodyFmAmount: b.fmAmount = pct; break;
+    case BodyFmRatio: b.fmRatio = plain; break;
+    case BodyFmDecay: b.fmDecayMs = plain; break;
+    case BodyFeedback: b.feedback = pct; break;
+    case BodyDrift: b.drift = pct; break;
+
+    case ClickType: c.type = static_cast<dsp::ClickType>(idx()); break;
+    case ClickDecay: c.decayMs = plain; break;
+    case ClickFilter: c.filter = static_cast<dsp::FilterMode>(idx()); break;
+    case ClickCutoff: c.cutoff = plain; break;
+    case ClickReso: c.reso = pct; break;
+    case ClickPitch: c.pitch = plain; break;
+    case ClickSweep: c.sweepOct = plain; break;
+
+    case NoiseColor: nz.color = static_cast<dsp::NoiseColor>(idx()); break;
+    case NoiseDensity: nz.density = pct; break;
+    case NoiseWidth: nz.width = pct; break;
+    case NoiseFilter: nz.filter = static_cast<dsp::FilterMode>(idx()); break;
+    case NoiseCutoff: nz.cutoff = plain; break;
+    case NoiseReso: nz.reso = pct; break;
+    case NoiseFilterEnv: nz.filterEnvOct = plain; break;
+    case NoiseEnvDecay: nz.envDecayMs = plain; break;
+    case NoiseAttack: nz.attackMs = plain; break;
+    case NoiseHold: nz.holdMs = plain; break;
+    case NoiseDecay: nz.decayMs = plain; break;
+    case NoiseCurve: nz.curve = pct; break;
+
+    case ResExciter: r.exciter = static_cast<dsp::Exciter>(idx()); break;
+    case ResModel: r.model = static_cast<dsp::ResonatorModel>(idx()); break;
+    case ResModes: r.modes = idx() + 2; break;
+    case ResTune: r.tune = plain; break;
+    case ResKeyTrack: r.keyTrack = pct; break;
+    case ResDecay: r.decayMs = plain; break;
+    case ResDamping: r.damping = pct; break;
+    case ResBrightness: r.brightness = pct; break;
+    case ResHardness: r.hardness = pct; break;
+    case ResDrop: r.dropSt = plain; break;
+    case ResDropTime: r.dropMs = plain; break;
+
+    case BusTap: lp.bus.post = idx() == 1; break;
+    default: break;
+    }
+}
+
+dsp::EngineParams buildEngineParams(const double* values)
+{
     dsp::EngineParams p;
-    p.outGain = gain(pid::Output);
-    p.rootNote = static_cast<int>(plain(pid::RootNote));
-    p.oversampling = 1 << static_cast<int>(plain(pid::Quality));
-    for (int s = 0; s < dsp::kNumSlots; ++s)
-        slot(pid::masterSlot(s, 0), p.master[static_cast<size_t>(s)]);
-    p.masterXoverLow = plain(pid::MasterXoverLow);
-    p.masterXoverHigh = plain(pid::MasterXoverHigh);
-    {
-        const int i = t.indexOf(pid::MonoBelow);
-        const double hz = t.toPlain(i, values[i]);
-        p.monoBelow = isOff(t.def(i), hz) ? 0.0 : hz;
-    }
-    p.clip = static_cast<dsp::OutputClip>(static_cast<int>(plain(pid::OutputClip)));
-    for (int l = 0; l < dsp::kNumLanes; ++l)
-    {
-        using namespace pid;
-        auto lv = [&](LaneField f) { return plain(lane(l, f)); };
-        auto pct = [&](LaneField f) { return plain(lane(l, f)) / 100.0; };
-        auto idx = [&](LaneField f) { return static_cast<int>(plain(lane(l, f))); };
-
-        dsp::LaneParams& lp = p.lanes[static_cast<size_t>(l)];
-        lp.enabled = lv(LEnabled) > 0.5;
-        lp.gain = gain(lane(l, LLevel));
-        lp.pan = pct(LPan);
-        lp.velocity = pct(LVelocity);
-        lp.source = static_cast<dsp::Source>(idx(LSource));
-        lp.delayMs = lv(LDelay);
-        lp.invert = lv(LInvert) > 0.5;
-        lp.note = idx(LNote) - 1;
-        lp.output = static_cast<dsp::Output>(idx(LOutput));
-        lp.pitchLink = idx(LPitchLink) - 1;
-        lp.transpose = lv(LTranspose);
-        lp.variation = pct(LVariation);
-
-        dsp::BodyParams& b = lp.body;
-        b.pitchStart = lv(BodyPitchStart);
-        b.pitchEnd = lv(BodyPitchEnd);
-        b.sweepMs = lv(BodySweep);
-        b.sweepCurve = pct(BodySweepCurve);
-        b.keyTrack = pct(BodyKeyTrack);
-        b.attackMs = lv(BodyAttack);
-        b.holdMs = lv(BodyHold);
-        b.decayMs = lv(BodyDecay);
-        b.decayCurve = pct(BodyDecayCurve);
-        b.phase = lv(BodyPhase) / 360.0;
-        b.wave = static_cast<dsp::Wave>(idx(BodyWave));
-        b.shape = pct(BodyShape);
-        b.tilt = pct(BodyTilt);
-        b.even = pct(BodyEven);
-        b.stretch = pct(BodyStretch);
-        b.fmAmount = pct(BodyFmAmount);
-        b.fmRatio = lv(BodyFmRatio);
-        b.fmDecayMs = lv(BodyFmDecay);
-        b.feedback = pct(BodyFeedback);
-        b.drift = pct(BodyDrift);
-
-        dsp::ClickParams& c = lp.click;
-        c.type = static_cast<dsp::ClickType>(idx(ClickType));
-        c.decayMs = lv(ClickDecay);
-        c.filter = static_cast<dsp::FilterMode>(idx(ClickFilter));
-        c.cutoff = lv(ClickCutoff);
-        c.reso = pct(ClickReso);
-        c.pitch = lv(ClickPitch);
-        c.sweepOct = lv(ClickSweep);
-
-        dsp::NoiseParams& nz = lp.noise;
-        nz.color = static_cast<dsp::NoiseColor>(idx(NoiseColor));
-        nz.density = pct(NoiseDensity);
-        nz.width = pct(NoiseWidth);
-        nz.filter = static_cast<dsp::FilterMode>(idx(NoiseFilter));
-        nz.cutoff = lv(NoiseCutoff);
-        nz.reso = pct(NoiseReso);
-        nz.filterEnvOct = lv(NoiseFilterEnv);
-        nz.envDecayMs = lv(NoiseEnvDecay);
-        nz.attackMs = lv(NoiseAttack);
-        nz.holdMs = lv(NoiseHold);
-        nz.decayMs = lv(NoiseDecay);
-        nz.curve = pct(NoiseCurve);
-
-        dsp::ResonatorParams& r = lp.resonator;
-        r.exciter = static_cast<dsp::Exciter>(idx(ResExciter));
-        r.model = static_cast<dsp::ResonatorModel>(idx(ResModel));
-        r.modes = idx(ResModes) + 2;
-        r.tune = lv(ResTune);
-        r.keyTrack = pct(ResKeyTrack);
-        r.decayMs = lv(ResDecay);
-        r.damping = pct(ResDamping);
-        r.brightness = pct(ResBrightness);
-        r.hardness = pct(ResHardness);
-        r.dropSt = lv(ResDrop);
-        r.dropMs = lv(ResDropTime);
-
-        lp.xoverLow = lv(LXoverLow);
-        lp.xoverHigh = lv(LXoverHigh);
-        for (int s = 0; s < dsp::kNumSlots; ++s)
-            slot(pid::slot(l, s, 0), lp.slots[static_cast<size_t>(s)]);
-    }
+    const ParamTable& t = ParamTable::get();
+    for (int i = 0; i < t.count(); ++i)
+        assignParam(p, i, values);
     return p;
 }
 

@@ -1,0 +1,28 @@
+[Substrike]
+format=1
+name=Disco Thud
+category=House
+author=Substrike
+tags=disco, thud, short
+description=A short, woody disco thud: a triangle body with a resonator knock and a scooped middle.
+[Parameters]
+l1.body.pitch_start=230
+l1.body.pitch_end=60
+l1.body.sweep=55
+l1.body.hold=20
+l1.body.decay=220
+l1.body.wave=Triangle
+l4.on=On
+l4.level=-14
+l4.resonator.exciter=Mallet
+l4.resonator.model=Membrane
+l4.resonator.tune=110
+l4.resonator.decay=120
+l4.resonator.damping=70
+master.slot1.type=EQ
+master.slot1.low=2
+master.slot1.mid=-4
+master.slot1.mid_freq=400
+master.slot1.mid_q=1
+master.slot1.high=1
+output=-1.6

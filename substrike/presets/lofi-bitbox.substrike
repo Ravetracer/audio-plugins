@@ -1,0 +1,22 @@
+[Substrike]
+format=1
+name=Bit Box
+category=Lo-Fi
+author=Substrike
+tags=bitcrushed, 8-bit, chiptune
+description=A kick from a toy computer: four bits, a low sample rate and a square body.
+[Parameters]
+l1.body.pitch_start=400
+l1.body.pitch_end=60
+l1.body.sweep=60
+l1.body.hold=20
+l1.body.decay=200
+l1.body.wave=Square
+l1.slot1.type=Bitcrush
+l1.slot1.bits=4
+l1.slot1.rate=8000
+l1.slot1.output=-4
+l1.slot2.type=Filter
+l1.slot2.mode=LP 12
+l1.slot2.cutoff=6000
+output=0.1

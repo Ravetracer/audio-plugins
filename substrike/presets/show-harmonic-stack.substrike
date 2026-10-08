@@ -1,0 +1,30 @@
+[Substrike]
+format=1
+name=Harmonic Stack
+category=Showcase
+author=Substrike
+tags=pitch link, tonal, chord
+description=Three bodies locked to one pitch: lanes 5 and 6 follow lane 1 a fifth and an octave up, so the whole stack bends together.
+[Parameters]
+l1.body.pitch_start=400
+l1.body.pitch_end=50
+l1.body.sweep=100
+l1.body.hold=60
+l1.body.decay=500
+l5.on=On
+l5.level=-12
+l5.pitch_link=Lane 1
+l5.transpose=7
+l5.body.hold=40
+l5.body.decay=350
+l6.on=On
+l6.level=-14
+l6.pitch_link=Lane 1
+l6.transpose=12
+l6.body.hold=30
+l6.body.decay=300
+l6.body.wave=Triangle
+master.slot1.type=Distortion
+master.slot1.model=Tube
+master.slot1.drive=25
+output=-2.5

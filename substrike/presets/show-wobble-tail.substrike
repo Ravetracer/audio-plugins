@@ -1,0 +1,31 @@
+[Substrike]
+format=1
+name=Wobble Tail
+category=Showcase
+author=Substrike
+tags=lfo, wobble, tonal
+description=A long kick whose tail wobbles: a retriggered LFO, synced to sixteenths, works on the pitch and on a filter.
+[Parameters]
+l1.body.pitch_start=300
+l1.body.pitch_end=48
+l1.body.sweep=80
+l1.body.hold=200
+l1.body.decay=600
+l1.body.wave=Saw
+l1.body.shape=20
+l1.slot1.type=Filter
+l1.slot1.mode=LP 24
+l1.slot1.cutoff=300
+l1.slot1.reso=50
+mod.lfo1.shape=Sine
+mod.lfo1.sync=1/16
+mod.lfo1.retrigger=On
+mod.lfo1.phase=270
+mod.route1.source=LFO 1
+mod.route1.dest=L1 Slot 1 B
+mod.route1.amount=18
+mod.route2.source=LFO 1
+mod.route2.dest=L1 Pitch End
+mod.route2.amount=3
+master.clip=Soft
+output=-1

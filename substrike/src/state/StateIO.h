@@ -30,6 +30,9 @@ struct StateDocument
     std::map<std::string, std::string> meta;
     std::vector<double> values; // stored values, indexed like ParamTable
     std::array<dsp::Curve, dsp::kNumCurves> curves{};
+    // What parsing ignored or had to change: unknown keys, unreadable or
+    // out-of-range values. For checking hand-written presets.
+    std::vector<std::string> warnings;
 };
 
 // A curve as the state writes it, and back. Parsing repairs what it can

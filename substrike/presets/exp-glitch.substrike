@@ -1,0 +1,32 @@
+[Substrike]
+format=1
+name=Glitch Kick
+category=Experimental
+author=Substrike
+tags=glitch, random, crushed
+description=Every hit breaks differently: random pitch, and a sample-and-hold LFO tearing at the bit depth and the rate.
+[Parameters]
+l1.body.pitch_start=320
+l1.body.pitch_end=55
+l1.body.sweep=70
+l1.body.hold=30
+l1.body.decay=300
+l1.slot1.type=Bitcrush
+l1.slot1.bits=10
+l1.slot1.rate=20000
+mod.lfo1.shape=S&H
+mod.lfo1.rate=40
+mod.lfo1.retrigger=On
+mod.route1.source=LFO 1
+mod.route1.dest=L1 Slot 1 A
+mod.route1.amount=35
+mod.route2.source=LFO 1
+mod.route2.dest=L1 Slot 1 B
+mod.route2.amount=30
+mod.route3.source=Random
+mod.route3.dest=L1 Pitch End
+mod.route3.amount=6
+mod.route4.source=Random
+mod.route4.dest=L1 Pitch Start
+mod.route4.amount=10
+output=-1

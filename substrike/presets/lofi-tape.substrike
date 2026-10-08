@@ -1,0 +1,31 @@
+[Substrike]
+format=1
+name=Tape Kick
+category=Lo-Fi
+author=Substrike
+tags=tape, warm, saturated
+description=A kick bounced to tape and back: softly saturated, rolled off, and never quite the same twice.
+[Parameters]
+l1.body.pitch_start=200
+l1.body.pitch_end=52
+l1.body.sweep=70
+l1.body.hold=30
+l1.body.decay=330
+l1.body.drift=40
+l1.on=On
+l1.level=0
+l1.variation=25
+master.slot1.type=Distortion
+master.slot1.model=Tube
+master.slot1.drive=35
+master.slot1.tone=5000
+master.slot2.type=Filter
+master.slot2.mode=LP 12
+master.slot2.cutoff=4500
+master.slot3.type=Compressor
+master.slot3.threshold=-18
+master.slot3.ratio=3
+master.slot3.attack=20
+master.slot3.release=150
+master.slot3.makeup=2
+output=-4
