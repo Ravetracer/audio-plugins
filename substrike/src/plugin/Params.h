@@ -26,6 +26,7 @@ enum : uint32_t
     Output = 1,
     RootNote = 2,
     Quality = 3,
+    Tune = 4,
 
     MasterXoverLow = 9300,
     MasterXoverHigh = 9301,

@@ -104,6 +104,7 @@ struct EngineParams
     std::array<LaneParams, kNumLanes> lanes{};
     double outGain = 1.0;
     int rootNote = 36;
+    double tune = 0.0; // semitones, added to every lane's transpose
     int oversampling = 2; // 1, 2 or 4, for the drive group and the output clip
     std::array<SlotParams, kNumSlots> master{};
     double masterXoverLow = 150.0, masterXoverHigh = 2500.0;
@@ -144,6 +145,7 @@ public:
         PitchTrack track;
         bool tap;
         double tempo;
+        double tune; // semitones, the master's
         // A bus lane's input for this chunk (null for other sources), and the
         // offset from which it is silent.
         const float* busL;

@@ -50,6 +50,8 @@ public:
     // its value: the sum of the routes on it, a bipolar source counted both
     // ways. False when no route is on it.
     bool modRange(int idx, double& lo, double& hi) const;
+    // Where the matrix has the parameter right now (NaN: not modulated).
+    double modulated(int idx) const { return ctl_.modulatedValue(idx); }
 
     // Called after a completed gesture.
     std::function<void()> onGestureEnd;

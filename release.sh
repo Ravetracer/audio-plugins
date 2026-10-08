@@ -66,6 +66,21 @@ win_cairo="${PLUGINCORE_WIN_CAIRO:-${here}/winbuild/cairo-mingw}"
 [ -n "$win_cairo" ] && win_cairo="$(cd "$win_cairo" 2>/dev/null && pwd || echo "$win_cairo")"
 
 stage="${here}/dist/audio-plugins-${version}"
+
+# Nothing this script replaces is deleted: an old staging tree, build tree,
+# manual folder or archive is moved into dist/.retired/<time>/ instead (dist/
+# is not in git). Clearing that folder out is left to whoever runs this.
+retired="${here}/dist/.retired/$(date +%Y%m%d-%H%M%S)"
+retire() {
+   local p="$1"
+   [ -e "$p" ] || return 0
+   p="$(cd "$(dirname "$p")" && pwd)/$(basename "$p")"
+   local rel="${p#"${here}"/}"
+   local to="${retired}/${rel}"
+   mkdir -p "$(dirname "$to")"
+   [ -e "$to" ] && to="${to}.$$.$RANDOM"
+   mv "$p" "$to"
+}
 out_dir="${here}/dist"
 
 # ---------------------------------------------------------------- plugin list
@@ -197,7 +212,7 @@ has_target() {
    return 1
 }
 
-rm -rf "$stage"
+retire "$stage"
 mkdir -p "$stage"
 
 # ------------------------------------------------------------------ the builds
@@ -252,13 +267,13 @@ build_one() {
          echo "!!  ${name} (${target}): no VST3 bundle at ${bundle}" >&2
          exit 1
       fi
-      rm -rf "${install_root}/${name}.vst3"
+      retire "${install_root}/${name}.vst3"
       cp -r "$bundle" "${install_root}/"
    fi
 }
 
 work="${here}/dist/.build"
-rm -rf "$work"
+retire "$work"
 
 for plugin in "${plugins[@]}"; do
    build_one "$plugin" linux "${work}/${plugin}-linux" "${stage}/linux"
@@ -276,7 +291,7 @@ done
 # Documentation is not worth failing a release over: if the toolchain for it is
 # not installed, this says so and the archives simply go out without manuals.
 manual_dir="${here}/dist/manuals"
-rm -rf "$manual_dir"
+retire "$manual_dir"
 
 manual_for() {
    local plugin
@@ -496,14 +511,14 @@ made=()
 pack() {
    local dir="$1"
    if command -v zip >/dev/null 2>&1; then
-      rm -f "${dir}.zip"; zip -qr "${dir}.zip" "$dir"; made+=("${dir}.zip")
+      retire "${dir}.zip"; zip -qr "${dir}.zip" "$dir"; made+=("${dir}.zip")
    else
       echo "!!  zip not found: install it, or the release cannot be published" >&2
    fi
    if [ "$tarball" = 1 ]; then
-      rm -f "${dir}.tar.gz"; tar czf "${dir}.tar.gz" "$dir"; made+=("${dir}.tar.gz")
+      retire "${dir}.tar.gz"; tar czf "${dir}.tar.gz" "$dir"; made+=("${dir}.tar.gz")
    fi
-   rm -rf "$dir"
+   retire "$dir"
 }
 
 # --- one per plugin, both operating systems in the one archive
@@ -511,7 +526,7 @@ for plugin in "${plugins[@]}"; do
    name="$(project_name "$plugin")"
    pver="$(project_version "$plugin")"
    d="${name}-${pver}"
-   rm -rf "$d"; mkdir -p "$d"
+   retire "$d"; mkdir -p "$d"
    have=0
    for os in "${targets[@]}"; do
       # Both formats: the <Name>/ folder holding the .clap and its presets, and
@@ -533,7 +548,7 @@ for plugin in "${plugins[@]}"; do
       fi
    done
    if [ "$have" = 0 ]; then
-      rm -rf "$d"
+      retire "$d"
       continue
    fi
    own="$(plugin_license "$plugin")"
@@ -553,12 +568,12 @@ done
 # below.
 base="audio-plugins-${version}"
 if command -v zip >/dev/null 2>&1; then
-   rm -f "${base}.zip"; zip -qr "${base}.zip" "$base"; made+=("${base}.zip")
+   retire "${base}.zip"; zip -qr "${base}.zip" "$base"; made+=("${base}.zip")
 fi
 if [ "$tarball" = 1 ]; then
-   rm -f "${base}.tar.gz"; tar czf "${base}.tar.gz" "$base"; made+=("${base}.tar.gz")
+   retire "${base}.tar.gz"; tar czf "${base}.tar.gz" "$base"; made+=("${base}.tar.gz")
 fi
-rm -rf "$work"
+retire "$work"
 
 echo
 echo "==> ${out_dir}"
@@ -567,3 +582,7 @@ for f in "${made[@]}"; do
 done
 echo
 cat "${stage}/BUILD-INFO.txt"
+if [ -d "$retired" ]; then
+   echo
+   echo "    what this run replaced is in ${retired#"${here}"/} ($(du -sh "$retired" | cut -f1)); nothing was deleted"
+fi

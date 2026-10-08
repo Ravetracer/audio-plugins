@@ -323,6 +323,9 @@ ParamTable::ParamTable()
     // every chain, so it is a setting rather than something to automate.
     defs_.push_back(enumeration(Quality, "quality", "Quality", "Master", {"1x", "2x", "4x"}, 1));
     defs_.back().automatable = false;
+    // Every lane at once, to put the kick in the track's key; shown to the
+    // cent.
+    defs_.push_back(continuous(Tune, "tune", "Tune", "Master", Scale::Linear, -12.0, 12.0, "tune", 0.0));
 
     auto addSlot = [&](uint32_t base, const std::string& name, const std::string& key, const std::string& module) {
         const int typeIndex = static_cast<int>(defs_.size());
@@ -787,6 +790,8 @@ std::string ParamTable::toText(const ParamDef& d, double value)
         return fmt("%.0f deg", shown(x, 1.0));
     if (d.unit == "st")
         return fmt("%+.1f st", shown(x, 0.1));
+    if (d.unit == "tune")
+        return fmt("%+.2f st", shown(x, 0.01));
     if (d.unit == ":1")
         return sig3(x) + ":1";
     if (d.unit == "bit")
@@ -901,6 +906,7 @@ void assignParam(dsp::EngineParams& p, int index, const double* values)
     case pid::Output: p.outGain = gain(); return;
     case pid::RootNote: p.rootNote = idx(); return;
     case pid::Quality: p.oversampling = 1 << idx(); return;
+    case pid::Tune: p.tune = plain; return;
     case pid::MasterXoverLow: p.masterXoverLow = plain; return;
     case pid::MasterXoverHigh: p.masterXoverHigh = plain; return;
     case pid::MonoBelow: p.monoBelow = isOff(d, plain) ? 0.0 : plain; return;

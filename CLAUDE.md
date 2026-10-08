@@ -56,7 +56,7 @@ audio-plugins/
 | 1 | **SäureKiste** | `saeure-kiste/` | 0.15.2 | Linux, Windows | CLAP, VST3 | a Roland TB-303 model, from the 1982 service notes, plus Robin Whittle's Devil Fish modification |
 | 2 | **RumpelKiste** | `rumpel-kiste/` | 0.2.1 | Linux, Windows | CLAP, VST3 | a Roland TR-909 model, from the 1984 service notes, with SäureKiste's sequencer and drive stage |
 | 3 | **Aurum** | `aurum/` | 0.3.1 | Linux, Windows | CLAP, VST3 | a clean-room algorithmic reverb (FDN, allpass ring, plate) with a per-frequency decay contour; own DSP and GUI, see *Aurum* below |
-| 4 | **Substrike** | `substrike/` | 0.8.0 | Linux, Windows | CLAP, VST3 | a layered kick drum designer for every style; standalone like Aurum, see *Substrike* below |
+| 4 | **Substrike** | `substrike/` | 1.0.0 | Linux, Windows | CLAP, VST3 | a layered kick drum designer for every style; standalone like Aurum, see *Substrike* below |
 
 Naming follows the plugin, not a pattern: the CMake project, the installed
 artifact and the display name are CamelCase (`SaeureKiste`), the folder is
@@ -432,7 +432,8 @@ across plugin folders.
 `docs/PLAN.md` is the source of truth: the design (8 lanes x 6 effect slots
 plus a master chain, per-slot band select, Bus lanes and a transient guard for
 rumble, per-lane aux outputs, hit export with drag-and-drop, a violet theme)
-and the eight phases. Phases 1-7 are done as of 0.7.0: the CLAP and VST3
+and the eight phases. Phases 1-7 are done, and phase 8 (manual, screenshots,
+demos, website text) as of 0.9.0, and 1.0.0 is the first release: the CLAP and VST3
 build, eight lanes with the Body, Click, Noise, Resonator and Bus sources, per-lane
 delay, polarity, note filter, transpose, Variation and pitch link, the eight
 per-lane aux outputs, six effect slots per lane and on the master (sixteen
@@ -449,7 +450,8 @@ the left, the selected lane's strip, source, Body pitch/amp breakpoint curves
 and chain on the right (accent `#8F7CF7`), a hit preview rendered on a worker
 thread, Play, and the hit export by file and by drag and drop (an XDND
 source in `X11Window`, OLE `DoDragDrop` in `Win32Window`; Aurum's backends
-only accept drops). Undo/redo is not there yet. A bus lane reads other
+only accept drops), undo/redo (snapshots in the plugin), a live scope, and a
+master Tune. A bus lane reads other
 lanes in the same block: the engine orders the lanes by what they read
 each process call, so no input is a block late.
 
@@ -474,6 +476,12 @@ What to know before working there:
   (`substrike-render --all-presets --outdir ...`). `substrike-preset-check`
   must report no problems. Regenerated presets go through
   `presets-backup/` (gitignored), never a delete.
+- **Release material** comes from Substrike's own scripts, which work in
+  `build/` and never delete: `tools/make-manual.sh` (manual via
+  `tools/docgen.cpp` and the shared manual.py; `release.sh` calls it),
+  `tools/make-screenshots.sh` (docs/images, offscreen) and
+  `tools/make-demos.sh` (dist/demos/Substrike). The website text and picture
+  are in dist/website/.
 - **The renderer is the test harness.** `build/substrike-render --selftest`
   loads the built `.clap` through the CLAP API; `install.sh` runs it. It also
   runs the Windows build under wine -- with a scratch `WINEPREFIX`, never the
@@ -621,7 +629,8 @@ track**, so an unrelated checkout or a branch parked beside the repository does
 not end up in an archive by accident. A new plugin joins a release simply by
 existing and being committed — there is no list to update. A committed plugin
 that is not ready to ship carries a `NO-RELEASE` file saying why, and
-`release.sh` skips it; Substrike does as of 0.1.0.
+`release.sh` skips it; Substrike carried one from 0.1.0 until its first
+release at 1.0.0.
 
 It reads each plugin's display name and version from its `project()` line,
 builds Release, installs into a staging tree, and writes `BUILD-INFO.txt`
@@ -637,7 +646,9 @@ SaeureKiste does both. `--linux-only` and `--no-vst3` are still there for a
 machine without the mingw toolchain or the VST3 checkouts.
 
 Other options: `--tarball` adds `.tar.gz` beside every `.zip`; `--no-manuals`
-skips the PDF manuals. Offline tools are switched off for release builds
+skips the PDF manuals. It deletes nothing: an old staging tree, build tree, manual folder or
+archive it replaces is moved into `dist/.retired/<time>/` (the user asked for
+no deletes; clearing that folder is theirs to do). Offline tools are switched off for release builds
 (`-D<PLUGIN>_BUILD_TOOLS=OFF`).
 
 ## Conventions for a new plugin

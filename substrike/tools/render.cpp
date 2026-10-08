@@ -1118,6 +1118,23 @@ int runSelfTest(const Module& m)
     }
 
 
+    // --- Tune: the whole kick, every lane, once
+    {
+        const Render up = rendered({"Output=0", "Tune=+12"}, hit);
+        const Render down = rendered({"Output=0", "Tune=-2.5"}, hit);
+        const double fu = measureFrequency(up.left, rate, 0.30, 0.45);
+        const double fd = measureFrequency(down.left, rate, 0.30, 0.45);
+        check(std::fabs(fu / 96.0 - 1.0) < 0.015 && std::fabs(fd / (48.0 * std::exp2(-2.5 / 12.0)) - 1.0) < 0.015,
+              "Tune moves the body: +12 st to " + std::to_string(fu) + " Hz, -2.5 st to " + std::to_string(fd) + " Hz");
+        // A resonator linked to lane 1 follows the tuned pitch, shifted once.
+        const Render linked = rendered({"Output=0", "L1 Output=Aux", "L4 On=On", "L4 Pitch Link=Lane 1",
+                                        "L4 Resonator Decay=2 s", "Tune=+7"},
+                                       hit, 1.5);
+        const double fl = measureFrequency(linked.left, rate, 0.5, 0.8);
+        check(std::fabs(fl / (48.0 * std::exp2(7.0 / 12.0)) - 1.0) < 0.015,
+              "a lane linked to lane 1 is tuned once with it: " + std::to_string(fl) + " Hz");
+    }
+
     // ======================================================== effect slots
 
     // --- a slot's A-F are named, shown and defaulted by its type
@@ -1886,6 +1903,27 @@ int runSelfTest(const Module& m)
         const double dip = peakDb(noFollow.left, lead + 2000, lead + 3000) - peakDb(fa.left, lead + 2000, lead + 3000);
         check(dip > 20.0 && fa.left == fb.left,
               "Follow 1 to lane 2's level ducks it by " + std::to_string(dip) + " dB; bit-identical at 37");
+
+        // Per lane: in a kit, lane 1 on C2 keeps C2's velocity when D2 comes
+        // with it softly, and two lanes each draw their own random value.
+        {
+            const std::vector<std::string> kit = {"Output=0", "L1 Note=C2", "L1 Output=Main+Aux", "L5 On=On",
+                                                  "L5 Note=D2", "L5 Output=Aux", "Mod 1 Source=Velocity",
+                                                  "Mod 1 Destination=L1 Pitch End", "Mod 1 Amount=10"};
+            EventList both;
+            both.add(noteOn(lead, 36, 1.0));
+            both.add(noteOn(lead, 38, 0.2));
+            const Render r = rendered(kit, both);
+            const double f = measureFrequency(r.auxL[0], rate, 0.30, 0.45);
+            check(std::fabs(f / (48.0 * std::pow(100.0, 0.1)) - 1.0) < 0.015,
+                  "Velocity per lane: lane 1 on C2 plays at C2's velocity although a soft D2 came with it (" +
+                      std::to_string(f) + " Hz)");
+            const Render rnd = rendered({"Output=0", "L1 Output=Aux", "L5 On=On", "L5 Output=Aux",
+                                         "Mod 1 Source=Random", "Mod 1 Destination=L1 Pitch End", "Mod 1 Amount=20",
+                                         "Mod 2 Source=Random", "Mod 2 Destination=L5 Pitch End", "Mod 2 Amount=20"},
+                                        hit);
+            check(rnd.auxL[0] != rnd.auxL[4] && !silent(rnd.auxL[4]), "Random per lane: two lanes draw their own values");
+        }
 
         // A hit into silence takes its modulated level at once: a velocity
         // route on a short click's level sounds the same whether the note

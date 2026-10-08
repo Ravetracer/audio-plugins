@@ -464,6 +464,15 @@ void Knob::paint(cairo_t* cr)
         else
             cairo_arc(cr, cx + std::cos(av) * (rOut + 2.5), cy + std::sin(av) * (rOut + 2.5), 1.5, 0, 2 * M_PI);
         cairo_stroke(cr);
+        // Where the matrix has it right now: a bright dot on the arc.
+        const double now = ctx_.modulated(param_);
+        if (!std::isnan(now))
+        {
+            const double am = a0 + (a1 - a0) * std::clamp(now, 0.0, 1.0);
+            setColor(cr, theme::amp.mix(Color(1, 1, 1, 1), 0.45f));
+            cairo_arc(cr, cx + std::cos(am) * (rOut + 2.5), cy + std::sin(am) * (rOut + 2.5), 2.6, 0, 2 * M_PI);
+            cairo_fill(cr);
+        }
     }
     cairo_set_line_cap(cr, CAIRO_LINE_CAP_BUTT);
 

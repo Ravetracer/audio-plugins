@@ -16,6 +16,11 @@ static_assert(pid::kNumModEnvs == dsp::kNumModEnvCurves, "one curve per modulati
 // value per note, the LFOs, the envelopes, the macros and the lanes'
 // followers) and the matrix that adds them to parameters.
 //
+// Velocity, note and random are per lane: a route onto a lane's parameter
+// reads the note that lane played last (its note filter decides which), and
+// each lane draws its own random value per hit; a route onto a master or
+// global parameter reads the last note of all.
+//
 // Modulation works on stored values, 0..1: a route adds Amount x its source
 // to its destination's value, and the sum is clamped to the range, so a
 // route's depth means the same on every parameter. The matrix is applied
@@ -61,14 +66,34 @@ public:
     // See EngineParams::tapLanes.
     void setTapLanes(bool tap);
 
-    // A source's value right now, for the editor and the tests.
-    double source(ModSource s) const;
+    // The parameters the matrix moves (table indices) and where it has them
+    // now, as stored values: for the editor's knobs.
+    int routedParams(std::array<int, pid::kNumRoutes>& out) const
+    {
+        int n = 0;
+        for (int r = 0; r < routeCount_; ++r)
+        {
+            const int d = routes_[static_cast<size_t>(r)].dest;
+            bool seen = false;
+            for (int i = 0; i < n; ++i)
+                seen |= out[static_cast<size_t>(i)] == d;
+            if (!seen)
+                out[static_cast<size_t>(n++)] = d;
+        }
+        return n;
+    }
+    double modulatedValue(int index) const { return values_[static_cast<size_t>(index)]; }
+
+    // A source's value right now, for the editor and the tests: `lane` for
+    // the per-note sources as a lane sees them, -1 for the last note of all.
+    double source(ModSource s, int lane = -1) const;
 
 private:
     struct Route
     {
         ModSource source;
         int dest;  // table index
+        int lane;  // the lane the destination belongs to, -1 for the master and global ones
         double amount; // -1..1
         double power;  // the curve, as an exponent on the source's size
     };
@@ -135,6 +160,8 @@ private:
 
     double velocity_ = 0.0, note_ = 0.0, random_ = 0.0;
     dsp::Rng rng_;
+    std::array<double, dsp::kNumLanes> laneVelocity_{}, laneNote_{}, laneRandom_{};
+    std::array<dsp::Rng, dsp::kNumLanes> laneRng_; // seeded by reset()
     // The song position: from the host when it gives one, else counted from
     // activation at the tempo.
     uint64_t beatsClock_ = 0;

@@ -82,6 +82,9 @@ const dsp::Curve& CurveEditor::curve() const { return ctx_.controller().curve(cu
 void CurveEditor::commit(const dsp::Curve& c)
 {
     ctx_.controller().setCurve(curveIndex(), c);
+    // A drag is one step, kept when it ends; anything else is one now.
+    if (drag_.what == Hit::None)
+        ctx_.controller().checkpoint();
     repaint();
 }
 
@@ -489,6 +492,8 @@ void CurveEditor::mouseDrag(const MouseEvent& e)
 
 void CurveEditor::mouseUp(const MouseEvent&)
 {
+    if (drag_.what != Hit::None)
+        ctx_.controller().checkpoint();
     drag_ = {};
     repaint();
 }

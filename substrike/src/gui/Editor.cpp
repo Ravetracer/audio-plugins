@@ -73,6 +73,20 @@ void drawPeaks(cairo_t* cr, const Rect& r, const HitView& v, int channel, float 
     cairo_fill(cr);
 }
 
+// The note a frequency is, with the cents off it: "G1 -32 ct".
+std::string noteOf(double hz)
+{
+    if (hz <= 0.0)
+        return {};
+    const double midi = 69.0 + 12.0 * std::log2(hz / 440.0);
+    const int n = static_cast<int>(std::lround(midi));
+    const int cents = static_cast<int>(std::lround((midi - n) * 100.0));
+    static const char* names[12] = {"C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"};
+    char buf[48];
+    std::snprintf(buf, sizeof(buf), "%s%d %+d ct", names[((n % 12) + 12) % 12], n / 12 - 1, cents);
+    return buf;
+}
+
 std::string dbText(float peak)
 {
     if (peak < 1e-6f)
@@ -588,6 +602,111 @@ private:
     int dragFrom_ = -1, dragTo_ = -1;
 };
 
+// ------------------------------------------------------------ LiveScope
+
+// The plugin's main output as it plays, scrolling: the last two seconds or
+// so, newest at the right. When the plugin sleeps nothing arrives, and the
+// picture runs on with silence.
+class LiveScope : public Widget
+{
+public:
+    static constexpr int kBins = 1536; // ~2 s of 64-sample bins at 48 kHz
+
+    explicit LiveScope(Editor& ed) : ed_(ed) {}
+
+    // Takes what the plugin produced since the last call; true if the
+    // picture changed.
+    bool update(double now)
+    {
+        float lo[512], hi[512];
+        int got = 0, n;
+        while ((n = ed_.controller().readScope(lo, hi, 512)) > 0)
+        {
+            for (int i = 0; i < n; ++i)
+                push(lo[i], hi[i]);
+            got += n;
+        }
+        const double rate = ed_.controller().sampleRate() / Controller::kScopeBin;
+        if (got > 0)
+        {
+            lastData_ = now;
+            pending_ = 0.0;
+        }
+        else if (now - lastData_ > 0.1 && quiet_ < kBins)
+        {
+            // Asleep: let silence scroll in at the rate the bins would come.
+            pending_ += (now - lastTick_) * rate;
+            while (pending_ >= 1.0 && quiet_ < kBins)
+            {
+                push(0.0f, 0.0f);
+                pending_ -= 1.0;
+            }
+            got = 1;
+        }
+        lastTick_ = now;
+        return got > 0;
+    }
+
+    // The background is part of the window's cached layer; the waveform is
+    // drawn over it every frame (paintLive), so a moving scope does not
+    // repaint the whole window.
+    void paint(cairo_t* cr) override
+    {
+        fillRounded(cr, bounds_, 4, theme::plot);
+        const Rect r = bounds_.reduced(4, 4);
+        setColor(cr, theme::outline.withAlpha(0.6f));
+        cairo_rectangle(cr, r.x, std::round(r.cy()), r.w, 1);
+        cairo_fill(cr);
+    }
+
+    void paintLive(cairo_t* cr)
+    {
+        if (!isVisible())
+            return;
+        const Rect r = bounds_.reduced(4, 4);
+        const int cols = std::max(1, static_cast<int>(r.w));
+        const float half = r.h * 0.5f;
+        cairo_move_to(cr, r.x, r.cy());
+        std::vector<float> top(static_cast<size_t>(cols)), bottom(static_cast<size_t>(cols));
+        for (int x = 0; x < cols; ++x)
+        {
+            const int b0 = x * kBins / cols, b1 = std::max(b0 + 1, (x + 1) * kBins / cols);
+            float a = 0.0f, b = 0.0f;
+            for (int k = b0; k < b1; ++k)
+            {
+                const size_t i = (head_ + static_cast<size_t>(k)) % kBins;
+                a = std::min(a, lo_[i]);
+                b = std::max(b, hi_[i]);
+            }
+            top[static_cast<size_t>(x)] = r.cy() - std::clamp(b, -1.0f, 1.0f) * half;
+            bottom[static_cast<size_t>(x)] = r.cy() - std::clamp(a, -1.0f, 1.0f) * half;
+            cairo_line_to(cr, r.x + x + 0.5f, top[static_cast<size_t>(x)]);
+        }
+        for (int x = cols - 1; x >= 0; --x)
+            cairo_line_to(cr, r.x + x + 0.5f, bottom[static_cast<size_t>(x)]);
+        cairo_close_path(cr);
+        setColor(cr, theme::amp.withAlpha(0.8f));
+        cairo_fill(cr);
+    }
+
+    std::string tooltip() const override { return "The output as it plays"; }
+
+private:
+    void push(float lo, float hi)
+    {
+        lo_[head_] = lo;
+        hi_[head_] = hi;
+        head_ = (head_ + 1) % kBins;
+        quiet_ = lo == 0.0f && hi == 0.0f ? quiet_ + 1 : 0;
+    }
+
+    Editor& ed_;
+    std::array<float, kBins> lo_{}, hi_{};
+    size_t head_ = 0;
+    int quiet_ = kBins;
+    double lastData_ = 0.0, lastTick_ = 0.0, pending_ = 0.0;
+};
+
 // ------------------------------------------------------------ LfoView
 
 // Two cycles of the selected LFO's shape, from its start phase.
@@ -828,6 +947,15 @@ Editor::Editor(Controller& controller) : controller_(controller), ctx_(controlle
     for (int i = 0; i <= kMod; ++i)
         rows_[static_cast<size_t>(i)] = add<LaneRow>(*this, i);
     hitStrip_ = add<HitStrip>(*this);
+    liveScope_ = add<LiveScope>(*this);
+    undoButton_ = add<Button>("", [this] { undo(); });
+    undoButton_->icon = icons::undo;
+    undoButton_->setTooltip("Undo (Ctrl+Z)");
+    redoButton_ = add<Button>("", [this] { redo(); });
+    redoButton_->icon = icons::redo;
+    redoButton_->setTooltip("Redo (Ctrl+Shift+Z)");
+    // Every finished edit is a step to undo.
+    ctx_.onGestureEnd = [this] { controller_.checkpoint(); };
     playButton_ = add<Button>("Play", [this] { audition(); });
     playButton_->setTooltip("Play the hit through the plugin");
     exportButton_ = add<Button>("Export", [this] { saveHitAs(); });
@@ -919,6 +1047,7 @@ void Editor::buildStrip()
     if (lane_ == kMaster)
     {
         strip_->control(Output, "Output");
+        strip_->control(Tune, "Tune");
         strip_->control(RootNote, "Root Note", 1.2f);
         strip_->control(Quality, "Quality");
         strip_->gap(0.4f);
@@ -1343,13 +1472,18 @@ void Editor::layout()
     exportButton_->setBounds({W - 112, 8, 64, 28});
     playButton_->setBounds({W - 170, 8, 52, 28});
     presetBar_->setBounds({S.strip.x, 8, 250, 28});
-    hitStrip_->setBounds({S.strip.x + 258, 8, W - 170 - 8 - S.strip.x - 258, 28});
+    undoButton_->setBounds({S.strip.x + 256, 8, 28, 28});
+    redoButton_->setBounds({S.strip.x + 288, 8, 28, 28});
+    hitStrip_->setBounds({S.strip.x + 324, 8, W - 170 - 8 - S.strip.x - 324, 28});
     browser_->setBounds({S.strip.x, 46, W - S.strip.x - 12, H - 58});
 
     // Rack: eight lanes and the master, sharing the height.
     const Rect R = S.rack;
     const float top = R.y + 28, gap = 5;
-    const float rowH = (R.bottom() - 8 - top - gap * kMod) / (kMod + 1);
+    // The live scope at the foot of the rack, the rows above it.
+    constexpr float kScopeH = 56.0f;
+    liveScope_->setBounds({R.x + 8, R.bottom() - 8 - kScopeH, R.w - 16, kScopeH});
+    const float rowH = (R.bottom() - 8 - kScopeH - 22 - top - gap * kMod) / (kMod + 1);
     for (int i = 0; i <= kMod; ++i)
         rows_[static_cast<size_t>(i)]->setBounds({R.x + 8, top + i * (rowH + gap), R.w - 16, rowH});
 
@@ -1382,6 +1516,24 @@ void Editor::layout()
 
 Rect Editor::laneRowBounds(int lane) const { return rows_[static_cast<size_t>(std::clamp(lane, 0, kMod))]->bounds(); }
 
+// Where a Body lane's pitch comes to rest on the root note: its Pitch End,
+// moved by its Transpose and the master's Tune. Empty for other sources.
+std::string Editor::landing(int lane) const
+{
+    using namespace pid;
+    if (std::lround(ctx_.value(ctx_.index(pid::lane(lane, LSource)))) != static_cast<int>(dsp::Source::Body))
+        return {};
+    const int link = static_cast<int>(std::lround(ctx_.value(ctx_.index(pid::lane(lane, LPitchLink))))) - 1;
+    if (link >= 0 && link != lane)
+        return {};
+    const double end = ctx_.plain(ctx_.index(pid::lane(lane, BodyPitchEnd)));
+    const double semis = ctx_.plain(ctx_.index(pid::lane(lane, LTranspose))) + ctx_.plain(ctx_.index(Tune));
+    const double hz = end * std::exp2(semis / 12.0);
+    char buf[64];
+    std::snprintf(buf, sizeof(buf), "ends on %s  (%.1f Hz)", noteOf(hz).c_str(), hz);
+    return buf;
+}
+
 void Editor::paint(cairo_t* cr)
 {
     setColor(cr, theme::background);
@@ -1390,7 +1542,11 @@ void Editor::paint(cairo_t* cr)
     drawText(cr, "Substrike", {16, 8, 120, 28}, Align::Left, theme::accent);
     const float logoW = textWidth(cr, "Substrike");
     setFont(cr, 10);
-    drawText(cr, "kick designer", {16 + logoW + 6, 10, 90, 28}, Align::Left, theme::textFaint);
+    setFont(cr, 10, true);
+    drawText(cr, kPluginVersion, {16 + logoW + 6, 10, 40, 28}, Align::Left, theme::textDim);
+    const float versionW = textWidth(cr, kPluginVersion);
+    setFont(cr, 10);
+    drawText(cr, "kick designer", {16 + logoW + 6 + versionW + 7, 10, 90, 28}, Align::Left, theme::textFaint);
 
     const Sections S = sectionsFor(bounds_.w, bounds_.h);
     auto section = [&](const Rect& r, const std::string& title) {
@@ -1399,6 +1555,8 @@ void Editor::paint(cairo_t* cr)
         drawText(cr, title, {r.x + 12, r.y + 6, r.w - 24, 18}, Align::Left, theme::accent);
     };
     section(S.rack, "LANES");
+    setFont(cr, 10.5f, true);
+    drawText(cr, "OUTPUT", {S.rack.x + 12, liveScope_->bounds().y - 19, 100, 16}, Align::Left, theme::textDim);
     if (lane_ == kMod)
     {
         section(S.strip, "MACROS");
@@ -1412,6 +1570,18 @@ void Editor::paint(cairo_t* cr)
     if (lane_ == kMaster)
     {
         section(S.strip, "MASTER");
+        for (int l = 0; l < dsp::kNumLanes; ++l)
+        {
+            if (ctx_.value(ctx_.index(pid::lane(l, pid::LEnabled))) < 0.5)
+                continue;
+            const std::string where = landing(l);
+            if (where.empty())
+                continue;
+            setFont(cr, 10.5f);
+            drawText(cr, "Lane " + std::to_string(l + 1) + " " + where,
+                     {S.strip.x + 12, S.strip.y + 6, S.strip.w - 24, 18}, Align::Right, theme::amp);
+            break;
+        }
         section(S.source, "HIT");
         section(S.chain, "MASTER CHAIN");
     }
@@ -1430,6 +1600,11 @@ void Editor::paint(cairo_t* cr)
             setFont(cr, 10.5f);
             drawText(cr, "this lane is off", {S.strip.x + 12, S.strip.y + 6, S.strip.w - 24, 18}, Align::Right,
                      theme::textFaint);
+        }
+        else if (const std::string where = landing(lane_); !where.empty())
+        {
+            setFont(cr, 10.5f);
+            drawText(cr, where, {S.strip.x + 12, S.strip.y + 6, S.strip.w - 24, 18}, Align::Right, theme::amp);
         }
     }
     // Under the chain: which slot the controls below belong to.
@@ -1492,6 +1667,20 @@ void Editor::onMouseDown(const MouseEvent& e)
 
 bool Editor::keyDown(const KeyEvent& e)
 {
+    if (e.mods & ModCtrl)
+    {
+        const unsigned k = e.keysym;
+        if (k == 'z' || k == 'Z')
+        {
+            (e.mods & ModShift) ? redo() : undo();
+            return true;
+        }
+        if (k == 'y' || k == 'Y')
+        {
+            redo();
+            return true;
+        }
+    }
     if (browser_->isVisible() && !hasOverlay())
     {
         if (e.keysym == key::Escape)
@@ -1514,6 +1703,20 @@ bool Editor::keyDown(const KeyEvent& e)
 }
 
 void Editor::audition() { controller_.audition(); }
+
+void Editor::undo()
+{
+    if (!controller_.undo())
+        notify("Nothing to undo");
+    markDirty();
+}
+
+void Editor::redo()
+{
+    if (!controller_.redo())
+        notify("Nothing to redo");
+    markDirty();
+}
 
 bool Editor::presetBrowserOpen() const { return browser_->isVisible(); }
 
@@ -1795,6 +1998,17 @@ void Editor::onTimer()
     if (structure() != built_)
         rebuild();
     checkPreview(t);
+    // The scope moves without repainting the window's cached layer.
+    if (liveScope_->update(t))
+        markAnimDirty();
+    undoButton_->setEnabled(controller_.canUndo());
+    redoButton_->setEnabled(controller_.canRedo());
+    // The matrix moved something a knob shows.
+    if (const uint32_t g = controller_.modulationGeneration(); g != modGeneration_)
+    {
+        modGeneration_ = g;
+        markDirty();
+    }
     if (dialog_)
     {
         std::string result;
@@ -1850,6 +2064,7 @@ void Editor::renderTo(cairo_t* cr)
     cairo_set_source_surface(cr, staticLayer_, 0, 0);
     cairo_paint(cr);
     cairo_restore(cr);
+    liveScope_->paintLive(cr);
     paintOverlays(cr);
     paintTooltip(cr);
 }

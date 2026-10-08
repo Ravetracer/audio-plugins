@@ -9,6 +9,7 @@
 
 #include "Controller.h"
 #include "Params.h"
+#include "History.h"
 #include "Player.h"
 #include "dsp/Engine.h"
 #include "util/SpscQueue.h"
@@ -41,6 +42,17 @@ public:
     void loadDocument(const StateDocument& doc, const std::string& name) override;
     StateDocument currentDocument() const override;
     std::string presetName() const override { return presetName_; }
+    double modulatedValue(int index) const override
+    {
+        return modShared_[static_cast<size_t>(index)].load(std::memory_order_relaxed);
+    }
+    uint32_t modulationGeneration() const override { return modGeneration_.load(std::memory_order_relaxed); }
+    void checkpoint() override;
+    bool undo() override;
+    bool redo() override;
+    bool canUndo() const override { return history_.canUndo(); }
+    bool canRedo() const override { return history_.canRedo(); }
+    int readScope(float* lo, float* hi, int max) override;
 
 private:
     struct GuiEvent
@@ -133,6 +145,13 @@ private:
     // The audio thread's copy, used for DSP.
     std::vector<double> audio_;
     std::atomic<bool> reloadFromShared_{true};
+    // The matrix's view of the parameters it moves, for the editor (written
+    // by the audio thread after every block).
+    void publishModulation();
+    std::unique_ptr<std::atomic<double>[]> modShared_;
+    std::atomic<uint32_t> modGeneration_{0};
+    std::array<int, pid::kNumRoutes> modPublished_{};
+    int modPublishedCount_ = 0;
     // A new state arrived: the audio thread stops the sounding hit.
     std::atomic<bool> freshStartRequested_{false};
     // The editor asked for a hit.
@@ -142,7 +161,26 @@ private:
     std::atomic<bool> rescanInfo_{false};
 
     // Edits from the GUI, in order, for the audio thread.
-    SpscQueue<GuiEvent> guiEvents_{4096};
+    // Big enough for an undo that changes every parameter (three events each).
+    SpscQueue<GuiEvent> guiEvents_{16384};
+
+    // The oscilloscope's feed: the audio thread folds the main output into
+    // bins and the editor reads them.
+    struct ScopeBin
+    {
+        float lo, hi;
+    };
+    void feedScope(const float* l, const float* r, uint32_t n);
+    SpscQueue<ScopeBin> scope_{8192};
+    float scopeLo_ = 0.0f, scopeHi_ = 0.0f;
+    int scopeCount_ = 0;
+
+    History::Snapshot snapshot() const;
+    // Sends a snapshot's values to the host and the engine as edits, the
+    // slot types first, and its curves.
+    void restore(const History::Snapshot& s);
+    History history_;
+    bool restoring_ = false;
     // The curves as the main thread knows them; the engine holds its own
     // copies, updated through curveEvents_.
     std::array<dsp::Curve, dsp::kNumCurves> curves_{};

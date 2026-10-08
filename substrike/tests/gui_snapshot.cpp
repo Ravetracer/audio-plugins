@@ -2,7 +2,7 @@
 // reports what a full repaint costs.
 //
 //   substrike-gui-snapshot out.png [--scale 1.5] [--size 1344x864]
-//       [--state file.substrike] [--lane 1..8|master|mod] [--mod-tab 1..8] [--slot 1..6|guard] [--tab pitch|amp]
+//       [--state file.substrike] [--lane 1..8|master|mod] [--mod-tab 1..8] [--slot 1..6|guard] [--preset KEY] [--browser] [--tab pitch|amp]
 
 #include <chrono>
 #include <cstdio>
@@ -13,6 +13,7 @@
 #include <string>
 
 #include "gui/Editor.h"
+#include "state/Presets.h"
 #include "state/StateIO.h"
 
 using namespace substrike;
@@ -90,6 +91,8 @@ int main(int argc, char** argv)
     std::string statePath, lane = "1", tab = "pitch";
     int slot = 1;
     int modTab = 1;
+    std::string presetKey;
+    bool browser = false;
     for (int i = 1; i < argc; ++i)
     {
         const std::string a = argv[i];
@@ -107,6 +110,10 @@ int main(int argc, char** argv)
             const std::string v = next();
             slot = v == "guard" ? 0 : std::atoi(v.c_str());
         }
+        else if (a == "--preset")
+            presetKey = next();
+        else if (a == "--browser")
+            browser = true;
         else if (a == "--mod-tab")
             modTab = std::atoi(next().c_str());
         else if (a == "--tab")
@@ -131,6 +138,20 @@ int main(int argc, char** argv)
         c.curves = d.curves;
     }
 
+    if (!presetKey.empty())
+    {
+        StateDocument d;
+        const char* text = factoryPresetText(presetKey);
+        if (!text || !parseState(text, d))
+        {
+            std::fprintf(stderr, "no factory preset %s\n", presetKey.c_str());
+            return 1;
+        }
+        c.values = d.values;
+        c.curves = d.curves;
+        c.preset = presetInfo(d).name;
+    }
+
     gui::Editor ed(c);
     ed.setScale(scale);
     if (width > 0 && height > 0)
@@ -144,6 +165,8 @@ int main(int argc, char** argv)
     else
         ed.selectGuard();
     ed.selectCurveTab(tab == "amp" ? 1 : 0);
+    if (browser)
+        ed.togglePresetBrowser();
     ed.settlePreview();
 
     int w, h;

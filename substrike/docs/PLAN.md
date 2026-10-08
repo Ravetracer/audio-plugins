@@ -467,6 +467,30 @@ references (-17 to -20 dB), as asked. The classic techno kicks (Minimal
 Tick, Detroit Round, Dub Chamber, Acid Floor, Hypnotic Loop, Warehouse
 Punch) stay.
 
+0.9.0 closes the gaps phase 6 left and adds what the user asked for before
+the release: Velocity, Note and Random per lane (a route onto a lane's
+parameter reads that lane's last note; each lane its own random value); a
+live dot on modulated knobs (the audio thread publishes the matrix's values
+for the routed parameters, with a generation counter the editor watches);
+undo and redo over whole-state snapshots in the plugin (History, a step per
+finished gesture, curve edit or preset load; an undo is replayed as edits,
+types first, so the host follows); the version beside the name; a master
+Tune (+-12 st, every lane once, a pitch-linked lane included) with the note
+each Body lane ends on; and a live scope of the main output in the rack
+(min/max per 64 samples through a lock-free queue, drawn over the cached
+window layer each frame).
+
+Phase 8 (0.9.0): the manual (`docs/manual.md`, 28 pages, rendered by the
+shared manual.py through `tools/make-manual.sh`, with `tools/docgen.cpp`
+generating the parameter summary and the preset library), its screenshots
+(`tools/make-screenshots.sh`, offscreen), eighteen demo loops
+(`tools/make-demos.sh` into dist/demos/Substrike/) and the website text and
+picture in dist/website/. Substrike's own scripts never delete: they work in
+build/ and overwrite.
+
+1.0.0 is the first release: the NO-RELEASE marker is gone, and release.sh
+packs Substrike with its manual like the other plugins.
+
 ## Phases
 
 1. **Scaffold and first kick.**
@@ -500,6 +524,8 @@ Punch) stay.
      cover the ranges of the reference set. Done in 0.7.0.
 8. **Release.**
    - Manual with screenshots, `release.sh` integration, Windows under wine.
+     Manual, screenshots, demos and the website text done in 0.9.0;
+     released as 1.0.0.
 
 ## Decided extras
 

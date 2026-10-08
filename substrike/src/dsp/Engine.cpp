@@ -158,7 +158,7 @@ void Lane::fire(const Pending& pending, const Context& c)
     }
     ++hits_;
 
-    const double transpose = std::exp2(p.transpose / 12.0);
+    const double transpose = std::exp2((p.transpose + c.tune) / 12.0);
     const bool linked = c.track.curve != &pitchCurve_;
     switch (p.source)
     {
@@ -198,7 +198,7 @@ void Lane::renderVoices(int from, int to, const Context& c)
     for (ClickVoice& v : click_)
         if (v.active())
             track(v.render(l, r, n));
-    const double transpose = std::exp2(p.transpose / 12.0);
+    const double transpose = std::exp2((p.transpose + c.tune) / 12.0);
     for (NoiseVoice& v : noise_)
         if (v.active())
             track(v.render(l, r, n, c.sampleRate, p.noise, transpose));
@@ -627,10 +627,12 @@ void Engine::process(const Bus* buses, int n, const EngineParams& p)
         t.sweepMs = sp.body.sweepMs;
         t.sweepCurve = sp.body.sweepCurve;
         t.keyTrack = sp.body.keyTrack;
-        t.ratio = std::exp2(lp.transpose / 12.0) * (src != i ? std::exp2(sp.transpose / 12.0) : 1.0);
+        // The master's Tune once, on the lane's own transpose; a linked lane
+        // follows its source's transpose on top.
+        t.ratio = std::exp2((lp.transpose + p.tune) / 12.0) * (src != i ? std::exp2(sp.transpose / 12.0) : 1.0);
         t.curve = &lanes_[static_cast<size_t>(src)].pitchCurve();
         ctx[static_cast<size_t>(i)] = {sampleRate_, smoothCoef_, fadeSamples_, i,      &lp, t, p.tapLanes,
-                                       tempo_,      nullptr,     nullptr,      0};
+                                       tempo_,      p.tune,      nullptr,      nullptr, 0};
     }
 
     // The order the lanes run in: every lane after the lanes it reads (a bus

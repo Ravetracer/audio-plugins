@@ -44,6 +44,11 @@ void Player::reset()
         e.reset();
     velocity_ = note_ = random_ = 0.0;
     rng_ = dsp::Rng(0x6D6F64ull);
+    laneVelocity_.fill(0.0);
+    laneNote_.fill(0.0);
+    laneRandom_.fill(0.0);
+    for (int l = 0; l < dsp::kNumLanes; ++l)
+        laneRng_[static_cast<size_t>(l)] = dsp::Rng(0x6D6F64ull + 0x100ull * static_cast<uint64_t>(l + 1));
     if (routeCount_ > 0)
     {
         params_ = base_;
@@ -130,6 +135,10 @@ void Player::setValues(const double* values)
         Route& out = routes_[static_cast<size_t>(routeCount_++)];
         out.source = static_cast<ModSource>(source);
         out.dest = t.destinations()[static_cast<size_t>(dest - 1)];
+        const uint32_t id = t.def(out.dest).id;
+        out.lane = id >= pid::kLaneBlock && id < pid::kLaneBlock * (dsp::kNumLanes + 1)
+                       ? static_cast<int>(id / pid::kLaneBlock) - 1
+                       : -1;
         out.amount = amount;
         // +100 %: the square root of the square root, rising early; -100 %:
         // the fourth power, rising late.
@@ -190,8 +199,16 @@ double Player::lfoPosition(int k) const
     return lfoAnchor_[static_cast<size_t>(k)] + elapsed * perSample;
 }
 
-double Player::source(ModSource s) const
+double Player::source(ModSource s, int lane) const
 {
+    if (lane >= 0 && lane < dsp::kNumLanes)
+        switch (s)
+        {
+        case ModSource::Velocity: return laneVelocity_[static_cast<size_t>(lane)];
+        case ModSource::Note: return laneNote_[static_cast<size_t>(lane)];
+        case ModSource::Random: return laneRandom_[static_cast<size_t>(lane)];
+        default: break;
+        }
     const int i = static_cast<int>(s);
     const int lfo = static_cast<int>(ModSource::Lfo1), env = static_cast<int>(ModSource::Env1);
     const int mac = static_cast<int>(ModSource::Macro1), fol = static_cast<int>(ModSource::Follow1);
@@ -231,12 +248,20 @@ void Player::modulate()
     {
         const Route& route = routes_[static_cast<size_t>(r)];
         const size_t si = static_cast<size_t>(route.source);
-        if (!have[si])
+        const bool perNote = route.source == ModSource::Velocity || route.source == ModSource::Note ||
+                             route.source == ModSource::Random;
+        double x;
+        if (perNote && route.lane >= 0)
+            x = source(route.source, route.lane);
+        else
         {
-            src[si] = source(route.source);
-            have[si] = true;
+            if (!have[si])
+            {
+                src[si] = source(route.source);
+                have[si] = true;
+            }
+            x = src[si];
         }
-        const double x = src[si];
         const double shaped = route.power == 1.0 ? x : std::copysign(std::pow(std::fabs(x), route.power), x);
         int slot = 0;
         while (slot < n && dests[static_cast<size_t>(slot)] != route.dest)
@@ -327,6 +352,16 @@ void Player::noteOn(int key, double velocity)
     velocity_ = std::clamp(velocity, 0.0, 1.0);
     note_ = std::clamp((key - base_.rootNote) / 24.0, -1.0, 1.0);
     random_ = rng_.bipolar();
+    // The lanes this note plays latch it for themselves.
+    for (int l = 0; l < dsp::kNumLanes; ++l)
+    {
+        const dsp::LaneParams& lp = base_.lanes[static_cast<size_t>(l)];
+        if (!lp.enabled || (lp.note >= 0 && lp.note != key))
+            continue;
+        laneVelocity_[static_cast<size_t>(l)] = velocity_;
+        laneNote_[static_cast<size_t>(l)] = note_;
+        laneRandom_[static_cast<size_t>(l)] = laneRng_[static_cast<size_t>(l)].bipolar();
+    }
     for (int k = 0; k < pid::kNumLfos; ++k)
         if (lfoSetup_[static_cast<size_t>(k)].retrigger)
             anchorLfo(k, lfoSetup_[static_cast<size_t>(k)].phase);

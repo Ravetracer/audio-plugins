@@ -22,6 +22,7 @@ class Scope;
 class LfoView;
 class MatrixPanel;
 class PresetBar;
+class LiveScope;
 class PresetBrowser;
 
 // The Substrike window: the eight lanes and the master as a rack on the left,
@@ -111,6 +112,8 @@ public:
     std::string exportHit(const std::string& path = {});
     void dragHit();
     void notify(const std::string& message);
+    void undo();
+    void redo();
 
     // Presets: load one (and play it, unless switched off), step to the
     // previous or next one, save the state as a user preset.
@@ -141,6 +144,7 @@ private:
     void buildSlot();
     void showMainMenu();
     void showModMenu(int index, float x, float y);
+    std::string landing(int lane) const;
     void saveHitAs();
     void setLogicalSize(float w, float h);
     void checkPreview(double now);
@@ -163,6 +167,7 @@ private:
     std::vector<double> lastValues_;
     std::array<dsp::Curve, dsp::kNumCurves> lastCurves_{};
     bool previewStale_ = true;
+    uint32_t modGeneration_ = 0;
     double lastChange_ = 0.0;
 
     cairo_surface_t* staticLayer_ = nullptr;
@@ -174,7 +179,10 @@ private:
     // Widgets (owned by the tree)
     std::array<LaneRow*, dsp::kNumLanes + 2> rows_{};
     HitStrip* hitStrip_ = nullptr;
+    LiveScope* liveScope_ = nullptr;
     Button* playButton_ = nullptr;
+    Button* undoButton_ = nullptr;
+    Button* redoButton_ = nullptr;
     Button* exportButton_ = nullptr;
     Button* menuButton_ = nullptr;
     ControlGrid* strip_ = nullptr;

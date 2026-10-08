@@ -181,12 +181,16 @@ SubstrikePlugin::SubstrikePlugin(const clap_host_t* host) : host_(host), table_(
 
     const int n = table_.count();
     shared_ = std::make_unique<std::atomic<double>[]>(static_cast<size_t>(n));
+    modShared_ = std::make_unique<std::atomic<double>[]>(static_cast<size_t>(table_.count()));
+    for (int i = 0; i < table_.count(); ++i)
+        modShared_[static_cast<size_t>(i)].store(std::nan(""));
     audio_.assign(static_cast<size_t>(n), 0.0);
     for (int i = 0; i < n; ++i)
     {
         shared_[static_cast<size_t>(i)].store(table_.def(i).def);
         audio_[static_cast<size_t>(i)] = table_.def(i).def;
     }
+    history_.reset(snapshot());
 }
 
 SubstrikePlugin::~SubstrikePlugin() = default;
@@ -587,6 +591,79 @@ void SubstrikePlugin::endEdit(int index)
     requestFlush();
 }
 
+// ---------------------------------------------------------------- undo
+
+History::Snapshot SubstrikePlugin::snapshot() const
+{
+    History::Snapshot s;
+    s.values.resize(static_cast<size_t>(table_.count()));
+    for (int i = 0; i < table_.count(); ++i)
+        s.values[static_cast<size_t>(i)] = shared_[static_cast<size_t>(i)].load();
+    s.curves = curves_;
+    s.preset = presetName_;
+    return s;
+}
+
+void SubstrikePlugin::checkpoint()
+{
+    if (!restoring_)
+        history_.record(snapshot());
+}
+
+void SubstrikePlugin::restore(const History::Snapshot& s)
+{
+    restoring_ = true;
+    auto send = [&](int i) {
+        beginEdit(i);
+        performEdit(i, s.values[static_cast<size_t>(i)]);
+        endEdit(i);
+    };
+    // The types first: a new type resets its letters, so a slot whose type
+    // changes gets all its letters sent after it, changed or not.
+    std::vector<bool> retyped(static_cast<size_t>(table_.count()), false);
+    for (int i = 0; i < table_.count(); ++i)
+        if (table_.isSlotType(i) && s.values[static_cast<size_t>(i)] != shared_[static_cast<size_t>(i)].load())
+        {
+            retyped[static_cast<size_t>(i)] = true;
+            send(i);
+        }
+    for (int i = 0; i < table_.count(); ++i)
+    {
+        if (table_.isSlotType(i))
+            continue;
+        const int type = table_.def(i).typeParam;
+        if ((type >= 0 && retyped[static_cast<size_t>(type)]) ||
+            s.values[static_cast<size_t>(i)] != shared_[static_cast<size_t>(i)].load())
+            send(i);
+    }
+    for (int i = 0; i < dsp::kNumCurves; ++i)
+        if (curves_[static_cast<size_t>(i)] != s.curves[static_cast<size_t>(i)])
+            setCurve(i, s.curves[static_cast<size_t>(i)]);
+    presetName_ = s.preset;
+    restoring_ = false;
+}
+
+bool SubstrikePlugin::undo()
+{
+    // What changed since the last step (the host's automation, say) is kept
+    // as a step first, so redo can come back to it.
+    checkpoint();
+    const History::Snapshot* s = history_.undo();
+    if (!s)
+        return false;
+    restore(*s);
+    return true;
+}
+
+bool SubstrikePlugin::redo()
+{
+    const History::Snapshot* s = history_.redo();
+    if (!s)
+        return false;
+    restore(*s);
+    return true;
+}
+
 void SubstrikePlugin::audition()
 {
     auditionRequested_.store(true);
@@ -645,6 +722,8 @@ bool SubstrikePlugin::stateLoad(const clap_istream_t* stream)
     if (!parseState(text, doc))
         return false;
     applyDocument(doc);
+    // A song (or a host's preset) loaded: undo starts from here.
+    history_.reset(snapshot());
     return true;
 }
 
@@ -657,8 +736,13 @@ void SubstrikePlugin::applyDocument(const StateDocument& doc)
     curves_ = doc.curves;
     curvePending_.fill(true);
     pushCurves();
+    // A saved song says which preset it came from; a preset file loaded as a
+    // state is that preset.
     const auto preset = doc.meta.find("preset");
-    presetName_ = preset != doc.meta.end() ? preset->second : std::string("Init");
+    const auto name = doc.meta.find("name");
+    presetName_ = preset != doc.meta.end() ? preset->second
+                  : name != doc.meta.end() ? name->second
+                                           : std::string("Init");
     if (hostParams_)
     {
         hostParams_->rescan(host_, CLAP_PARAM_RESCAN_VALUES | CLAP_PARAM_RESCAN_TEXT | CLAP_PARAM_RESCAN_INFO);
@@ -669,12 +753,14 @@ void SubstrikePlugin::applyDocument(const StateDocument& doc)
 
 void SubstrikePlugin::loadDocument(const StateDocument& doc, const std::string& name)
 {
+    checkpoint();
     StateDocument d = doc;
     d.meta["preset"] = name;
     applyDocument(d);
     // Not through a parameter change the host saw, so the song is dirty here.
     if (hostState_)
         hostState_->mark_dirty(host_);
+    checkpoint();
 }
 
 StateDocument SubstrikePlugin::currentDocument() const
@@ -799,6 +885,7 @@ clap_process_status SubstrikePlugin::process(const clap_process_t* process)
                 buses[b].r = ch >= 2 ? data[1] + p : scratch_[b][1].data();
             }
             player_.process(buses, static_cast<int>(n));
+            feedScope(buses[0].l, buses[0].r, n);
             for (int b = 0; b < ports; ++b)
                 if (portChannels(b) == 1)
                     for (uint32_t i = 0; i < n; ++i)
@@ -835,7 +922,70 @@ clap_process_status SubstrikePlugin::process(const clap_process_t* process)
     while (nextEvent < numEvents)
         handleEvent(in->get(in, nextEvent++), process->out_events);
 
+    publishModulation();
     return player_.idle() ? CLAP_PROCESS_SLEEP : CLAP_PROCESS_CONTINUE;
+}
+
+void SubstrikePlugin::feedScope(const float* l, const float* r, uint32_t n)
+{
+    for (uint32_t i = 0; i < n; ++i)
+    {
+        const float x = 0.5f * (l[i] + r[i]);
+        if (scopeCount_ == 0)
+            scopeLo_ = scopeHi_ = x;
+        else
+        {
+            scopeLo_ = std::min(scopeLo_, x);
+            scopeHi_ = std::max(scopeHi_, x);
+        }
+        if (++scopeCount_ == kScopeBin)
+        {
+            // Full when no editor reads it: the oldest picture is lost, fine.
+            scope_.push({scopeLo_, scopeHi_});
+            scopeCount_ = 0;
+        }
+    }
+}
+
+int SubstrikePlugin::readScope(float* lo, float* hi, int max)
+{
+    int n = 0;
+    ScopeBin b;
+    while (n < max && scope_.pop(b))
+    {
+        lo[n] = b.lo;
+        hi[n] = b.hi;
+        ++n;
+    }
+    return n;
+}
+
+void SubstrikePlugin::publishModulation()
+{
+    std::array<int, pid::kNumRoutes> now{};
+    const int n = player_.routedParams(now);
+    bool changed = false;
+    // A parameter no route moves any more goes back to showing nothing.
+    for (int i = 0; i < modPublishedCount_; ++i)
+    {
+        const int d = modPublished_[static_cast<size_t>(i)];
+        if (std::find(now.begin(), now.begin() + n, d) == now.begin() + n)
+        {
+            modShared_[static_cast<size_t>(d)].store(std::nan(""), std::memory_order_relaxed);
+            changed = true;
+        }
+    }
+    for (int i = 0; i < n; ++i)
+    {
+        const int d = now[static_cast<size_t>(i)];
+        const double v = player_.modulatedValue(d);
+        if (modShared_[static_cast<size_t>(d)].exchange(v, std::memory_order_relaxed) != v)
+            changed = true;
+    }
+    modPublished_ = now;
+    modPublishedCount_ = n;
+    if (changed)
+        modGeneration_.fetch_add(1, std::memory_order_relaxed);
 }
 
 // ---------------------------------------------------------------- GUI
