@@ -1069,6 +1069,7 @@ void Editor::buildStrip()
     strip_->control(lane(l, LNote), "Note", 1.1f);
     strip_->control(lane(l, LOutput), "Output", 1.4f);
     strip_->control(lane(l, LPitchLink), "Pitch Link", 1.2f);
+    strip_->control(lane(l, LChainKeyTrack), "Chain Key");
 }
 
 void Editor::buildSource()

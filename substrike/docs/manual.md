@@ -202,6 +202,12 @@ six controls whose names and ranges come from the type.
   **Xover Hi**). The rest passes the slot untouched, and the sum stays flat.
   Distortion on *Mid+High* drives the body's harmonics and leaves the sub
   clean.
+- **Chain Key**, at the right of the lane strip, moves the chain's tuned
+  controls with the note: a Filter's **Cutoff**, an EQ's **Mid Freq**, a
+  Comb's **Start** and **Spacing**, and a Ring Mod's **Frequency**. At
+  100 % they follow the note exactly, as a Body with Key Track at 100 %
+  does, so a notch set on the kick's second harmonic stays on it in every
+  key. At 0 % they stay where they are set.
 - **Mix** blends the effect with what went in. For Delay and Warp the
   output is the input *plus* the echoes, so Mix is the echo level; for
   Reverb the output is the reverb alone, and 100 % is what a rumble wants.
@@ -209,10 +215,21 @@ six controls whose names and ranges come from the type.
 | Group | Types |
 |---|---|
 | Drive | **Distortion** (ten models, from Soft Clip to Rectifier), **Clipper**, **Wavefolder**, **Bitcrush** |
-| Tone | **Filter** (low and high pass at 12 and 24 dB, band pass, notch, peak; an envelope per hit), **EQ** (shelves, a bell, tilt) |
+| Tone | **Filter** (low and high pass at 12 and 24 dB, band pass, notch, peak; an envelope per hit), **EQ** (shelves, a bell, tilt), **Comb** (a row of cuts or boosts, see below) |
 | Dynamics | **Compressor**, **Transient** (lifts or cuts the attack and the sustain), **Gate** (on level, or *Hit*: from every hit, to cut a tail where you want it), **Limiter** |
 | Time | **Reverb** (a dense room for smearing and rumble, not a hall), **Delay** (synced to the host's tempo, colour, drive, ping-pong), **Warp** (echoes that climb or fall in pitch, play backwards, or come as taps), **Smear** (spreads the attack in time without a tail) |
 | Other | **Ring Mod** (ring modulation or a frequency shift up or down), **Stereo** (width, a short delay on one side), **Utility** (gain, polarity, channels) |
+
+The **Comb** is a row of narrow cuts or boosts. **Start** is the first
+band, **Spacing** the distance from one band to the next, and **Bands**
+how many there are, so together they set where the comb begins and how far
+it reaches. **Gain** below 0 dB cuts, above it boosts. **Width** is each
+band's width as a share of the spacing; the bands keep that width all the
+way up, so they never run into each other. **Taper** fades the gain out
+towards the last band (positive) or in from the first (negative). With
+Start and Spacing both on twice the kick's pitch it cuts every even
+harmonic; with both on the pitch itself it shapes every harmonic at once.
+Set **Chain Key** to 100 % and it follows the notes.
 
 **Quality** on the master oversamples the drive slots (1x, 2x or 4x): more
 is cleaner and costs more processing.
@@ -250,7 +267,37 @@ kick over it, gated, rolling in sixteenths, moved by an LFO, pitched below
 the kick, diffused. **Mono Below** on the master keeps everything under its
 frequency in the middle.
 
-## 8. The master
+## 8. Making a hardstyle kick
+
+A hardstyle kick is a kick driven into heavy distortion and then shaped
+with EQ. Three things give its tail its sound: the fundamental stays on
+top, the second harmonic is cut deep while the third stays strong (the
+hollow, nasal tone), and above that sits a dense, bright wall of
+harmonics, flat up to about 1 kHz. In the first tenth of a second a punch
+around 500 to 700 Hz sits on top.
+
+1. On lane 1, a **Body** with **Pitch Start** around 3 kHz, **Pitch End**
+   on the key you want (F1 is 43.7 Hz, G1 49 Hz), **Sweep** about 190 ms,
+   **Hold** about 360 ms, **Key Track** at 100 %.
+2. In its chain: **Distortion**, *Rectifier*, **Drive** about 60 % and
+   **Bias** about -50 %. The bias makes the drive lopsided, which brings
+   the even harmonics.
+3. A **Clipper** driven about 30 dB, which squares the tail off.
+4. An **EQ**: **Low** +6 dB; **Mid** -16 dB with **Mid Freq** at twice the
+   Pitch End and **Mid Q** about 5, which cuts the second harmonic and
+   nothing else; **High** +12 dB and **Tilt** +7 dB for the top.
+5. A **Filter**, LP 12, around 9 kHz, and a **Clipper** to catch the peaks.
+6. **Chain Key** at 100 %, so the cut stays on the second harmonic in
+   every key.
+7. On lane 2, the punch: a short **Body** falling from about 2 kHz to
+   240 Hz, **Decay** about 120 ms, through a **Distortion** (*Fuzz*).
+
+**Euphoric Notch**, **Raw Notch** and **Tight Notch** in the Hardstyle
+category are built this way: a long steady tail, a longer and rougher one,
+and a short one for fast patterns. Move the EQ's **Mid** to 0 dB to hear
+what the cut does.
+
+## 9. The master
 
 ![The master: Output, Tune, Root Note, Quality, Mono Below and Output Clip.](images/master.png)
 
@@ -271,7 +318,7 @@ the lane or the master ("ends on G1 -36 ct") and turn **Tune** until it
 names the key of your track, or a fifth of it. A kick a few cents out of
 tune with the bass beats against it; one in tune locks with it.
 
-## 9. Modulation
+## 10. Modulation
 
 Click **Modulation** in the rack.
 
@@ -312,7 +359,7 @@ there too, to remove or to find in the matrix.
 A modulated knob shows a **teal arc** for how far its routes can move it,
 and a **bright dot** where the modulation has it right now.
 
-## 10. Presets
+## 11. Presets
 
 ![The preset browser.](images/browser.png)
 
@@ -338,7 +385,7 @@ nothing of the old sound carries over.
 
 {{PRESET_LIBRARY}}
 
-## 11. Outputs
+## 12. Outputs
 
 Besides the stereo main output, Substrike has **eight stereo outputs, one
 per lane**. Set a lane's **Output** to *Aux* to send it only to its own
@@ -347,7 +394,7 @@ outputs and route them to their own channels: the kick and its rumble on
 separate faders, each with its own processing and its own sidechain.
 The aux outputs carry each lane before the master chain and output level.
 
-## 12. Exporting a hit
+## 13. Exporting a hit
 
 **Export** in the top bar renders the current hit at the host's sample rate
 and saves it as a 24-bit stereo WAV wherever you choose. **Dragging** the
@@ -356,14 +403,14 @@ sampler; the dragged files are kept in the export folder so the host can go
 on using them. The menu's **Normalise Exported Hits** raises each export to
 -0.3 dBFS; without it, an export is as loud as the hit.
 
-## 13. Undo
+## 14. Undo
 
 Every change you make is a step: **Ctrl+Z** undoes it, **Ctrl+Shift+Z** or
 **Ctrl+Y** redoes it, and so do the arrows in the top bar. A whole preset
 load is one step. The history stays while the plugin is open, even with the
 window closed, and starts afresh when a song is loaded.
 
-## 14. Tips
+## 15. Tips
 
 - **A hard techno kick**: a long, slow pitch drop (Sweep Time around 300
   ms), Shape around 40 %, then in the chain a lowpass around 700 Hz, a soft

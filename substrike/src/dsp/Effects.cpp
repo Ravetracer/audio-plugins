@@ -351,6 +351,65 @@ void Biquad::peak(double f, double db, double q, double rate)
               1 - c.alpha / c.a);
 }
 
+void CombFx::prepare(double sampleRate)
+{
+    rate_ = sampleRate;
+    last_.fill(1e9);
+    reset();
+}
+
+void CombFx::reset()
+{
+    for (auto& ch : bq_)
+        for (Biquad& b : ch)
+            b.reset();
+}
+
+void CombFx::set(const double* v)
+{
+    bool same = true;
+    for (int i = 0; i < 6; ++i)
+        same &= v[i] == last_[static_cast<size_t>(i)];
+    if (same)
+        return;
+    for (int i = 0; i < 6; ++i)
+        last_[static_cast<size_t>(i)] = v[i];
+    const int count = std::clamp(static_cast<int>(std::lround(v[2])), 1, kMaxBands);
+    const double top = 0.45 * rate_, taper = std::clamp(v[5] / 100.0, -1.0, 1.0);
+    const double width = std::max(v[1] * v[4] / 100.0, 0.1); // Hz
+    const int old = bands_;
+    bands_ = 0;
+    for (int k = 0; k < count; ++k)
+    {
+        const double f = v[0] + k * v[1];
+        if (f >= top)
+            break;
+        // Where this band sits along the comb, 0 at the first, 1 at the last.
+        const double at = count > 1 ? static_cast<double>(k) / (count - 1) : 0.0;
+        const double share = taper >= 0.0 ? 1.0 - taper * at : 1.0 + taper * (1.0 - at);
+        for (auto& ch : bq_)
+            ch[k].peak(f, v[3] * share, f / width, rate_);
+        ++bands_;
+    }
+    // A band that comes back starts from rest.
+    for (int k = old; k < bands_; ++k)
+        for (auto& ch : bq_)
+            ch[k].reset();
+}
+
+void CombFx::process(float* l, float* r, int n)
+{
+    float* ch[2] = {l, r};
+    for (int c = 0; c < 2; ++c)
+        for (int i = 0; i < n; ++i)
+        {
+            double x = ch[c][i];
+            for (int k = 0; k < bands_; ++k)
+                x = bq_[c][k].tick(x);
+            ch[c][i] = static_cast<float>(x);
+        }
+}
+
 void EqFx::prepare(double sampleRate)
 {
     rate_ = sampleRate;
@@ -638,6 +697,7 @@ Effect& Slot::effect(SlotType t)
     case SlotType::Stereo: return stereo_;
     case SlotType::Utility: return utility_;
     case SlotType::Limiter: return limiter_;
+    case SlotType::Comb: return comb_;
     case SlotType::Clipper:
     case SlotType::Off:
     default: return clipper_;
@@ -696,6 +756,7 @@ void Slot::reset()
     xR_.reset();
     xoverSetLow_ = xoverSetHigh_ = -1.0;
     mix_ = 0.0;
+    keyRatio_ = 1.0;
     counter_ = 0;
     primed_ = false;
     live_ = false;
@@ -733,7 +794,29 @@ void Slot::glide(const SlotParams& p, const SlotEnv& e, bool snap)
         xR_.setup(xoverLow_, hi, rate_);
     }
     effect(type_).setTempo(e.tempo);
-    effect(type_).set(cur_.data());
+    apply();
+}
+
+void Slot::apply()
+{
+    std::array<double, kSlotValues> v = cur_;
+    if (keyRatio_ != 1.0)
+    {
+        auto tune = [&](int i) {
+            double& f = v[static_cast<size_t>(i)];
+            f = std::clamp(f * keyRatio_, 1.0, 0.45 * rate_);
+        };
+        if (type_ == SlotType::Filter || type_ == SlotType::Ring)
+            tune(1);
+        else if (type_ == SlotType::Eq)
+            tune(2);
+        else if (type_ == SlotType::Comb)
+        {
+            tune(0);
+            tune(1);
+        }
+    }
+    effect(type_).set(v.data());
 }
 
 void Slot::wake(const SlotParams& p, const SlotEnv& e)
@@ -751,7 +834,8 @@ void Slot::wake(const SlotParams& p, const SlotEnv& e)
     glide(p, e, true);
 }
 
-void Slot::process(float* l, float* r, int n, const SlotParams& p, const SlotEnv& e, const int* hits, int hitCount)
+void Slot::process(float* l, float* r, int n, const SlotParams& p, const SlotEnv& e, const int* hits, int hitCount,
+                   const double* keyRatios)
 {
     const double target = p.type == SlotType::Off || p.bypass ? 0.0 : std::clamp(p.mix, 0.0, 1.0);
     if (!live_)
@@ -798,6 +882,12 @@ void Slot::process(float* l, float* r, int n, const SlotParams& p, const SlotEnv
             glide(p, e, false);
         while (h < hitCount && hits[h] <= i)
         {
+            if (keyRatios && keyRatios[h] != keyRatio_)
+            {
+                keyRatio_ = keyRatios[h];
+                if (p.type != SlotType::Off)
+                    apply();
+            }
             effect(type_).hit();
             ++h;
         }

@@ -27,8 +27,9 @@ enum class SlotType : int
     Stereo,
     Utility,
     Limiter,
+    Comb,
 };
-constexpr int kNumSlotTypes = 18;
+constexpr int kNumSlotTypes = 19;
 
 // Which part of the spectrum a slot processes. The rest passes by it.
 enum class Band : int

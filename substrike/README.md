@@ -9,7 +9,7 @@ its own effect chain in free order, layers feeding one another for rumble, a
 master chain, and modulation. The design and the phases are in
 [docs/PLAN.md](docs/PLAN.md).
 
-## Status: 1.0.0, released
+## Status: 1.1.0, released
 
 What exists:
 
@@ -62,7 +62,7 @@ What exists:
 - **Modulation** (see below): four LFOs, four curve envelopes, eight macros,
   velocity, note, a random value per note and a follower per lane, routed
   through a 32-slot matrix to any continuous parameter.
-- **117 factory presets** in 18 categories, a preset browser, user presets,
+- **121 factory presets** in 18 categories, a preset browser, user presets,
   and the presets in the host's own browser (see below).
 - **Limiters**: a Limiter slot for any lane or the master chain, and Limit
   as the master's Output Clip.
@@ -101,6 +101,7 @@ automatable; everything else is, and values glide over 5 ms.
 | Stereo | Width (0-200 %), Haas (up to 30 ms on either side) |
 | Utility | Gain, Polarity, Channels (Stereo, Mono, Swap, Left, Right) |
 | Limiter | Gain (into it), Ceiling, Release: a peak limiter without lookahead or latency, holding 25 ms before it lets go |
+| Comb | Start, Spacing, Bands (1-32), Gain (cut or boost), Width (each band's width as a share of the spacing, the same in Hz all the way up), Taper (the gain fading out or in along the comb): a bank of bells, since 1.1.0 |
 
 Delay and Warp add their echoes to what comes in, so Mix sets the echo level
 and never takes the hit away; Reverb gives the reverb alone, so Mix is a
@@ -110,7 +111,12 @@ host's rate), so the 54 slots take about 45 MB at 48 kHz.
 
 **Band** processes Full, Low, Mid, High, Low+Mid or Mid+High of the lane,
 split at the lane's Crossover Low and High (LR4); the rest passes by, and the
-sum is flat. **Quality** (1x, 2x, 4x) oversamples Distortion, Clipper,
+sum is flat. **Chain Key Track** (0-100 %, since 1.1.0) moves a lane's
+tuned letters with the note, from each hit on: Filter Cutoff, EQ Mid Freq,
+Comb Start and Spacing, and Ring Mod Frequency, by the same law as the
+Body's Key Track, so a notch on the second harmonic stays there in every
+key. The master chain has none.
+**Quality** (1x, 2x, 4x) oversamples Distortion, Clipper,
 Wavefolder, Bitcrush and the Output Clip. A chain that rings on after its hit
 keeps the lane running until it has been quiet for 50 ms, then sleeps; a
 delay's gap before its next echo does not count as quiet. The

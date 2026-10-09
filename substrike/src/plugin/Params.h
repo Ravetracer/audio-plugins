@@ -55,6 +55,7 @@ enum LaneField : uint32_t
     LDuckSource = 16,
     LDuckDepth = 17,
     LDuckRelease = 18,
+    LChainKeyTrack = 19,
 
     BodyPitchStart = 100,
     BodyPitchEnd = 101,

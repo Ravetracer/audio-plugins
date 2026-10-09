@@ -160,7 +160,7 @@ const std::vector<std::string>& slotTypeLabels()
 {
     static const std::vector<std::string> labels = {
         "Off",    "Distortion", "Clipper", "Wavefolder", "Bitcrush", "Filter",  "EQ",     "Compressor", "Transient",
-        "Gate",   "Reverb",     "Delay",   "Warp",       "Smear",    "Ring Mod", "Stereo", "Utility", "Limiter"};
+        "Gate",   "Reverb",     "Delay",   "Warp",       "Smear",    "Ring Mod", "Stereo", "Utility", "Limiter", "Comb"};
     return labels;
 }
 
@@ -289,6 +289,14 @@ const std::vector<std::vector<Shape>>& slotShapes()
             {"ceiling", "Ceiling", Scale::Linear, -24, 0, "dB", -0.3},
             {"release", "Release", Scale::Log, 5, 1000, "ms", 80},
         },
+        {
+            {"start", "Start", Scale::Log, 20, 10000, "Hz", 100},
+            {"spacing", "Spacing", Scale::Log, 5, 5000, "Hz", 100},
+            {"bands", "Bands", Scale::Linear, 1, 32, "bands", 8},
+            {"gain", "Gain", Scale::Linear, -30, 18, "dB", -12},
+            {"width", "Width", Scale::Log, 1, 100, "%", 10},
+            {"taper", "Taper", Scale::Linear, -100, 100, "%", 0},
+        },
     };
     return shapes;
 }
@@ -404,6 +412,11 @@ ParamTable::ParamTable()
                        "Hz", 150.0));
         add(continuous(pid::lane(l, LXoverHigh), k + "xover_high", p + "Crossover High", lane, Scale::Log, 500.0,
                        12000.0, "Hz", 2500.0));
+        // How far the chain's tuned letters (Filter cutoff, EQ mid frequency,
+        // Ring Mod frequency) follow the note, so a notch set on a harmonic
+        // stays on it in every key.
+        add(continuous(pid::lane(l, LChainKeyTrack), k + "chain.key_track", p + "Chain Key Track", lane,
+                       Scale::Linear, 0.0, 100.0, "%", 0.0));
         // The transient guard at the end of the chain: a window that keeps
         // the lane silent for a while after each hit and then fades it in,
         // and a duck driven by another lane.
@@ -796,6 +809,11 @@ std::string ParamTable::toText(const ParamDef& d, double value)
         return sig3(x) + ":1";
     if (d.unit == "bit")
         return fmt("%.1f bit", shown(x, 0.1));
+    if (d.unit == "bands")
+    {
+        const long b = std::lround(x);
+        return std::to_string(b) + (b == 1 ? " band" : " bands");
+    }
     if (d.unit == "oct")
         return fmt("%+.1f oct", shown(x, 0.1));
     if (d.unit == "pan")
@@ -956,6 +974,7 @@ void assignParam(dsp::EngineParams& p, int index, const double* values)
     case LVariation: lp.variation = pct; break;
     case LXoverLow: lp.xoverLow = plain; break;
     case LXoverHigh: lp.xoverHigh = plain; break;
+    case LChainKeyTrack: lp.chainKeyTrack = pct; break;
     case LGuardDelay: lp.guard.delayMs = plain; break;
     case LGuardFade: lp.guard.fadeMs = plain; break;
     case LDuckSource: lp.guard.duckSource = idx() - 1; break;

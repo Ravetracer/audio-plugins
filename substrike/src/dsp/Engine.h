@@ -79,6 +79,7 @@ struct LaneParams
     Output output = Output::Main;
     int pitchLink = -1;      // -1: own pitch; else the lane whose Body pitch to follow
     double transpose = 0.0;  // semitones, every frequency of the source
+    double chainKeyTrack = 0.0; // 0..1: how far the chain's tuned letters follow the note
     double variation = 0.0;  // 0..1: hit-to-hit randomness; 0 repeats every hit exactly
     BodyParams body;
     ClickParams click;
@@ -216,6 +217,7 @@ private:
     std::array<Slot, kNumSlots> slots_{};
     // Offsets in this chunk at which hits fired, for the slots.
     std::array<int, kMaxPending> fired_{};
+    std::array<double, kMaxPending> firedRatio_{};
     int firedCount_ = 0;
     // The first sample of this chunk after which no voice sounds.
     int soundEnd_ = 0;

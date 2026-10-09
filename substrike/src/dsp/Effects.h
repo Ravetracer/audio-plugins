@@ -144,6 +144,30 @@ private:
     std::array<double, 6> last_{1e9, 1e9, 1e9, 1e9, 1e9, 1e9};
 };
 
+// A comb of bells: A: start Hz (the first band), B: spacing Hz (from one
+// band to the next), C: bands (1-32, how far the comb reaches), D: gain dB
+// (below 0 notches, above 0 peaks), E: width % (every band is this share of
+// the spacing wide, in Hz, so they stay apart all the way up), F: taper %
+// (+100 fades the gain out towards the last band, -100 fades it in from the
+// first). With the
+// start and the spacing on a kick's pitch, the bands sit on its harmonics.
+// Bands above 0.45 x the rate are left out.
+class CombFx : public Effect
+{
+public:
+    static constexpr int kMaxBands = 32;
+    void prepare(double sampleRate) override;
+    void reset() override;
+    void set(const double* v) override;
+    void process(float* l, float* r, int n) override;
+
+private:
+    Biquad bq_[2][kMaxBands];
+    int bands_ = 0;
+    double rate_ = 48000.0;
+    std::array<double, 6> last_{1e9, 1e9, 1e9, 1e9, 1e9, 1e9};
+};
+
 // A: threshold dB, B: ratio, C: attack ms, D: release ms, E: knee dB,
 // F: makeup dB. Feed-forward, peak detection, the channels linked.
 class CompressorFx : public Effect
@@ -256,13 +280,20 @@ public:
     // sound, in samples (see Effect::silentHold).
     int silentHold() const;
     // Processes n samples in place. `hits` are offsets into the n samples, in
-    // order, at which the lane fired.
-    void process(float* l, float* r, int n, const SlotParams& p, const SlotEnv& e, const int* hits, int hitCount);
+    // order, at which the lane fired. `keyRatios`, when given, holds one
+    // frequency ratio per hit: the tuned letters (a Filter's cutoff, an EQ's
+    // mid frequency, a Ring Mod's frequency) are scaled by it from that hit
+    // on, so a chain can follow the note the way a Body does.
+    void process(float* l, float* r, int n, const SlotParams& p, const SlotEnv& e, const int* hits, int hitCount,
+                 const double* keyRatios = nullptr);
 
 private:
     Effect& effect(SlotType t);
     void wake(const SlotParams& p, const SlotEnv& e);
     void glide(const SlotParams& p, const SlotEnv& e, bool snap);
+    // Hands the current values to the effect, the tuned letters scaled by
+    // the key ratio.
+    void apply();
     void segment(float* l, float* r, int n, double target);
 
     DistortionFx distortion_;
@@ -282,6 +313,7 @@ private:
     StereoFx stereo_;
     UtilityFx utility_;
     LimiterFx limiter_;
+    CombFx comb_;
 
     // The delay memory every type of this slot shares; see Effect::memory.
     void clearMemory();
@@ -299,6 +331,7 @@ private:
     std::array<double, kSlotValues> cur_{};
     double xoverLow_ = 0.0, xoverHigh_ = 0.0, xoverSetLow_ = -1.0, xoverSetHigh_ = -1.0;
     double mix_ = 0.0;
+    double keyRatio_ = 1.0;
     int counter_ = 0;
     bool primed_ = false;
     bool live_ = false;

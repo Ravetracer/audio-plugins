@@ -256,6 +256,7 @@ int Lane::process(const Bus& main, const Bus& aux, int n, const Context& c)
         std::copy(pending_.begin() + which + 1, pending_.begin() + pendingCount_, pending_.begin() + which);
         --pendingCount_;
         fire(hit, c);
+        firedRatio_[static_cast<size_t>(firedCount_)] = std::exp2(hit.semitones * c.params->chainKeyTrack / 12.0);
         fired_[static_cast<size_t>(firedCount_++)] = due;
         pos = due;
     }
@@ -285,7 +286,8 @@ int Lane::process(const Bus& main, const Bus& aux, int n, const Context& c)
     for (int s = 0; s < kNumSlots; ++s)
     {
         Slot& slot = slots_[static_cast<size_t>(s)];
-        slot.process(l_.data(), r_.data(), n, p.slots[static_cast<size_t>(s)], env, fired_.data(), firedCount_);
+        slot.process(l_.data(), r_.data(), n, p.slots[static_cast<size_t>(s)], env, fired_.data(), firedCount_,
+                     firedRatio_.data());
         live |= slot.live();
         hold = std::max(hold, slot.silentHold());
     }

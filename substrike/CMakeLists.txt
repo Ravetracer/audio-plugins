@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.21)
-project(Substrike VERSION 1.0.0 LANGUAGES C CXX)
+project(Substrike VERSION 1.1.0 LANGUAGES C CXX)
 
 # Substrike builds as a CLAP and, through the clap-wrapper, as a VST3, for
 # Linux and Windows (cross-compiled with mingw-w64). Like Aurum it does not use

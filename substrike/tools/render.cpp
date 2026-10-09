@@ -808,6 +808,55 @@ int runSelfTest(const Module& m)
         p->destroy(p);
     }
 
+    // --- comb: its bands cut the even harmonics of a saw and leave the odd
+    //     ones, and with chain key track they stay on them an octave up
+    {
+        for (int key : {36, 48})
+        {
+            p = configured(m, {"L1 Wave=Saw", "L1 Pitch Start=100 Hz", "L1 Pitch End=100 Hz", "L1 Key Track=100",
+                               "L1 Body Hold=500 ms", "L1 Chain Key Track=100", "L1 Slot 1 Type=Comb",
+                               "L1 Slot 1 Start=200 Hz", "L1 Slot 1 Spacing=200 Hz", "L1 Slot 1 Bands=8",
+                               "L1 Slot 1 Gain=-30 dB"});
+            EventList up;
+            up.add(noteOn(lead, static_cast<int16_t>(key), 1.0));
+            const Render r = render(p, rate, 512, static_cast<uint32_t>(rate * 0.5), up);
+            p->destroy(p);
+            const double f0 = key == 36 ? 100.0 : 200.0;
+            const size_t from = static_cast<size_t>(rate * 0.2), to = static_cast<size_t>(rate * 0.4);
+            double even = -300.0, odd = 300.0;
+            for (int h = 1; h <= 8; ++h)
+            {
+                const double db = toneDb(r.left, rate, h * f0, from, to) + 20.0 * std::log10(h); // a saw falls as 1/h
+                if (h % 2)
+                    odd = std::min(odd, db);
+                else
+                    even = std::max(even, db);
+            }
+            check(odd - even > 20.0, "comb at key " + std::to_string(key) + ": the even harmonics " +
+                                         std::to_string(odd - even) + " dB under the odd ones");
+        }
+    }
+
+    // --- chain key track: a notch on the tone stays on it in another key
+    {
+        double level[2] = {0.0, 0.0};
+        for (int t = 0; t < 2; ++t)
+        {
+            p = configured(m, {"L1 Pitch Start=100 Hz", "L1 Pitch End=100 Hz", "L1 Key Track=100",
+                               "L1 Body Hold=500 ms", "L1 Slot 1 Type=Filter", "L1 Slot 1 Mode=Notch",
+                               "L1 Slot 1 Cutoff=100 Hz", "L1 Slot 1 Reso=50",
+                               t ? "L1 Chain Key Track=100" : "L1 Chain Key Track=0"});
+            EventList up;
+            up.add(noteOn(lead, 48, 1.0)); // an octave up: the tone at 200 Hz
+            const Render r = render(p, rate, 512, static_cast<uint32_t>(rate * 0.5), up);
+            level[t] = peakDb(r.left, static_cast<size_t>(rate * 0.2), static_cast<size_t>(rate * 0.4));
+            p->destroy(p);
+        }
+        check(level[0] > -20.0 && level[1] < level[0] - 40.0,
+              "chain key track moves the notch with the note: " + std::to_string(level[0]) + " dB untracked, " +
+                  std::to_string(level[1]) + " dB tracked");
+    }
+
     // --- other sample rates
     for (double sr : {44100.0, 96000.0})
     {
@@ -1172,7 +1221,8 @@ int runSelfTest(const Module& m)
     {
         static const char* kTypes[] = {"Distortion", "Clipper", "Wavefolder", "Bitcrush", "Filter", "EQ",
                                        "Compressor", "Transient", "Gate",  "Reverb",   "Delay",  "Warp",
-                                       "Smear",      "Ring Mod",  "Stereo", "Utility", "Limiter"};
+                                       "Smear",      "Ring Mod",  "Stereo", "Utility", "Limiter",
+                                       "Comb"};
         bool ok = true;
         for (const char* type : kTypes)
         {
@@ -1265,7 +1315,8 @@ int runSelfTest(const Module& m)
     {
         static const char* kTypes[] = {"Distortion", "Clipper", "Wavefolder", "Bitcrush", "Filter", "EQ",
                                        "Compressor", "Transient", "Gate",  "Reverb",   "Delay",  "Warp",
-                                       "Smear",      "Ring Mod",  "Stereo", "Utility", "Limiter"};
+                                       "Smear",      "Ring Mod",  "Stereo", "Utility", "Limiter",
+                                       "Comb"};
         int bad = 0, runs = 0;
         for (const char* type : kTypes)
             for (const char* band : {"Full", "Low+Mid"})

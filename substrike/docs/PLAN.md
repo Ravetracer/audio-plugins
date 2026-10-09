@@ -491,6 +491,31 @@ build/ and overwrite.
 1.0.0 is the first release: the NO-RELEASE marker is gone, and release.sh
 packs Substrike with its manual like the other plugins.
 
+1.1.0: hardstyle, measured. 215 hardstyle kicks in `!references/hardstyle/`
+were analysed for the harmonic envelope of the tail (each harmonic's level
+at the measured tail pitch, in four windows from 40 to 500 ms). What sets
+them apart: the fundamental on top, the second harmonic about 22 dB under
+it while the third is only 13 dB under (a narrow cut on 2 x the tail pitch
+in 56 % of them, and the cut moves with the pitch from kick to kick), and
+a flat wall of harmonics at -25 to -30 dB up to about 1 kHz, falling
+slowly above: 15 to 25 dB more top than the 1.0.0 hardstyle presets had.
+In the first 100 ms there is a punch around 500 to 700 Hz. A fit of the
+chain to the median envelopes (scratch scripts, not kept) gives one recipe
+for every subset: an asymmetric Distortion (Bias -30 to -57 %) for the even
+harmonics, a Clipper at about 30 dB, an EQ with Low +6 dB, Mid -13 to -17
+dB at 2.0 to 2.2 x the tail pitch with a Q of 4.5 to 7, High and Tilt up,
+and a short distorted punch lane. A notch tuned to a harmonic must follow
+the note, so lanes have a **Chain Key Track** (id offset 19, default 0 %):
+Filter Cutoff, EQ Mid Freq and Ring Mod Frequency scale with the note from
+each hit on, by the Body's key-track law. Three presets come from the fit,
+one per subset of the references (long stable tails, drifting tails, short
+tails).
+The same release adds a **Comb** slot type (appended, so saved types keep
+their labels): up to 32 RBJ bells at Start + k x Spacing, all with the same
+width in Hz (Width, a share of the spacing; a constant Q would widen the
+upper bands until they cut the harmonics between them), a gain and a taper.
+Chain Key Track moves its Start and Spacing. Comb Hollow uses it.
+
 ## Phases
 
 1. **Scaffold and first kick.**
