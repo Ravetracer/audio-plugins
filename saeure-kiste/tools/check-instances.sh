@@ -32,8 +32,11 @@ here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 plugin="${1:-./SaeureKiste.clap}"
 host="${2:-./saeurekiste-guihost}"
 presets="$here/../presets"
-work="$(mktemp -d)"
-trap 'pkill -x "$(basename "$host")" >/dev/null 2>&1; rm -rf "$work"' EXIT
+# Its captures go in a fixed folder beside the build, overwritten on every run;
+# nothing here deletes files.
+work="$PWD/check-instances-work"
+mkdir -p "$work"
+trap 'pkill -x "$(basename "$host")" >/dev/null 2>&1' EXIT
 
 for tool in xdotool import convert compare; do
    command -v "$tool" >/dev/null || { echo "need $tool"; exit 1; }

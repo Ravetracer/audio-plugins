@@ -8,7 +8,7 @@ subtitle: CLAP and VST3 instrument for Linux and Windows
 
 *A monophonic acid bass synthesiser. Linux and Windows, CLAP and VST3.*
 
-Version 0.15.2
+Version 0.16.0
 
 ---
 
@@ -26,6 +26,13 @@ on the pitch CV. Two stages are added that the machine does not have — a drive
 stage of seven models after the filter, and a delay after that — and both are
 marked as such everywhere they appear.
 
+The oscillator has additions of its own, for the experimental end of the
+instrument: five more waveforms — sine, triangle, pulse, wavetable and noise —
+each with a control of its own and a display that shows the cycle the
+oscillator is making, eight built-in wavetables plus a folder of your own, and
+**unison** of up to sixteen voices spread across the stereo field. The machine's own sawtooth and square are untouched by any of it, and
+with one voice the instrument is as mono as the machine.
+
 It is **monophonic** and it tells the host so.
 
 It plays two ways: from the host, or from its own sequencer, which runs 1 to 128
@@ -36,7 +43,8 @@ its author's own published manual — see §10. Every one of those controls
 defaults to the stock circuit, so the plugin is the original until you ask it
 not to be.
 
-Sixty-three parameters, thirty presets.
+Seventy-four parameters, thirty presets, and every one of the parameters can be
+automated and modulated from the host.
 
 Not affiliated with or endorsed by Roland Corporation. *TB-303* is their
 trademark, used here only to name what was modelled. Not affiliated with or
@@ -93,9 +101,9 @@ same reason.
 
 Eight are the machine's front panel: Waveform, Tuning, Cutoff, Resonance, Env
 Mod, Decay, Accent and Volume. Those eight are the window the plugin opens
-with, laid out in the order the machine prints them, and nothing else is on it
-that the machine does not have. Everything else is an addition: one of them is
-marked **(added)** where it sits beside originals, the VCF Mod, Drive, Delay,
+with, laid out in the order the machine prints them. Everything else is an
+addition: the VCO panel's Table and oscillator display sit beside the
+originals and are marked **(added)**, as is Slide Time, the VCF Mod, Drive, Delay, Unison,
 Vibrato and Mods panels are additions entire and say so in their headings, and
 the controls of the modification are gathered in §10.
 
@@ -114,8 +122,117 @@ when it loads onto a silent instrument.
 
 | Control | Range | Default | |
 |---|---|---|---|
-| **Waveform** | Sawtooth / Square | Sawtooth | Switch S1. The sawtooth falls rather than rises — the oscillator is an integrator that ramps down and is snapped back up. The square arrives at the filter **6.7 dB down**, because the schematic prints both swings: 12 V to 5.5 V for the saw and 8 V to 5 V for the square. That difference is reproduced rather than normalised away. |
+| **Waveform** | Sawtooth / Square / Sine / Triangle / Pulse / Wavetable / Noise | Sawtooth | Switch S1. The sawtooth falls rather than rises — the oscillator is an integrator that ramps down and is snapped back up. The square arrives at the filter **6.7 dB down**, because the schematic prints both swings: 12 V to 5.5 V for the saw and 8 V to 5 V for the square. That difference is reproduced rather than normalised away. The other five are added; see below. |
+| **Table** *(added)* | Analog … Resonant, User | Analog | Which wavetable the Wavetable waveform reads. Clicking its name opens the wavetable selector; see *Wavetables* below. |
+| **Oscillator display** *(added)* | | | A picture of the cycle the oscillator is making, where a knob would be. It edits the control that belongs to the selected waveform — its label says which — and is dragged, wheeled and typed into like any knob. |
 | **Tuning** | ±700 cents | 0 | VR2. The service notes give its travel as approximately a perfect fifth either way. |
+
+#### The added waveforms and their controls
+
+![The VCO panel with the Vocal wavetable at 45 %. The display is editing WT Position, and follows it whether it is turned, automated or modulated.](images/panel-vco-wavetable.png)
+
+Each added waveform has one control of its own, and each is an ordinary
+parameter: the host lists it by name and can automate and modulate it, and a
+lane drawn for one never moves another when the waveform changes. None of them
+touches the sawtooth or the square — those are the machine's.
+
+| Waveform | Control | Range | Default | What it does |
+|---|---|---|---|---|
+| **Pulse** | **Pulse Width** | 3 – 50 % | 50 % | The width, as a share of the cycle. At 50 % it is exactly the square, at the square's level and with its droop; turning it down narrows the pulse to a 3 % needle. |
+| **Wavetable** | **WT Position** | 0 – 100 % | 0 % | Where in the table it plays. Neighbouring frames are crossfaded, so a sweep morphs smoothly from one end of the table to the other. |
+| **Triangle** | **Tri Skew** | 0 – 100 % | 0 % | Leans the apex towards the start of the cycle, until at 100 % it is nearly a falling ramp — the machine's own direction. |
+| **Sine** | **Sine Bend** | 0 – 100 % | 0 % | Bends it by phase distortion: the first half of the cycle is run through faster than the second, adding harmonics smoothly from none at all to a bright, buzzy edge. |
+| **Noise** | **Noise Grain** | 0 – 100 % | 0 % | How long each random value is held. At 0 % it is white noise; towards 100 % it gets coarser, and at the top it changes once per cycle of the note — pitched, digital noise that follows the keyboard and slides like any note. |
+
+The display shows one cycle of what the oscillator is making, drawn from the
+same shape code the sound comes from, and edits whichever of the five belongs
+to the selected waveform; with the sawtooth or the square it only shows. It
+follows its control whether you turn it, a host automates it or a host's
+modulator moves it. The pulse is drawn about its own average, which is where
+the square's droop puts it, and the square is drawn at its real, quieter level.
+
+#### Wavetables
+
+Eight tables come with the instrument, each a sweep of one idea from its
+plainest frame at WT Position 0 % to its most extreme at 100 %:
+
+| Table | From … to |
+|---|---|
+| **Analog** | Saw, then square, then triangle, then sine. |
+| **PWM** | A square narrowing to a thin pulse. |
+| **Vocal** | Through the vowels a, e, i, o, u. Like every formant table it moves the formants with the note. |
+| **Additive** | One harmonic at a time, from a sine to forty-eight of them. |
+| **Sync** | A ramp hard-synced to the note, its own pitch climbing three octaves. |
+| **FM** | Two operators at the same frequency, the modulation index rising to 6. |
+| **Fold** | A sine driven into more and more folds. |
+| **Resonant** | A ramp with a resonant peak sweeping up through it — a filter sweep frozen into the table. |
+
+**Your own wavetables** live in a folder beside your presets:
+
+- Linux: `~/.config/SaeureKiste/wavetables` (under `$XDG_CONFIG_HOME` if that is set)
+- Windows: `%APPDATA%\SaeureKiste\wavetables`
+
+The folder is made the first time the selector opens. Put WAV files in it, in
+subfolders if you like, and they appear in the selector the next time it opens.
+
+![The wavetable selector: the built-in tables, then the user folder as a tree.](images/table-selector.png)
+
+**The selector.** Click the Table chip's name and the selector opens under it:
+the built-in tables, then your folder as a tree, each subfolder opening and
+closing with a click. Picking a table loads it, switches the waveform to
+Wavetable, and **leaves the list open**, so you can click through tables while
+a pattern plays; click outside it or press Escape to close it. The chip's
+**arrows** (and the mouse wheel over it) step through every table in the same
+order, yours included, without opening anything, and the chip shows the name
+of the one that is playing. At the bottom of the list, **Load file...** reads a
+WAV from anywhere, and **Open folder** shows the wavetable folder in your file
+manager.
+
+The files are WAV — 8, 16, 24 or 32-bit, or 32-bit float, mono or the left
+channel of a stereo file. How long one frame is:
+
+- if the file says so itself, as files from most wavetable editors do, that is
+  believed;
+- otherwise a file that divides into 2048-sample frames is a table of them, which
+  is the common convention;
+- and anything shorter than 4096 samples is one single cycle, of whatever length.
+
+A table can have up to **64 frames**; a file with more is thinned evenly across
+its length. If a file cannot be read, the display says why in red for a few
+seconds and nothing changes.
+
+The table in use is **saved with the project**, and in any preset saved while
+Table is on User, so neither depends on the WAV file still being where it was —
+renaming or moving the file later changes nothing in a song that used it.
+Loading a preset that has no table of its own leaves the loaded one where it
+is. Which user table is playing is chosen in the selector rather than by a
+parameter, because the list is whatever is in your folder; everything else
+about the oscillator, WT Position included, is automatable.
+
+All wavetables are band-limited per octave, so a high note does not fold its
+harmonics back down into the audible range.
+
+### Unison *(the whole panel is added)*
+
+![The UNISON panel, in the half behind ADVANCED.](images/panel-unison.png)
+
+Copies of the oscillator, detuned against each other and spread across the
+stereo field. The stack is still one note: it slides, accents and decays as one,
+through one filter envelope and one amplifier envelope, and every waveform
+stacks — including the wavetables and the noise.
+
+| Control | Range | Default | |
+|---|---|---|---|
+| **Voices** | 1 – 16 | 1 | How many copies play each note. One is the machine. The level stays about the same however many there are. |
+| **Detune** | 0 – 100 cents | 15 cents | How far the outermost voices are tuned from the note, one up and one down; the rest sit evenly between. A few cents thickens, twenty-five is a chorus, a hundred is a cluster a semitone wide either side. |
+| **Spread** | 0 – 100 % | 50 % | How far across the stereo field the voices go, the most detuned the widest. |
+
+With Spread above zero each side of the stereo field gets **its own filter and
+drive** — the voices panned left go through one ladder, those panned right
+through another — so the two channels stay different all the way through the
+instrument rather than being widened at the end. The two halves add up to the
+unspread stack, so a spread patch folds down to mono cleanly. At Spread 0 %, or
+with one voice, there is one filter and the output is mono.
 
 ### VCF
 
@@ -927,7 +1044,7 @@ to start if you want to hear the plugin play itself:
 
 ## 9. The window
 
-![The window with ADVANCED open: the four circuits nobody re-tunes twice in a session, and the mods under them.](images/window-advanced.png)
+![The window with ADVANCED open: unison, the four circuits nobody re-tunes twice in a session, and the mods under them.](images/window-advanced.png)
 
 One row of knobs across a wide, shallow panel, which is the shape of the machine
 it models — and a second row of them behind a button, because ten of the
@@ -937,10 +1054,15 @@ controls are for tuning the engine rather than for playing it.
   fine control; **click a value** to type one.
 - **Click a chip's arrows** to step an enumerated control, or the chip itself
   for its list.
+- The **oscillator display** on the VCO panel is a knob too, for whichever
+  control belongs to the selected waveform: drag, wheel, double-click and type
+  into it the same way.
+- The **Table chip's name** opens the wavetable selector, and its arrows step
+  through every table, the ones in your folder included.
 - The **preset bar** browses the factory library and anything in your own preset
   directory; **SAVE** writes a new one there.
-- **ADVANCED**, beside SAVE, opens the collapsible half of the window: the VCF
-  MOD, SLIDE, VIBRATO and AMP panels, and the mods under them. The window grows
+- **ADVANCED**, beside SAVE, opens the collapsible half of the window: the
+  UNISON, VCF MOD, SLIDE, VIBRATO and AMP panels, and the mods under them. The window grows
   to make room and shrinks again when you close it, and it remembers which way
   you left it. A host that will not resize a plugin editor on request will
   leave it clipped; everything in it is reachable from the host's own parameter

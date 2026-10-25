@@ -275,6 +275,18 @@ struct WindowSpec {
    // How the window asks the host to resize it, and where the open/closed
    // state is kept. Null means the section cannot be opened at all.
    WindowHost *host;
+
+   // The parameter whose cell is the oscillator display rather than a knob:
+   // two columns wide, a picture of the cycle the oscillator is making. It
+   // edits whichever parameter `host` says belongs to the current waveform --
+   // dragged, wheeled and typed into exactly like a knob -- so the cell's own
+   // parameter only says where it sits. kNoParam for none.
+   uint32_t waveViewParam;
+
+   // The enum chip that opens the wavetable selector instead of its list, and
+   // whose arrows step through every table, the user's included. kNoParam for
+   // none.
+   uint32_t tableParam;
 };
 
 // Creates the window. Returns nullptr if no X display could be opened. The

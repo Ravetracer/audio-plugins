@@ -5,6 +5,8 @@
 
 #include "plugincore/dsp/fastmath.h"
 
+#include "params.h"
+
 namespace saeurekiste {
 
 namespace {
@@ -113,6 +115,34 @@ constexpr float kSquareLevel = 3.0f / 6.5f;
 
 constexpr float kDcBlockHz = 12.0f;
 
+// ------------------------------------------------------------ the additions
+//
+// None of what follows is on the machine. Sine, Triangle, Pulse, Wavetable and
+// Noise are there for the experimental end of the instrument, and each has one
+// control of its own to move in -- the pulse's width, the wavetable's position,
+// the triangle's skew, the sine's bend and the noise's grain. None of them
+// touches the sawtooth or the square: those two are the machine's and stay
+// exactly as the schematic has them.
+//
+// Pulse is the square with its duty cycle freed, through the same droop and at
+// the same level, so at a width of 50 % it *is* the square. The width goes
+// down to 3 %.
+constexpr float kPulseNarrowest = 0.03f;
+// Triangle's apex moves from the middle of the cycle towards its start, which
+// leans it into a falling ramp -- the machine's own direction -- at full Tri Skew.
+constexpr float kTriangleApexMin = 0.03f;
+// Sine is bent by phase distortion: the first half of its cycle is run through
+// faster than the second. The knee moves from the middle to 5 %, which adds
+// harmonics smoothly from none at all.
+constexpr float kSineKneeMin = 0.05f;
+
+// Unison's voices are spread evenly across the detune, from -Detune to
+// +Detune, and across the stereo field in the same order, so the most detuned
+// voices are the widest. Each starts at a different point in its cycle --
+// spaced by the golden ratio, which never lines two of them up -- or the
+// first note of a stack would be one loud voice beating itself apart.
+constexpr float kGoldenPhase = 0.61803398875f;
+
 // ------------------------------------------------------------- the Devil Fish
 //
 // The ladder's input pair is linear over the swing the machine gives it and
@@ -218,6 +248,13 @@ constexpr GlidedField kGlided[] = {
    {&EngineParams::oscDrive, Glide::Linear},
    {&EngineParams::filterFm, Glide::Linear},
    {&EngineParams::ampSustain, Glide::Linear},
+   {&EngineParams::pulseWidth, Glide::Linear},
+   {&EngineParams::wtPosition, Glide::Linear},
+   {&EngineParams::triSkew, Glide::Linear},
+   {&EngineParams::sineBend, Glide::Linear},
+   {&EngineParams::noiseGrain, Glide::Linear},
+   {&EngineParams::unisonDetuneCents, Glide::Linear},
+   {&EngineParams::unisonSpread, Glide::Linear},
 };
 
 // A one-pole's step over `frames` samples.
@@ -298,11 +335,33 @@ float AcidEngine::polyBlep(float t, float dt) {
    return 0.0f;
 }
 
+// The band-limited ramp: polyBlep() integrated once, for a corner -- a sudden
+// change of slope -- rather than a step. A triangle and a bent sine have
+// corners and no steps, so without this they alias in a way a filter cannot
+// take out. Scaled by the change of slope per sample at the call.
+float AcidEngine::polyBlamp(float t, float dt) {
+   if (dt <= 0.0f)
+      return 0.0f;
+   if (t < dt) {
+      const float x = 1.0f - t / dt;
+      return x * x * x * (1.0f / 6.0f);
+   }
+   if (t > 1.0f - dt) {
+      const float x = (t - 1.0f) / dt + 1.0f;
+      return x * x * x * (1.0f / 6.0f);
+   }
+   return 0.0f;
+}
+
 void AcidEngine::prepare(double sampleRate, uint32_t /*maxBlockFrames*/) {
    mSampleRate = sampleRate > 0.0 ? sampleRate : 48000.0;
    // The drive stage runs its models at twice this rate and has filters of its
    // own, so it has to be told the rate before anything is reset.
-   mDriveStage.prepare(mSampleRate);
+   for (Path &p : mPath)
+      p.drive.prepare(mSampleRate);
+   // The built-in wavetables are made on first use, which takes a moment, so
+   // it happens here on the main thread rather than in the first process().
+   builtinTable(0);
    mGlideCoef = glideCoef(kControlBlock, mSampleRate);
    mGlideTotal =
       static_cast<uint32_t>(std::ceil(kGlideSettleTaus * kGlideSec * mSampleRate));
@@ -316,8 +375,15 @@ void AcidEngine::reset() {
    mHeldCount = 0;
    mGate = false;
    mAccented = false;
-   mPhase = 0.0f;
-   std::memset(mZ, 0, sizeof(mZ));
+   for (int v = 0; v < kMaxUnison; ++v) {
+      float ph = static_cast<float>(v) * kGoldenPhase;
+      mPhase[v] = ph - static_cast<float>(static_cast<int>(ph));
+      // Any odd constant per voice will do; these are fixed so that reset()
+      // puts the noise back where it started.
+      mNoiseState[v] = 0x9E3779B9u * static_cast<uint32_t>(v + 1) | 1u;
+      mNoiseHold[v] = 0.0f;
+      mNoisePhase[v] = 1.0f;
+   }
    mVcfEnv = 0.0f;
    mVcaEnv = 0.0f;
    mVcaPeak = 0.0f;
@@ -326,15 +392,19 @@ void AcidEngine::reset() {
    mCurrentHz = mTargetHz;
    mShotFrames = 0;
    mShotHolding = false;
-   mSquareDroop.reset();
-   mDcBlock.reset();
-   mTone.reset();
-   // The drive stage holds filters and an oversampler, and like every other
-   // state here reset() has to clear them or two renders of the same preset
-   // are not the same render.
-   mDriveStage.reset();
-   mLastOut = 0.0f;
-   mDcBlock.setCutoff(kDcBlockHz, static_cast<float>(mSampleRate));
+   for (Path &p : mPath) {
+      std::memset(p.z, 0, sizeof(p.z));
+      p.squareDroop.reset();
+      p.dcBlock.reset();
+      p.tone.reset();
+      // The drive stage holds filters and an oversampler, and like every other
+      // state here reset() has to clear them or two renders of the same preset
+      // are not the same render.
+      p.drive.reset();
+      p.lastOut = 0.0f;
+      p.dcBlock.setCutoff(kDcBlockHz, static_cast<float>(mSampleRate));
+   }
+   mStereo = false;
    // Seeded here rather than from a clock, so that reset() really does put the
    // engine back where it started and a render stays repeatable to the sample.
    mDriftRng.seed(0x303Au);
@@ -454,9 +524,41 @@ void AcidEngine::updateDerived() {
    mLadderDrive = mParams.ladder * 1.4f < 0.02f ? 0.02f : mParams.ladder * 1.4f;
    mLadderInv = 1.0f / mLadderDrive;
 
-   mSquareDroop.setCutoff(clampv(mParams.droopHz, 0.5f, sr * 0.4f), sr);
+   for (Path &p : mPath) {
+      p.squareDroop.setCutoff(clampv(mParams.droopHz, 0.5f, sr * 0.4f), sr);
+      p.tone.setCutoff(clampv(mParams.toneHz, 200.0f, sr * 0.45f), sr);
+   }
 
-   mTone.setCutoff(clampv(mParams.toneHz, 200.0f, sr * 0.45f), sr);
+   // The added waveforms' controls, as the shapes use them.
+   {
+      mPulseWidth = clampv(mParams.pulseWidth, kPulseNarrowest, 0.5f);
+      mTriApex = 0.5f - (0.5f - kTriangleApexMin) * clampv(mParams.triSkew, 0.0f, 1.0f);
+      mSineKnee = 0.5f - (0.5f - kSineKneeMin) * clampv(mParams.sineBend, 0.0f, 1.0f);
+      mSineOffset = (2.0f / kPi) * (1.0f - 2.0f * mSineKnee);
+      mSineScale = 1.0f / (1.0f + mSineOffset);
+   }
+   if (mParams.wavetable >= 0 && mParams.wavetable < kNumBuiltinTables)
+      mTable = &builtinTable(mParams.wavetable);
+   else
+      mTable = mUserTable && !mUserTable->empty() ? mUserTable : &builtinTable(0);
+
+   // Unison. The voices sit evenly from -1 to +1, which is both how far each
+   // is detuned, as a fraction of Detune, and where it is panned, as a
+   // fraction of Spread. The weights keep the two channels summing to the
+   // mono stack, so a spread patch folds down to its own unspread self.
+   mVoices = mParams.unisonVoices < 1 ? 1
+           : (mParams.unisonVoices > kMaxUnison ? kMaxUnison : mParams.unisonVoices);
+   mUnisonNorm = 1.0f / std::sqrt(static_cast<float>(mVoices));
+   const float spread = clampv(mParams.unisonSpread, 0.0f, 1.0f);
+   for (int v = 0; v < mVoices; ++v) {
+      const float at = mVoices > 1 ? -1.0f + 2.0f * static_cast<float>(v) /
+                                                static_cast<float>(mVoices - 1)
+                                   : 0.0f;
+      mVoiceOct[v] = mParams.unisonDetuneCents * at * (1.0f / 1200.0f);
+      mVoiceRatio[v] = std::exp2(mVoiceOct[v]);
+      mVoiceL[v] = 1.0f - spread * at;
+      mVoiceR[v] = 1.0f + spread * at;
+   }
 
    mMufflerKnee = mParams.muffler == 1 ? kMufflerSoftKnee
                 : mParams.muffler == 2 ? kMufflerHardKnee
@@ -478,15 +580,22 @@ void AcidEngine::updateDerived() {
    // Only when one of its settings has moved, though: the level match makes
    // it too dear to redo on every step of a glide that is moving something
    // else.
+   //
+   // The second path's stage is only kept up to date while it runs. When it
+   // is switched in it is copied whole from the first, settings and all.
    if (mParams.distType != mDriveModelSet || mParams.drive != mDriveSet ||
        mParams.distBias != mDriveBiasSet) {
-      mDriveStage.setParams(mParams.distType, mParams.drive, mParams.distBias,
-                            mParams.distMix);
+      mPath[0].drive.setParams(mParams.distType, mParams.drive, mParams.distBias,
+                               mParams.distMix);
+      if (mStereo)
+         mPath[1].drive.setParams(mParams.distType, mParams.drive, mParams.distBias,
+                                  mParams.distMix);
       mDriveModelSet = mParams.distType;
       mDriveSet = mParams.drive;
       mDriveBiasSet = mParams.distBias;
    } else {
-      mDriveStage.setMix(mParams.distMix);
+      mPath[0].drive.setMix(mParams.distMix);
+      mPath[1].drive.setMix(mParams.distMix);
    }
 }
 
@@ -726,14 +835,21 @@ void AcidEngine::process(float *outL, float *outR, uint32_t frames) {
       if (!fmOn)
          coefficientsFor(fcBase);
 
+      // ------------------------------------------------ control rate: paths
+      //
+      // The second path runs while unison has voices to spread. It is switched
+      // in as a copy of the first -- the same charge on the ladder, the same
+      // state in the drive stage -- so it starts from where the sound is
+      // rather than from silence, and the two only part as their inputs do.
+      const bool stereo = mVoices > 1 && mParams.unisonSpread > 0.0f;
+      if (stereo && !mStereo)
+         mPath[1] = mPath[0];
+      mStereo = stereo;
+      const int paths = mStereo ? 2 : 1;
+      const int wave = mParams.waveform;
+      const bool droops = wave == kWaveSquare || wave == kWavePulse;
+
       for (uint32_t s = 0; s < n; ++s) {
-         if (fmOn) {
-            // The amplifier's output from the previous sample, which is what
-            // makes this a feedback path and not an impossibility.
-            const float fc =
-               clampv(fcBase * exp2fast(mFmOctaves * mLastOut), 20.0f, nyquistGuard);
-            coefficientsFor(fc);
-         }
          // ------------------------------------------------------- envelopes
          mVcfEnv *= mAccented ? mDecayCoefAccent : mDecayCoefOpen;
          mAccentSweep *= mAccentSweepCoef;
@@ -771,110 +887,292 @@ void AcidEngine::process(float *outL, float *outR, uint32_t frames) {
                    8.0f, nyquistGuard);
          const float dt = hz / sr;
 
-         mPhase += dt;
-         if (mPhase >= 1.0f)
-            mPhase -= 1.0f;
+         // What each voice needs besides its phase step: the wavetable's
+         // band-limit level, or how often the noise picks a new value. Both
+         // are per octave, so a detuned voice adds its own offset in octaves.
+         float aux = 0.0f;
+         if (wave == kWaveWavetable)
+            aux = std::log2(2048.0f * dt);
+         else if (wave == kWaveNoise)
+            aux = std::log2(dt);
+         auto auxFor = [&](int v) {
+            if (wave == kWaveNoise)
+               return std::exp2(mParams.noiseGrain * (aux + mVoiceOct[v]));
+            return aux + mVoiceOct[v];
+         };
 
-         float osc;
-         if (mParams.waveform == 0) {
-            // A falling ramp: the integrator runs down and Q8 snaps it back.
-            osc = 1.0f - 2.0f * mPhase + polyBlep(mPhase, dt);
+         float osc[2];
+         if (mVoices == 1) {
+            osc[0] = voiceSample(0, dt, auxFor(0));
+            osc[1] = osc[0];
          } else {
-            float t2 = mPhase + 0.5f;
-            if (t2 >= 1.0f)
-               t2 -= 1.0f;
-            osc = mPhase < 0.5f ? 1.0f : -1.0f;
-            osc += polyBlep(mPhase, dt);
-            osc -= polyBlep(t2, dt);
-            osc = mSquareDroop.tick(osc) * kSquareLevel;
+            float l = 0.0f, r = 0.0f;
+            for (int v = 0; v < mVoices; ++v) {
+               const float vhz = clampv(hz * mVoiceRatio[v], 8.0f, nyquistGuard);
+               const float x = voiceSample(v, vhz / sr, auxFor(v));
+               l += x * mVoiceL[v];
+               r += x * mVoiceR[v];
+            }
+            osc[0] = l * mUnisonNorm;
+            osc[1] = r * mUnisonNorm;
          }
 
-         // Overdrive: the oscillator's level into the ladder. The input pair is
-         // linear over the swing the machine gives it and compresses above
-         // that, so at the stock setting this is the identity.
-         osc = softKnee(osc * mParams.oscDrive, kLadderInputKnee);
+         for (int p = 0; p < paths; ++p) {
+            Path &path = mPath[p];
+            if (fmOn) {
+               // The amplifier's output from the previous sample, which is
+               // what makes this a feedback path and not an impossibility.
+               const float fc = clampv(fcBase * exp2fast(mFmOctaves * path.lastOut), 20.0f,
+                                       nyquistGuard);
+               coefficientsFor(fc);
+            }
 
-         // ------------------------------------------------------------- VCF
-         //
-         // Four one-pole stages with feedback around them, solved for the
-         // current sample rather than delayed: the stage offsets are known, so
-         // the loop is a linear equation in the last stage's output.
-         const float S1 = (1.0f - G1) * mZ[0];
-         const float S2 = (1.0f - Gr) * mZ[1];
-         const float S3 = (1.0f - Gr) * mZ[2];
-         const float S4 = (1.0f - Gr) * mZ[3];
-         const float B = Gr * Gr * Gr * S1 + Gr * Gr * S2 + Gr * S3 + S4;
+            float x = osc[p];
+            if (droops)
+               x = path.squareDroop.tick(x) * kSquareLevel;
 
-         const float y4 = (Gprod * osc + B) / (1.0f + Gprod * k);
-         // The ladder is transistors, and transistors run out of headroom. This
-         // is where a 303 gets its growl at high resonance rather than simply
-         // whistling.
-         const float fb = softClip(y4 * mLadderDrive) * mLadderInv;
-         const float u1 = osc - k * fb;
+            // Overdrive: the oscillator's level into the ladder. The input pair
+            // is linear over the swing the machine gives it and compresses
+            // above that, so at the stock setting this is the identity.
+            x = softKnee(x * mParams.oscDrive, kLadderInputKnee);
 
-         float v = G1 * (u1 - mZ[0]);
-         const float y1 = v + mZ[0];
-         mZ[0] = y1 + v;
+            // --------------------------------------------------------- VCF
+            //
+            // Four one-pole stages with feedback around them, solved for the
+            // current sample rather than delayed: the stage offsets are known,
+            // so the loop is a linear equation in the last stage's output.
+            float *z = path.z;
+            const float S1 = (1.0f - G1) * z[0];
+            const float S2 = (1.0f - Gr) * z[1];
+            const float S3 = (1.0f - Gr) * z[2];
+            const float S4 = (1.0f - Gr) * z[3];
+            const float B = Gr * Gr * Gr * S1 + Gr * Gr * S2 + Gr * S3 + S4;
 
-         v = Gr * (y1 - mZ[1]);
-         const float y2 = v + mZ[1];
-         mZ[1] = y2 + v;
+            const float y4 = (Gprod * x + B) / (1.0f + Gprod * k);
+            // The ladder is transistors, and transistors run out of headroom.
+            // This is where a 303 gets its growl at high resonance rather than
+            // simply whistling.
+            const float fb = softClip(y4 * mLadderDrive) * mLadderInv;
+            const float u1 = x - k * fb;
 
-         v = Gr * (y2 - mZ[2]);
-         const float y3 = v + mZ[2];
-         mZ[2] = y3 + v;
+            float v = G1 * (u1 - z[0]);
+            const float y1 = v + z[0];
+            z[0] = y1 + v;
 
-         v = Gr * (y3 - mZ[3]);
-         const float y = v + mZ[3];
-         mZ[3] = y + v;
+            v = Gr * (y1 - z[1]);
+            const float y2 = v + z[1];
+            z[1] = y2 + v;
 
-         // ------------------------------------------------------- VCA + out
-         float out = y * mVcaEnv;
+            v = Gr * (y2 - z[2]);
+            const float y3 = v + z[2];
+            z[2] = y3 + v;
 
-         out = mDriveStage.tick(out);
-         out = mTone.tick(out);
+            v = Gr * (y3 - z[3]);
+            const float y = v + z[3];
+            z[3] = y + v;
 
-         // The Muffler goes last, after the drive stage, and that is a
-         // deliberate departure from where Whittle draws it.
-         //
-         // On a Devil Fish the Muffler is on the amplifier's output because
-         // that *is* the output -- there is nothing after it. This plugin has a
-         // drive stage the machine does not have, and putting the Muffler in
-         // front of it erased the Muffler completely: the drive's own clipper
-         // is far harder, so it simply re-flattened whatever shape the Muffler
-         // had made. Measured, the spectral centroid moved by 0.0 % at every
-         // setting. Last in the chain, the Muffler is the final clipper, which
-         // is the position it occupies on the hardware.
-         //
-         // It is linear below its knee, so Off and a quiet signal are both
-         // untouched and a stock preset is bit-for-bit what it was.
-         if (mMufflerKnee > 0.0f)
-            out = softKnee(out, mMufflerKnee) * mMufflerMakeup;
+            // ----------------------------------------------------- VCA + out
+            float out = y * mVcaEnv;
 
-         // What Filter FM reads: the amplifier's output after the Muffler, as
-         // Whittle specifies.
-         mLastOut = clampv(out, -4.0f, 4.0f);
+            out = path.drive.tick(out);
+            out = path.tone.tick(out);
 
-         // The last line of defence, and only that: the amplifier, the drive
-         // stage and the Muffler each bound their own output, so at any
-         // setting anybody would use this clamp never touches the signal --
-         // the whole factory library renders bit for bit the same with it as
-         // without it.
-         //
-         // What it is here for is the corner where Filter FM is feeding the
-         // amplifier's output back into the cutoff at maximum with Res Range
-         // past oscillation: that path is a resonant loop, its peak moves
-         // chaotically with any change anywhere, and it had been sitting a
-         // hundredth of a decibel under the plugin's own bound by luck rather
-         // than by construction. A host is entitled to a signal inside
-         // +/-1 and this is what guarantees it.
-         out = clampv(mDcBlock.tick(out) * mParams.gain, -1.0f, 1.0f);
+            // The Muffler goes last, after the drive stage, and that is a
+            // deliberate departure from where Whittle draws it.
+            //
+            // On a Devil Fish the Muffler is on the amplifier's output because
+            // that *is* the output -- there is nothing after it. This plugin
+            // has a drive stage the machine does not have, and putting the
+            // Muffler in front of it erased the Muffler completely: the drive's
+            // own clipper is far harder, so it simply re-flattened whatever
+            // shape the Muffler had made. Measured, the spectral centroid moved
+            // by 0.0 % at every setting. Last in the chain, the Muffler is the
+            // final clipper, which is the position it occupies on the hardware.
+            //
+            // It is linear below its knee, so Off and a quiet signal are both
+            // untouched and a stock preset is bit-for-bit what it was.
+            if (mMufflerKnee > 0.0f)
+               out = softKnee(out, mMufflerKnee) * mMufflerMakeup;
 
-         outL[i + s] = out;
-         outR[i + s] = out;
+            // What Filter FM reads: the amplifier's output after the Muffler,
+            // as Whittle specifies.
+            path.lastOut = clampv(out, -4.0f, 4.0f);
+
+            // The last line of defence, and only that: the amplifier, the drive
+            // stage and the Muffler each bound their own output, so at any
+            // setting anybody would use this clamp never touches the signal --
+            // the whole factory library renders bit for bit the same with it
+            // as without it.
+            //
+            // What it is here for is the corner where Filter FM is feeding the
+            // amplifier's output back into the cutoff at maximum with Res Range
+            // past oscillation: that path is a resonant loop, its peak moves
+            // chaotically with any change anywhere, and it had been sitting a
+            // hundredth of a decibel under the plugin's own bound by luck
+            // rather than by construction. A host is entitled to a signal
+            // inside +/-1 and this is what guarantees it.
+            out = clampv(path.dcBlock.tick(out) * mParams.gain, -1.0f, 1.0f);
+
+            (p == 0 ? outL : outR)[i + s] = out;
+         }
+         if (!mStereo)
+            outR[i + s] = outL[i + s];
       }
 
       i += n;
+   }
+}
+
+// ------------------------------------------------------------ the oscillator
+
+void AcidEngine::setUserTable(const Wavetable *table) {
+   mUserTable = table;
+   if (mParams.wavetable == kTableUser)
+      mTable = mUserTable && !mUserTable->empty() ? mUserTable : &builtinTable(0);
+}
+
+float AcidEngine::voiceSample(int v, float dt, float aux) {
+   float &phase = mPhase[v];
+   phase += dt;
+   if (phase >= 1.0f)
+      phase -= 1.0f;
+
+   switch (mParams.waveform) {
+   case kWaveSquare: {
+      float t2 = phase + 0.5f;
+      if (t2 >= 1.0f)
+         t2 -= 1.0f;
+      float osc = phase < 0.5f ? 1.0f : -1.0f;
+      osc += polyBlep(phase, dt);
+      osc -= polyBlep(t2, dt);
+      return osc;
+   }
+   case kWavePulse: {
+      float t2 = phase - mPulseWidth;
+      if (t2 < 0.0f)
+         t2 += 1.0f;
+      float osc = phase < mPulseWidth ? 1.0f : -1.0f;
+      osc += polyBlep(phase, dt);
+      osc -= polyBlep(t2, dt);
+      return osc;
+   }
+   case kWaveSine: {
+      // Phase distortion: the cycle's first half is run through in `knee` of
+      // it and the second half in the rest. Two corners, at the wrap and at
+      // the knee, with the same change of slope.
+      //
+      // Lobes of unequal width leave an offset, (2 / pi) (1 - 2 knee), which
+      // is taken out here rather than left for the DC blocker at the end: in
+      // front of the ladder it would move where the feedback saturates. The
+      // result is scaled back to a peak of 1.
+      const float knee = mSineKnee;
+      const float warped = phase < knee ? 0.5f * phase / knee
+                                        : 0.5f + 0.5f * (phase - knee) / (1.0f - knee);
+      float y = (sin2piFast(warped) + mSineOffset) * mSineScale;
+      const float bend = kPi * (1.0f / knee - 1.0f / (1.0f - knee)) * mSineScale;
+      if (bend > 0.0f) {
+         float tk = phase - knee;
+         if (tk < 0.0f)
+            tk += 1.0f;
+         y += bend * dt * (polyBlamp(phase, dt) + polyBlamp(tk, dt));
+      }
+      return y;
+   }
+   case kWaveTriangle: {
+      // Rises to its apex and falls back, with a corner at each end: a
+      // bottom one at the wrap and a top one at the apex.
+      const float apex = mTriApex;
+      float y = phase < apex ? -1.0f + 2.0f * phase / apex
+                             : 1.0f - 2.0f * (phase - apex) / (1.0f - apex);
+      const float bend = 2.0f / apex + 2.0f / (1.0f - apex);
+      float ta = phase - apex;
+      if (ta < 0.0f)
+         ta += 1.0f;
+      y += bend * dt * (polyBlamp(phase, dt) - polyBlamp(ta, dt));
+      return y;
+   }
+   case kWaveWavetable:
+      return mTable->sample(phase, mParams.wtPosition, aux);
+   case kWaveNoise: {
+      // White noise, held for longer as Noise Grain rises: at zero it is a new
+      // value every sample, at the top one per cycle of the note, which
+      // pitches it. In between it is coarse-grained noise that follows the keyboard.
+      float &hold = mNoisePhase[v];
+      hold += aux;
+      if (hold >= 1.0f) {
+         hold -= static_cast<float>(static_cast<int>(hold));
+         uint32_t &x = mNoiseState[v];
+         x ^= x << 13;
+         x ^= x >> 17;
+         x ^= x << 5;
+         mNoiseHold[v] = static_cast<float>(x >> 8) * (2.0f / 16777216.0f) - 1.0f;
+      }
+      return mNoiseHold[v];
+   }
+   case kWaveSawtooth:
+   default:
+      // A falling ramp: the integrator runs down and Q8 snaps it back.
+      return 1.0f - 2.0f * phase + polyBlep(phase, dt);
+   }
+}
+
+void AcidEngine::drawCycle(const EngineParams &p, const Wavetable *table, float *out, int n) {
+   if (!out || n <= 0)
+      return;
+   const int waveform = p.waveform;
+   const float width = clampv(p.pulseWidth, kPulseNarrowest, 0.5f);
+   const float apex = 0.5f - (0.5f - kTriangleApexMin) * clampv(p.triSkew, 0.0f, 1.0f);
+   const float knee = 0.5f - (0.5f - kSineKneeMin) * clampv(p.sineBend, 0.0f, 1.0f);
+   if (!table || table->empty())
+      table = &builtinTable(0);
+   // The noise's picture is the same every time: a sound that changes with
+   // every frame would only make the view flicker.
+   uint32_t noise = 0x303Au;
+   float held = 0.0f;
+   float hold = 1.0f;
+   const float holdStep = std::pow(1.0f / static_cast<float>(n), clampv(p.noiseGrain, 0.0f, 1.0f));
+   for (int i = 0; i < n; ++i) {
+      const float phase = static_cast<float>(i) / static_cast<float>(n);
+      float y = 0.0f;
+      switch (waveform) {
+      case kWaveSquare:
+         y = (phase < 0.5f ? 1.0f : -1.0f) * kSquareLevel;
+         break;
+      case kWavePulse:
+         // Drawn about its mean, which is where the droop puts it.
+         y = ((phase < width ? 1.0f : -1.0f) - (2.0f * width - 1.0f)) * kSquareLevel;
+         break;
+      case kWaveSine: {
+         const float warped =
+            phase < knee ? 0.5f * phase / knee : 0.5f + 0.5f * (phase - knee) / (1.0f - knee);
+         const float offset = (2.0f / kPi) * (1.0f - 2.0f * knee);
+         y = (sin2piFast(warped) + offset) / (1.0f + offset);
+         break;
+      }
+      case kWaveTriangle:
+         y = phase < apex ? -1.0f + 2.0f * phase / apex
+                          : 1.0f - 2.0f * (phase - apex) / (1.0f - apex);
+         break;
+      case kWaveWavetable:
+         y = table->sample(phase, p.wtPosition, 0.0f);
+         break;
+      case kWaveNoise:
+         hold += holdStep;
+         if (hold >= 1.0f) {
+            hold -= static_cast<float>(static_cast<int>(hold));
+            noise ^= noise << 13;
+            noise ^= noise >> 17;
+            noise ^= noise << 5;
+            held = static_cast<float>(noise >> 8) * (2.0f / 16777216.0f) - 1.0f;
+         }
+         y = held;
+         break;
+      case kWaveSawtooth:
+      default:
+         y = 1.0f - 2.0f * phase;
+         break;
+      }
+      out[i] = y;
    }
 }
 

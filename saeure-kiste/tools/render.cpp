@@ -74,6 +74,8 @@ const char *dlerrorCompat() { return "see GetLastError()"; }
 #include "saeurekiste.h"
 
 #include <filesystem>
+#include <fstream>
+#include "dsp/wavetable.h"
 
 // Setting an environment variable is spelled differently on each platform, and
 // the self-test needs it to point the preset directory somewhere disposable.
@@ -2215,9 +2217,12 @@ int runSelfTest(const clap_plugin_entry_t *entry, double sampleRate) {
             return static_cast<int64_t>(size);
          };
          check(st && st->save(plugin, &os), "state save, for the pattern map");
-         // The map is the 128 bytes before the chains, which are the last thing
-         // in the blob: a mode byte and a 16-bit repeat per pattern.
-         const size_t mapAt = static_cast<size_t>(kMaxPatterns) * 3 + 128;
+         // The map is the 128 bytes before the chains -- a mode byte and a
+         // 16-bit repeat per pattern -- and the chains are followed only by
+         // the wavetable section, which with no table loaded is a zero name
+         // length and a zero frame count.
+         const size_t tableSection = 2 * sizeof(uint32_t);
+         const size_t mapAt = static_cast<size_t>(kMaxPatterns) * 3 + 128 + tableSection;
          check(blob.size() > mapAt, "the blob is long enough to hold a map");
          // Kept so the plugin can be put back exactly as it was found. A map
          // left behind here would reach the checks further down, where every
@@ -5130,6 +5135,493 @@ int runSelfTest(const clap_plugin_entry_t *entry, double sampleRate) {
       check(finite, "the plugin stays finite with every drive model");
       check(bounded, "the plugin stays bounded with every drive model");
       check(audible, "the plugin makes sound with every drive model");
+   }
+
+   // --- the oscillator's additions: five waveforms, Shape, unison and the
+   // wavetables, none of which is on the machine.
+   {
+      using namespace saeurekiste;
+      // Every take starts from the oscillator's defaults, so a setting left
+      // behind by the take before cannot pass for the one under test.
+      auto note = [&](std::initializer_list<std::pair<clap_id, double>> set) {
+         gParamOverrides.clear();
+         gParamOverrides.emplace_back(kParamMode, static_cast<double>(kModeMidi));
+         for (uint32_t id : {kParamWaveform, kParamPulseWidth, kParamWtPosition, kParamTriSkew,
+                             kParamSineBend, kParamNoiseGrain, kParamWavetable,
+                             kParamUnisonVoices, kParamUnisonDetune, kParamUnisonSpread})
+            gParamOverrides.emplace_back(id, paramTable()[id].def);
+         for (const auto &kv : set)
+            gParamOverrides.push_back(kv);
+         plugin->reset(plugin);
+         const RenderResult r = renderPlugin(plugin, sampleRate, 512, 0.4, 0.2, 45, 0.6);
+         gParamOverrides.clear();
+         return r;
+      };
+      auto channelsEqual = [](const RenderResult &r) {
+         for (size_t i = 0; i + 1 < r.interleaved.size(); i += 2)
+            if (r.interleaved[i] != r.interleaved[i + 1])
+               return false;
+         return true;
+      };
+      // How much of one take is not a scaled copy of the other. See the
+      // Muffler's check, which this is the same measurement as.
+      auto residual = [](const RenderResult &a, const RenderResult &b) {
+         const size_t n = std::min(a.interleaved.size(), b.interleaved.size());
+         double num = 0.0, den = 0.0, sig = 0.0;
+         for (size_t i = 0; i < n; ++i) {
+            num += static_cast<double>(a.interleaved[i]) * b.interleaved[i];
+            den += static_cast<double>(a.interleaved[i]) * a.interleaved[i];
+            sig += static_cast<double>(b.interleaved[i]) * b.interleaved[i];
+         }
+         if (!(den > 0.0) || !(sig > 0.0))
+            return 0.0;
+         const double g = num / den;
+         double res = 0.0;
+         for (size_t i = 0; i < n; ++i) {
+            const double d = b.interleaved[i] - g * a.interleaved[i];
+            res += d * d;
+         }
+         return std::sqrt(res / sig);
+      };
+
+      // Each added waveform's own control, and a value for it from 0 (its
+      // default end) to 1 (the far end). Pulse Width runs from 50 % down.
+      auto controlOf = [](int wave) -> uint32_t {
+         switch (wave) {
+         case kWavePulse:
+            return kParamPulseWidth;
+         case kWaveWavetable:
+            return kParamWtPosition;
+         case kWaveTriangle:
+            return kParamTriSkew;
+         case kWaveSine:
+            return kParamSineBend;
+         case kWaveNoise:
+            return kParamNoiseGrain;
+         default:
+            return 0xFFFFFFFFu;
+         }
+      };
+      auto amountFor = [](uint32_t id, double amount) {
+         return id == kParamPulseWidth ? 50.0 - 47.0 * amount : amount;
+      };
+      const uint32_t kControls[] = {kParamPulseWidth, kParamWtPosition, kParamTriSkew,
+                                    kParamSineBend, kParamNoiseGrain};
+
+      // Every waveform at the ends and the middle of its control, with one
+      // voice and with the most: finite, inside the host's bound, and making a
+      // sound.
+      bool finite = true, bounded = true, audible = true;
+      for (int wave = 0; wave < kNumWaveforms; ++wave)
+         for (double shape : {0.0, 0.5, 1.0})
+            for (double voices : {1.0, 16.0}) {
+               const uint32_t control = controlOf(wave) == 0xFFFFFFFFu ? kParamWtPosition
+                                                                       : controlOf(wave);
+               const RenderResult r = note({{kParamWaveform, static_cast<double>(wave)},
+                                            {control, amountFor(control, shape)},
+                                            {kParamWavetable, static_cast<double>(kTableSync)},
+                                            {kParamUnisonVoices, voices},
+                                            {kParamUnisonDetune, 100.0},
+                                            {kParamUnisonSpread, 1.0}});
+               finite = finite && !r.sawNonFinite;
+               bounded = bounded && r.peak <= 1.001f;
+               audible = audible && r.peak > 0.01f;
+            }
+      check(finite, "every waveform stays finite across its control, with one voice and sixteen");
+      check(bounded, "every waveform stays bounded across its control, with one voice and sixteen");
+      check(audible, "every waveform makes a sound across its control, with one voice and sixteen");
+
+      // The five controls belong to the additions. The machine's two
+      // waveforms ignore all of them.
+      const RenderResult saw0 = note({});
+      const RenderResult saw1 = note({{kParamPulseWidth, 3.0},
+                                      {kParamWtPosition, 1.0},
+                                      {kParamTriSkew, 1.0},
+                                      {kParamSineBend, 1.0},
+                                      {kParamNoiseGrain, 1.0}});
+      check(saw0.interleaved == saw1.interleaved,
+            "none of the added waveforms' controls touches the sawtooth");
+      const RenderResult sq0 = note({{kParamWaveform, kWaveSquare}});
+      const RenderResult sq1 = note({{kParamWaveform, kWaveSquare},
+                                     {kParamPulseWidth, 3.0},
+                                     {kParamWtPosition, 1.0},
+                                     {kParamTriSkew, 1.0},
+                                     {kParamSineBend, 1.0},
+                                     {kParamNoiseGrain, 1.0}});
+      check(sq0.interleaved == sq1.interleaved,
+            "none of the added waveforms' controls touches the square");
+
+      // And each added waveform listens to its own control only, so a lane
+      // automating one cannot move another when the waveform changes.
+      bool ownOnly = true;
+      for (int wave : {kWaveSine, kWaveTriangle, kWavePulse, kWaveWavetable, kWaveNoise}) {
+         const RenderResult plain = note({{kParamWaveform, static_cast<double>(wave)}});
+         RenderResult moved;
+         {
+            gParamOverrides.clear();
+            gParamOverrides.emplace_back(kParamMode, static_cast<double>(kModeMidi));
+            for (uint32_t id : {kParamPulseWidth, kParamWtPosition, kParamTriSkew,
+                                kParamSineBend, kParamNoiseGrain, kParamWavetable,
+                                kParamUnisonVoices, kParamUnisonDetune, kParamUnisonSpread})
+               gParamOverrides.emplace_back(id, paramTable()[id].def);
+            gParamOverrides.emplace_back(kParamWaveform, static_cast<double>(wave));
+            for (uint32_t id : kControls)
+               if (id != controlOf(wave))
+                  gParamOverrides.emplace_back(id, amountFor(id, 1.0));
+            plugin->reset(plugin);
+            moved = renderPlugin(plugin, sampleRate, 512, 0.4, 0.2, 45, 0.6);
+            gParamOverrides.clear();
+         }
+         if (moved.interleaved != plain.interleaved)
+            ownOnly = false;
+      }
+      check(ownOnly, "each added waveform ignores the other waveforms' controls");
+
+      // Pulse is the square with its width freed, so at 50 % it is the
+      // square -- to rounding, because its falling edge is found by a
+      // subtraction where the square's is found by an addition.
+      const RenderResult pulse0 = note({{kParamWaveform, kWavePulse}, {kParamPulseWidth, 50.0}});
+      float worst = 0.0f;
+      for (size_t i = 0; i < std::min(pulse0.interleaved.size(), sq0.interleaved.size()); ++i)
+         worst = std::max(worst, std::fabs(pulse0.interleaved[i] - sq0.interleaved[i]));
+      std::printf("       Pulse at 50 %% against the square: largest difference %.2e\n",
+                  static_cast<double>(worst));
+      check(worst < 1.0e-4f, "Pulse at 50 % width is the square");
+
+      // And each control does something you can hear on its own waveform:
+      // more than a change of level.
+      bool shapes = true;
+      for (int wave : {kWaveSine, kWaveTriangle, kWavePulse, kWaveWavetable, kWaveNoise}) {
+         const uint32_t control = controlOf(wave);
+         const RenderResult a = note({{kParamWaveform, static_cast<double>(wave)},
+                                      {control, amountFor(control, 0.0)}});
+         const RenderResult b = note({{kParamWaveform, static_cast<double>(wave)},
+                                      {control, amountFor(control, 0.9)}});
+         const double res = residual(a, b);
+         std::printf("       %s 0 against 0.9: residual %.3f\n", paramTable()[control].name, res);
+         shapes = shapes && res > 0.05;
+      }
+      check(shapes, "each added waveform's control reshapes it");
+
+      // Each built-in table is its own table.
+      bool tablesDiffer = true;
+      RenderResult previous;
+      for (int t = 0; t < kNumBuiltinTables; ++t) {
+         const RenderResult r = note({{kParamWaveform, kWaveWavetable},
+                                      {kParamWavetable, static_cast<double>(t)},
+                                      {kParamWtPosition, 0.6}});
+         if (t > 0 && residual(previous, r) < 0.05)
+            tablesDiffer = false;
+         previous = r;
+      }
+      check(tablesDiffer, "no two neighbouring built-in tables sound alike");
+
+      // Unison. One voice is the machine whatever Detune and Spread say, and
+      // a stack with no spread is still mono; with spread the channels part.
+      const RenderResult one = note({{kParamUnisonVoices, 1.0},
+                                     {kParamUnisonDetune, 100.0},
+                                     {kParamUnisonSpread, 1.0}});
+      check(one.interleaved == saw0.interleaved,
+            "one voice is the plain oscillator whatever Detune and Spread are set to");
+      check(channelsEqual(one), "one voice is mono");
+      const RenderResult stackMono = note({{kParamUnisonVoices, 8.0},
+                                           {kParamUnisonSpread, 0.0}});
+      check(channelsEqual(stackMono), "a stack with no Spread is mono");
+      check(residual(saw0, stackMono) > 0.05, "a stack of eight is not one voice");
+      const RenderResult stackWide = note({{kParamUnisonVoices, 8.0},
+                                           {kParamUnisonSpread, 1.0}});
+      double ll = 0.0, rr = 0.0, lr = 0.0;
+      for (size_t i = 0; i + 1 < stackWide.interleaved.size(); i += 2) {
+         const double l = stackWide.interleaved[i], r = stackWide.interleaved[i + 1];
+         ll += l * l;
+         rr += r * r;
+         lr += l * r;
+      }
+      const double corr = ll > 0.0 && rr > 0.0 ? lr / std::sqrt(ll * rr) : 1.0;
+      std::printf("       eight voices at full Spread: L/R correlation %.3f\n", corr);
+      check(corr < 0.9, "Spread parts the two channels");
+      check(stackWide.rms > stackMono.rms * 0.7 && stackWide.rms < stackMono.rms * 1.4,
+            "spreading a stack does not change its level much");
+
+      // The wavetables are band-limited per octave: a high note from the
+      // harshest frame of the harshest table has nothing but its own
+      // harmonics in it. Measured on the table itself, because through the
+      // plugin the ladder would hide what folded back.
+      {
+         const Wavetable &sync = builtinTable(kTableSync);
+         const double rate = 48000.0, hz = 2950.0;
+         const int n = 9600;
+         std::vector<double> x(static_cast<size_t>(n));
+         double ph = 0.0;
+         const float level = Wavetable::levelFor(static_cast<float>(hz), static_cast<float>(rate));
+         for (int i = 0; i < n; ++i) {
+            x[static_cast<size_t>(i)] = sync.sample(static_cast<float>(ph), 1.0f, level);
+            ph += hz / rate;
+            ph -= std::floor(ph);
+         }
+         // Energy at the harmonics against energy everywhere else, by a plain
+         // DFT on a Hann window, 5 Hz per bin.
+         double inHarm = 0.0, outHarm = 0.0;
+         for (int bin = 1; bin < n / 2; ++bin) {
+            const double f = bin * rate / n;
+            double re = 0.0, im = 0.0;
+            for (int i = 0; i < n; ++i) {
+               const double w = 0.5 - 0.5 * std::cos(2.0 * kPi * i / (n - 1));
+               const double a = 2.0 * kPi * bin * i / n;
+               re += w * x[static_cast<size_t>(i)] * std::cos(a);
+               im -= w * x[static_cast<size_t>(i)] * std::sin(a);
+            }
+            const double e = re * re + im * im;
+            const double nearest = std::round(f / hz) * hz;
+            if (std::fabs(f - nearest) < 15.0 && nearest > 0.0)
+               inHarm += e;
+            else
+               outHarm += e;
+         }
+         const double db = 10.0 * std::log10((outHarm + 1e-30) / (inHarm + 1e-30));
+         std::printf("       Sync table at 2950 Hz: %.1f dB of energy off the harmonics\n", db);
+         check(db < -60.0, "the wavetables do not alias");
+      }
+
+      // A table in the stored form survives base64 exactly.
+      {
+         std::vector<int16_t> samples(static_cast<size_t>(3) * kWtSourceLen);
+         for (size_t i = 0; i < samples.size(); ++i)
+            samples[i] = static_cast<int16_t>((i * 7919u) & 0xFFFF);
+         std::vector<int16_t> back;
+         check(decodeTable(encodeTable(samples), back) && back == samples,
+               "a table survives its text form exactly");
+         check(!decodeTable("not*base64", back), "and text that is not one is refused");
+      }
+
+      // WAV import: the frame length from the clm chunk, from the 2048
+      // convention, or a single cycle; three sample formats; and a file that
+      // is not a table is refused rather than loaded as noise.
+      {
+         // One fixed folder, overwritten in place on every run and never
+         // deleted: nothing in the suite that is new removes files.
+         const std::string dir =
+            (std::filesystem::temp_directory_path() / "saeurekiste-wavetable-test").string();
+         std::filesystem::create_directories(dir);
+         auto writeWav = [&](const std::string &name, int format, int bits, int channels,
+                             const std::vector<double> &mono, const std::string &clm) {
+            std::string body;
+            auto put32 = [&](std::string &o, uint32_t v) {
+               for (int k = 0; k < 4; ++k)
+                  o.push_back(static_cast<char>((v >> (8 * k)) & 0xFF));
+            };
+            auto put16 = [&](std::string &o, uint16_t v) {
+               o.push_back(static_cast<char>(v & 0xFF));
+               o.push_back(static_cast<char>(v >> 8));
+            };
+            std::string fmt;
+            put16(fmt, static_cast<uint16_t>(format));
+            put16(fmt, static_cast<uint16_t>(channels));
+            put32(fmt, 48000);
+            put32(fmt, 48000u * channels * bits / 8);
+            put16(fmt, static_cast<uint16_t>(channels * bits / 8));
+            put16(fmt, static_cast<uint16_t>(bits));
+            std::string data;
+            for (double v : mono)
+               for (int c = 0; c < channels; ++c) {
+                  const double s = c == 0 ? v : -v; // the right channel must be ignored
+                  if (format == 3) {
+                     const float f = static_cast<float>(s);
+                     uint32_t u;
+                     std::memcpy(&u, &f, 4);
+                     put32(data, u);
+                  } else if (bits == 16) {
+                     put16(data, static_cast<uint16_t>(static_cast<int16_t>(std::lround(s * 32000.0))));
+                  } else {
+                     const int32_t x = static_cast<int32_t>(std::lround(s * 8000000.0));
+                     data.push_back(static_cast<char>(x & 0xFF));
+                     data.push_back(static_cast<char>((x >> 8) & 0xFF));
+                     data.push_back(static_cast<char>((x >> 16) & 0xFF));
+                  }
+               }
+            body += "WAVE";
+            body += "fmt ";
+            put32(body, static_cast<uint32_t>(fmt.size()));
+            body += fmt;
+            if (!clm.empty()) {
+               body += "clm ";
+               put32(body, static_cast<uint32_t>(clm.size()));
+               body += clm;
+               if (clm.size() & 1)
+                  body.push_back('\0');
+            }
+            body += "data";
+            put32(body, static_cast<uint32_t>(data.size()));
+            body += data;
+            std::string file = "RIFF";
+            put32(file, static_cast<uint32_t>(body.size()));
+            file += body;
+            const std::string path = dir + "/" + name;
+            std::ofstream(path, std::ios::binary).write(file.data(), static_cast<std::streamsize>(file.size()));
+            return path;
+         };
+         // Two frames of 256, which only the clm chunk can tell apart from one
+         // cycle of 512: a sine, then a sine an octave up.
+         std::vector<double> twoFrames;
+         for (int f = 0; f < 2; ++f)
+            for (int i = 0; i < 256; ++i)
+               twoFrames.push_back(0.8 * std::sin(2.0 * kPi * (f + 1) * i / 256.0));
+         std::vector<int16_t> stored;
+         int frames = 0;
+         std::string err;
+         const bool okClm = readWavetableWav(
+            writeWav("clm.wav", 1, 16, 2, twoFrames, "<!>256 10000000 wavetable"), stored,
+            frames, err);
+         check(okClm && frames == 2 && stored.size() == 2u * kWtSourceLen,
+               "a WAV's clm chunk says how long a frame is");
+         // Frame 2 is the octave: correlate it with one.
+         double c2 = 0.0, e2 = 0.0;
+         if (okClm)
+            for (int i = 0; i < kWtSourceLen; ++i) {
+               const double ref = std::sin(2.0 * kPi * 2.0 * i / kWtSourceLen);
+               const double v = stored[static_cast<size_t>(kWtSourceLen + i)];
+               c2 += ref * v;
+               e2 += v * v;
+            }
+         check(e2 > 0.0 && c2 / std::sqrt(e2 * kWtSourceLen * 0.5) > 0.99,
+               "and the frames come out in order, at their own pitch, from the left channel");
+
+         // 24-bit, one odd-length single cycle: a ramp of 600 samples.
+         std::vector<double> ramp;
+         for (int i = 0; i < 600; ++i)
+            ramp.push_back(0.9 * (1.0 - 2.0 * i / 600.0));
+         check(readWavetableWav(writeWav("ramp.wav", 1, 24, 1, ramp, ""), stored, frames, err) &&
+                  frames == 1,
+               "a short file is one single cycle of whatever length");
+
+         // Float, 2048-sample frames by convention, more of them than fit.
+         std::vector<double> many;
+         for (int f = 0; f < 80; ++f)
+            for (int i = 0; i < 2048; ++i)
+               many.push_back(0.5 * std::sin(2.0 * kPi * i / 2048.0) * (f + 1) / 80.0);
+         check(readWavetableWav(writeWav("many.wav", 3, 32, 1, many, ""), stored, frames, err) &&
+                  frames == kWtMaxFrames,
+               "a long table is thinned to the most frames a table holds");
+
+         std::vector<double> silence(4096, 0.0);
+         check(!readWavetableWav(writeWav("silent.wav", 1, 16, 1, silence, ""), stored, frames,
+                                 err),
+               "a silent WAV is refused");
+         {
+            const std::string bogus = dir + "/bogus.wav";
+            std::ofstream(bogus, std::ios::binary) << "this is not a wave file at all";
+            check(!readWavetableWav(bogus, stored, frames, err), "a file that is not a WAV is refused");
+         }
+
+         // The user's wavetable folder, as the selector lists it: subfolders
+         // before files at every level, alphabetical whatever the case, folders
+         // with nothing in them and hidden files left out, and the relative
+         // path kept so the table's name finds its row again.
+         {
+            const std::string root = dir + "/folder";
+            for (const char *sub : {"", "/Pads", "/Pads/Deep", "/Empty", "/Empty2/inner"})
+               std::filesystem::create_directories(root + sub);
+            const std::vector<double> cyc(256, 0.5);
+            for (const char *f : {"/b.wav", "/A.WAV", "/.hidden.wav", "/Pads/x.wav",
+                                  "/Pads/Deep/y.wav"})
+               writeWav(std::string("folder") + f, 1, 16, 1, cyc, "");
+            std::ofstream(root + "/notes.txt") << "not a table";
+            const std::vector<TableFile> list = listWavetableFolder(root);
+            std::string seen;
+            for (const TableFile &f : list)
+               seen += (f.folder ? "[" : "") + f.label + (f.folder ? "]" : "") +
+                       std::to_string(f.depth) + " ";
+            std::printf("       folder lists as: %s\n", seen.c_str());
+            check(seen == "[Pads]0 [Deep]1 y2 x1 A0 b0 ",
+                  "the wavetable folder lists as a tree, folders first, empty ones left out");
+            check(list.size() > 2 && list[2].path == "Pads/Deep/y.wav" &&
+                     tableNameFor(list[2].path) == "Pads/Deep/y",
+                  "a table in the folder is named by its path");
+            check(tableNameFor("odd.name/file") == "odd.name/file",
+                  "a dot in a folder name is not an extension");
+            check(listWavetableFolder(dir + "/no-such-folder").empty(),
+                  "a missing folder lists as empty");
+            const std::string wt = userWavetableDir();
+            check(wt.empty() || (wt.find("SaeureKiste") != std::string::npos &&
+                                 wt.size() > 10 && wt.compare(wt.size() - 10, 10, "wavetables") == 0),
+                  "the wavetable folder sits beside the presets");
+         }
+
+         // The user's table travels in a preset and in the project. Loaded from
+         // a preset file it is what the Wavetable waveform plays, and a state
+         // saved with it and loaded into a second instance plays the same
+         // samples.
+         const auto *pl = static_cast<const clap_plugin_preset_load_t *>(
+            plugin->get_extension(plugin, CLAP_EXT_PRESET_LOAD));
+         const auto *st = static_cast<const clap_plugin_state_t *>(
+            plugin->get_extension(plugin, CLAP_EXT_STATE));
+         std::vector<int16_t> table(static_cast<size_t>(2) * kWtSourceLen);
+         for (int i = 0; i < kWtSourceLen; ++i) {
+            const double t = static_cast<double>(i) / kWtSourceLen;
+            table[static_cast<size_t>(i)] =
+               static_cast<int16_t>(std::lround(30000.0 * std::sin(2.0 * kPi * 3.0 * t)));
+            table[static_cast<size_t>(kWtSourceLen + i)] =
+               static_cast<int16_t>(std::lround(30000.0 * std::sin(2.0 * kPi * 7.0 * t)));
+         }
+         const std::string presetPath = dir + "/table.saeurekiste";
+         std::ofstream(presetPath, std::ios::binary)
+            << "# preset\nformat = 1\nname = Table Test\nmode = MIDI\nwaveform = Wavetable\n"
+               "wavetable = User\nwt_position = 50\ncutoff = 2000\n"
+            << "user_table_name = Odd Harmonics\nuser_table = 2 " << encodeTable(table) << "\n";
+         check(pl && pl->from_location(plugin, CLAP_PRESET_DISCOVERY_LOCATION_FILE,
+                                       presetPath.c_str(), nullptr),
+               "a preset carrying a user table loads");
+         plugin->reset(plugin);
+         const RenderResult userTake = renderPlugin(plugin, sampleRate, 512, 0.4, 0.2, 45, 0.6);
+
+         // Saved now, while Table still says User.
+         std::string blob;
+         clap_ostream_t os{};
+         os.ctx = &blob;
+         os.write = [](const clap_ostream_t *o, const void *buf, uint64_t size) -> int64_t {
+            static_cast<std::string *>(o->ctx)->append(static_cast<const char *>(buf), size);
+            return static_cast<int64_t>(size);
+         };
+         check(st && st->save(plugin, &os) &&
+                  blob.find("Odd Harmonics") != std::string::npos,
+               "the project's state carries the user table");
+
+         gParamOverrides.clear();
+         gParamOverrides.emplace_back(kParamWavetable, static_cast<double>(kTableAnalog));
+         plugin->reset(plugin);
+         const RenderResult analogTake = renderPlugin(plugin, sampleRate, 512, 0.4, 0.2, 45, 0.6);
+         gParamOverrides.clear();
+         check(residual(userTake, analogTake) > 0.05, "and it is the table that plays");
+
+         const clap_plugin_t *second = createPlugin(entry);
+         bool same = false;
+         if (second && st) {
+            second->activate(second, sampleRate, 32, 4096);
+            const auto *st2 = static_cast<const clap_plugin_state_t *>(
+               second->get_extension(second, CLAP_EXT_STATE));
+            struct Reader {
+               const std::string *data;
+               size_t pos;
+            } rd{&blob, 0};
+            clap_istream_t is{};
+            is.ctx = &rd;
+            is.read = [](const clap_istream_t *s, void *buf, uint64_t size) -> int64_t {
+               auto *r = static_cast<Reader *>(s->ctx);
+               const size_t n = std::min<size_t>(size, r->data->size() - r->pos);
+               std::memcpy(buf, r->data->data() + r->pos, n);
+               r->pos += n;
+               return static_cast<int64_t>(n);
+            };
+            if (st2 && st2->load(second, &is)) {
+               second->reset(second);
+               const RenderResult again = renderPlugin(second, sampleRate, 512, 0.4, 0.2, 45, 0.6);
+               same = again.interleaved == userTake.interleaved;
+            }
+            second->deactivate(second);
+            second->destroy(second);
+         }
+         check(same, "and a second instance loaded from it plays the same samples");
+      }
    }
 
    // --- preset packs. A folder of presets as one file, and back again.

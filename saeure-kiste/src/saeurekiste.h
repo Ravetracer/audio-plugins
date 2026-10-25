@@ -27,7 +27,7 @@ constexpr char kPluginName[] = "SäureKiste";
 // ~/.clap instead of having one of each spelling.
 constexpr char kPluginDirName[] = "SaeureKiste";
 constexpr char kPluginVendor[] = "Ravetracer";
-constexpr char kPluginVersion[] = "0.15.2";
+constexpr char kPluginVersion[] = "0.16.0";
 
 // Nothing else keeps the two version sites in step, and drift here is quiet.
 // The build fails if the version here and the one in CMakeLists.txt disagree.
@@ -64,6 +64,10 @@ const PresetContext &presetContext();
 
 std::string factoryPresetDir();
 std::string userPresetDir();
+// The user's wavetable folder: "wavetables" beside the preset directory, so
+// ~/.config/SaeureKiste/wavetables or %APPDATA%\SaeureKiste\wavetables. Empty
+// when there is no user directory at all.
+std::string userWavetableDir();
 bool parsePreset(const char *text, size_t length, PresetData &out, std::string &error);
 bool parsePresetFile(const std::string &path, PresetData &out, std::string &error);
 std::string formatPreset(const PresetData &preset);

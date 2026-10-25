@@ -1,11 +1,84 @@
 # SäureKiste -- status
 
-Version 0.15.2. Linux and Windows, CLAP and VST3. 65 parameters, 30 presets,
-builds clean, self-test passes with no failures across 311 checks, and
-`tools/check-instances.sh` passes with two editors open at once.
+Version 0.16.0. Linux and Windows, CLAP and VST3. 74 parameters, 30 presets,
+builds clean, self-test passes with no failures across 344 checks on Linux and
+under wine, and `tools/check-instances.sh` passes with two editors open at once.
 
 Six of seven fixes were confirmed by backing the bug out and watching the suite
 fail; the seventh has no contract to assert. See `TODO.md` §3.
+
+0.16.0 gives the oscillator an experimental end. None of it is the machine's,
+and none of it moves the machine: every factory preset renders bit for bit what
+0.15.2 rendered at 44.1, 48 and 96 kHz.
+
+**Waveforms and their controls.** Sine, Triangle, Pulse, Wavetable and Noise
+are appended to Waveform (`WaveformKind` in `params.h`), so presets, blobs and
+automation of the first two are untouched. Each has a parameter of its own --
+Pulse Width, WT Position, Tri Skew, Sine Bend, Noise Grain -- rather than one
+Shape that meant something different per waveform: the first build had that,
+and in a DAW's list (the VST3 shows 70 plugin parameters and 2096 MIDI
+controller proxies) nobody could find "the pulse width", and a lane drawn for
+one waveform moved another after a switch. Each is glided separately, each
+waveform reads only its own, and the self-test asserts both. None touches the
+saw or the square. Pulse goes through the square's droop at the square's
+level, so at 50 % it is the square bit for bit. The triangle and the bent sine carry
+polyBLAMP corrections at their corners -- measured 12 to 15 dB less aliasing
+than without, sign checked by flipping it -- and the bent sine has its DC taken
+out in front of the ladder, where an offset would move the feedback's
+saturation point.
+
+**Wavetables** (`dsp/wavetable.{h,cpp}`). Eight built-in tables of 32 frames,
+generated at first use as spectra or as 8x-oversampled waveforms reduced to 511
+harmonics, and shared by every instance because nothing in them changes. Each
+frame is stored at ten band-limited levels, one per octave, crossfaded per
+voice; the levels are at least 512 samples long, because at 128 the linear
+interpolation's images came back 45 dB down. The check measures -68.7 dB off
+the harmonics on the Sync table's harshest frame at 2950 Hz. A WAV is read
+with its frame length from the `clm ` chunk, else 2048, else one single cycle
+shorter than 4096; up to 64 frames, thinned evenly from longer files.
+
+**The user wavetable folder** is `userWavetableDir()`: "wavetables" beside the
+user preset directory, made when the selector first opens.
+`listWavetableFolder()` walks it into a tree -- subfolders before files,
+case-insensitive, hidden entries and folders with no WAV beneath them left
+out, eight levels deep at most -- and a table read from it is named by its
+relative path without the extension, which is how the list and the chip's
+arrows find the one playing again. The Table chip's name opens the selector
+(`TableRow`s from the plugin plus the window's own Load file... and Open
+folder); it stays open while tables are picked, so they can be auditioned. The
+arrows and the wheel step through the built-in tables and then the folder's
+files in list order. Which user file is playing is not a parameter -- the list
+is whatever is on disk -- but the table itself travels in the project and the
+preset as before. The user table is stored as int16 cycles of 1024 samples and built from
+exactly those, so a reloaded project plays the same samples: state version 5
+appends it after the chains, and a preset carries it as `user_table_name` and
+`user_table = <frames> <base64>` when Table is User. A preset without one
+leaves the loaded table alone. The plugin owns the tables on the main thread
+and hands the audio thread a pointer through a hazard slot
+(`publishUserTable()`), so no table is freed while it can be read.
+
+**Unison.** Voices (1-16), Detune and Spread, on a new UNISON panel at the head
+of the collapsible section. The engine's output half -- droop, ladder, drive,
+tone, DC blocker, Filter FM's feedback -- is now a `Path`, and a second one runs
+while there is more than one voice and any Spread, started as a copy of the
+first so it does not click in. The voices' channel weights sum to the mono
+stack. One voice is the plain oscillator whatever Detune and Spread say.
+
+**The display.** A two-column picture of the cycle sits where a knob would
+(`WindowSpec::waveViewParam`, the fork's own; the shared window is not
+touched), drawn by `AcidEngine::drawCycle()`, the same shape code the voice
+uses. It is filed under WT Position but edits whichever control the plugin's
+`windowWaveParam()` names for the current waveform: `cellAt()` and
+`cellRectFor()` translate, so drag, wheel, typing, reset and the help line all
+reach that parameter, and the label shows its name. It repaints on a key that
+includes the control's modulation, so it follows a host's modulator. The VCO panel is four columns and row 0
+still fits the window's width with 60 px to spare.
+
+Seven of the new checks were confirmed by putting the bug back: no
+band-limiting, no table in the state, no second path, a control leaking into
+the saw, a waveform hearing another's control, files listed before folders,
+and ABL's waveform mapped as a normalised sweep (which would now land on
+Noise).
 
 0.15.2 makes the continuous controls glide. Every one of them jumped straight
 to each new value, so host automation (a staircase) and a dragged knob (one

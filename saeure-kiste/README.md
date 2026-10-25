@@ -22,7 +22,14 @@ the Muffler, the soft attack, the volume envelope as a control, the three accent
 sweep speeds, and the widened ranges. Every one of them defaults to the stock
 circuit, so the plugin is a TB-303 until you ask it not to be.
 
-Sixty-three parameters, thirty presets.
+And it has an experimental end the machine never had: five more waveforms
+(sine, triangle, pulse, wavetable, noise), each with an automatable control of
+its own and a live display of the cycle the oscillator is making, eight
+built-in wavetables plus a folder of your own browsed as a tree, and **unison**
+of up to sixteen voices spread across the stereo field through a filter per
+side.
+
+Seventy-four parameters, all of them automatable, thirty presets.
 
 Not affiliated with or endorsed by Roland Corporation. *TB-303* is their
 trademark and is used here only to name what was modelled. Not affiliated with
@@ -79,7 +86,10 @@ says so in its own tooltip.
 
 | Control | On the machine | What it does |
 |---|---|---|
-| **Waveform** | S1 | Sawtooth or square. The square arrives at the filter 6.7 dB down, because on the hardware it does. |
+| **Waveform** | S1 | Sawtooth or square. The square arrives at the filter 6.7 dB down, because on the hardware it does. Sine, Triangle, Pulse, Wavetable and Noise come after them and are not the machine's. |
+| **Pulse Width / WT Position / Tri Skew / Sine Bend / Noise Grain** | -- | One control per added waveform, each its own automatable parameter. The oscillator display edits the one belonging to the selected waveform. None of them touches the saw or the square. |
+| **Table** | -- | Eight built-in wavetables, or User: a WAV from `~/.config/SaeureKiste/wavetables` (`%APPDATA%\SaeureKiste\wavetables` on Windows), picked in a tree that the chip opens. The table in use is saved in the project and in presets. |
+| **Voices / Detune / Spread** | -- | Unison, 1 to 16 voices. With Spread above zero each side gets its own ladder and drive. One voice is the machine. |
 | **Tuning** | VR2 | +/- 700 cents, which is the range the service notes give. |
 | **Cutoff** | VR3 | 100 Hz to 2.5 kHz. The centre is 500 Hz because the factory alignment procedure puts it there. |
 | **Resonance** | VR4 | Stops just below oscillation, because the machine does. |
@@ -352,15 +362,16 @@ played into it again sounds like what it came from.
 
 ### The collapsible half of the window
 
-The VCF MOD, SLIDE, VIBRATO and AMP panels, and the mods under them, sit behind
+The UNISON, VCF MOD, SLIDE, VIBRATO and AMP panels, and the mods under them, sit behind
 the **ADVANCED** button on the preset bar. They are the controls for tuning the
 engine rather than for playing it, so the window opens without them and grows
 when you ask for them. The window remembers which way it was left, per instance,
 in the plugin's state.
 
-What is left on the front of the window is the machine's own panel and nothing
-else: Waveform and Tuning, then Cutoff, Resonance, Env Mod, Decay and Accent in
-the order the hardware prints them, then the drive stage and the output.
+What is left on the front of the window is the machine's own panel, plus the
+oscillator's additions beside Waveform: Waveform and Table, the oscillator display,
+Tuning, then Cutoff, Resonance, Env Mod, Decay and Accent in the order the
+hardware prints them, then the drive stage and the output.
 
 ### RESET
 

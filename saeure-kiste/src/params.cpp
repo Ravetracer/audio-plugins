@@ -12,7 +12,12 @@ namespace saeurekiste {
 
 namespace {
 
-const char *const kWaveformNames[] = {"Sawtooth", "Square"};
+// A preset stores the *name*, so this list may not be reordered.
+const char *const kWaveformNames[] = {"Sawtooth", "Square",    "Sine", "Triangle",
+                                      "Pulse",    "Wavetable", "Noise"};
+// The order of BuiltinTable in dsp/wavetable.h, then the user's own.
+const char *const kWavetableNames[] = {"Analog", "PWM",  "Vocal",    "Additive", "Sync",
+                                       "FM",     "Fold", "Resonant", "User"};
 const char *const kModeNames[] = {"MIDI", "Sequencer", "Live"};
 const char *const kRateNames[] = {"1/32", "1/16T", "1/16", "1/8T", "1/8"};
 const char *const kScaleNames[] = {"Minor",  "Major",    "Minor Pent", "Major Pent",
@@ -54,7 +59,9 @@ const ParamDesc kParams[kNumParams] = {
         "outright: the saw swings 12 V to 5.5 V and the square 8 V to 5 V, so the "
         "square arrives at the filter 6.7 dB down. That level difference is part of "
         "how the two settings sound, and it is reproduced rather than normalised "
-        "away."),
+        "away. The other five are not on the machine: Sine, Triangle, Pulse, "
+        "Wavetable and Noise, each with a control of its own that the oscillator "
+        "display edits."),
    LIN(kParamTuning, "tuning", "Tuning", "VCO", -700.0, 700.0, 0.0, "cents",
        "VR2, the front-panel tuning control. The service notes give its travel as "
        "approximately plus or minus 700 cents -- a perfect fifth either way -- which "
@@ -521,6 +528,53 @@ const ParamDesc kParams[kNumParams] = {
         "How many times the pattern on screen plays before its chain moves on. Every "
         "pattern has its own, so a chain can play one pattern four times and the next "
         "once. Stay ignores it."),
+
+   // ------------------------------------------------- the oscillator's additions
+   LIN(kParamPulseWidth, "pulse_width", "Pulse Width", "VCO", 3.0, 50.0, 50.0, "%",
+       "The Pulse waveform's width, as a share of the cycle. 50 % is the square -- "
+       "exactly the machine's, at its level and with its droop -- and turning it "
+       "down narrows the pulse to a 3 % needle, thinner and buzzier on the way. "
+       "Only the Pulse waveform reads it; drag the oscillator display to set it."),
+   PCT(kParamWtPosition, "wt_position", "WT Position", "VCO", 0.0,
+       "Where in the wavetable the Wavetable waveform plays, from the first frame "
+       "to the last. Neighbouring frames are crossfaded, so a sweep morphs smoothly "
+       "through the table. Only the Wavetable waveform reads it; drag the oscillator "
+       "display to set it."),
+   PCT(kParamTriSkew, "tri_skew", "Tri Skew", "VCO", 0.0,
+       "Leans the Triangle waveform's apex towards the start of the cycle, until at "
+       "100 % it is nearly a falling ramp -- the machine's own direction. Only the "
+       "Triangle waveform reads it."),
+   PCT(kParamSineBend, "sine_bend", "Sine Bend", "VCO", 0.0,
+       "Bends the Sine waveform by phase distortion: the first half of the cycle is "
+       "run through faster than the second, adding harmonics smoothly from none at "
+       "all to a bright, buzzy edge. Only the Sine waveform reads it."),
+   PCT(kParamNoiseGrain, "noise_grain", "Noise Grain", "VCO", 0.0,
+       "How long the Noise waveform holds each random value. At 0 % it is white "
+       "noise; towards 100 % it gets coarser, and at the top it changes once per "
+       "cycle of the note -- pitched, digital noise that follows the keyboard. Only "
+       "the Noise waveform reads it."),
+   ENUM(kParamWavetable, "wavetable", "Table", "VCO", 0.0, kWavetableNames,
+        "Which wavetable the Wavetable waveform reads, with WT Position sweeping through it. "
+        "Analog morphs saw to square to triangle to sine; PWM narrows a pulse; Vocal "
+        "moves through the vowels; Additive adds one harmonic at a time; Sync is a "
+        "hard-synced ramp climbing three octaves; FM raises a modulation index; Fold "
+        "drives a sine into folds; Resonant sweeps a resonant peak up a ramp. User is a "
+        "WAV file from your wavetable folder, picked from the list this chip opens -- "
+        "it is saved with the project and in presets. The arrows step through every "
+        "table, yours included."),
+   STEP(kParamUnisonVoices, "unison_voices", "Voices", "Unison", 1.0, 16.0, 1.0, "",
+        "How many copies of the oscillator play each note, detuned against each other "
+        "and spread across the stereo field. One is the machine. The stack is still one "
+        "note: it slides, accents and decays as one, through one envelope."),
+   LIN(kParamUnisonDetune, "unison_detune", "Detune", "Unison", 0.0, 100.0, 15.0, "cents",
+       "How far the outermost voices are tuned from the note, up and down; the rest "
+       "sit evenly between. A few cents thickens, twenty-five is a chorus, a hundred "
+       "is a cluster a semitone wide either side. Nothing with one voice."),
+   PCT(kParamUnisonSpread, "unison_spread", "Spread", "Unison", 0.5,
+       "How far across the stereo field the voices are spread, the most detuned "
+       "the widest. Above zero each side gets its own filter and drive, so the two "
+       "channels decorrelate all the way through the instrument. At zero, and with "
+       "one voice, the instrument is mono, as the machine is."),
 };
 
 #undef LIN

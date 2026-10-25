@@ -27,6 +27,7 @@
 
 #include <cstdint>
 #include <string>
+#include <vector>
 
 namespace saeurekiste {
 
@@ -112,6 +113,16 @@ struct PatternData {
    bool chainPresent = false;
    int chainMode[kMaxPatterns] = {0};
    int chainRepeat[kMaxPatterns];
+
+   // The user's wavetable, when the preset carries one. It is not a pattern,
+   // but this is the struct that carries everything a preset says besides its
+   // parameters, and it travels the same path: read beside the parameters,
+   // written after them. In the stored form, kWtSourceLen int16 samples per
+   // frame -- see dsp/wavetable.h.
+   bool tablePresent = false;
+   std::string tableName;
+   int tableFrames = 0;
+   std::vector<int16_t> table;
 
    PatternData() {
       for (int &r : chainRepeat)

@@ -35,4 +35,8 @@ std::string saveFileDialog(const std::string &title, const std::string &suggeste
 // user cancelled.
 std::string openFolderDialog(const std::string &title);
 
+// Shows a folder in the desktop's file manager, without waiting for it. For
+// the wavetable folder, so a user can see where the files go and drop some in.
+void revealFolder(const std::string &path);
+
 } // namespace saeurekiste

@@ -6,6 +6,8 @@
 // Signal path, in the order the schematic has it:
 //
 //    pitch CV -> slide lag -> VCO (falling ramp | square)
+//                              |   + the additions: sine, triangle, pulse,
+//                              |     wavetable, noise, and up to 16 voices
 //                              |
 //                              v
 //                     4-stage transistor ladder  <- cutoff CV
@@ -24,6 +26,15 @@
 // at the same sample rate are bit-identical. That is unusual for this code
 // base, where the nature instruments this window and parameter model came from
 // are deliberately stochastic -- and it is what a machine emulation should be.
+// The two things here that sound random -- Drift and the Noise waveform --
+// draw from generators seeded in reset(), so they repeat exactly as well.
+//
+// Unison is the one place the signal path is not the schematic's. With more
+// than one voice and any Spread at all, the voices are panned across the two
+// channels and each channel gets a ladder, an amplifier and a drive stage of
+// its own (see Path below); everything that is not audio -- the envelopes, the
+// accent, the slide -- is still one circuit driving both. With one voice, or
+// no spread, there is one path and the engine is the machine it always was.
 
 #include <cstdint>
 
@@ -31,6 +42,7 @@
 #include "plugincore/dsp/rng.h"
 
 #include "dsp/drive.h"
+#include "dsp/wavetable.h"
 
 namespace saeurekiste {
 
@@ -38,8 +50,22 @@ namespace saeurekiste {
 using namespace plugincore;
 
 struct EngineParams {
-   int waveform = 0;            // 0 sawtooth, 1 square
+   int waveform = 0;            // a WaveformKind: 0 sawtooth, 1 square, then the additions
    float tuningCents = 0.0f;    // VR2, +/- 700
+   // The additions to the oscillator. None of them is on the machine, and
+   // their defaults leave it alone: none of the five shape controls touches the
+   // sawtooth or the square, and one unison voice is the oscillator as it was.
+   // One field per waveform, each glided on its own, so changing waveform does
+   // not sweep one control from where another was.
+   float pulseWidth = 0.5f;     // Pulse: share of the cycle, 0.03..0.5
+   float wtPosition = 0.0f;     // Wavetable: 0..1 through the frames
+   float triSkew = 0.0f;        // Triangle: 0..1, apex towards the start
+   float sineBend = 0.0f;       // Sine: 0..1, phase distortion
+   float noiseGrain = 0.0f;     // Noise: 0..1, white to one value per cycle
+   int wavetable = 0;           // a BuiltinTable, or kTableUser
+   int unisonVoices = 1;        // 1..kMaxUnison
+   float unisonDetuneCents = 15.0f; // the outermost voices' offset
+   float unisonSpread = 0.5f;   // 0..1, how far across the stereo field
    float cutoffHz = 500.0f;     // VR3, the nominal ladder pole
    float resonance = 0.35f;     // VR4, 0..1
    float envMod = 0.5f;         // VR5, 0..1
@@ -95,6 +121,8 @@ public:
    // Monophonic, like the machine. The host is told so through voice-info, and
    // overlapping notes are what produce a slide rather than a second voice.
    static constexpr int kMaxVoices = 1;
+   // Unison voices are copies of the one oscillator, not notes.
+   static constexpr int kMaxUnison = 16;
 
    void prepare(double sampleRate, uint32_t maxBlockFrames);
    void reset();
@@ -102,6 +130,17 @@ public:
    // to it; switches and times take effect at once. The first call after
    // prepare() or reset() is not a change and is taken as it is.
    void setParams(const EngineParams &p);
+
+   // The table the Wavetable waveform reads when Table is User. Audio thread;
+   // the plugin owns it and keeps it alive while it is set here. Null falls
+   // back to the first built-in table.
+   void setUserTable(const Wavetable *table);
+
+   // One cycle of what the oscillator is making, for the window: `n` samples
+   // of the shape at the level the filter receives it, without band-limiting
+   // and without the square's droop. The same shape code as process() uses,
+   // so the picture cannot drift from the sound.
+   static void drawCycle(const EngineParams &p, const Wavetable *table, float *out, int n);
 
    void noteOn(int16_t port, int16_t channel, int16_t key, int32_t noteId, double velocity);
    // The sequencer's way in. Accent and vibrato are the step's own bits rather
@@ -160,6 +199,8 @@ private:
 
    // ------------------------------------------------------------------ helpers
    static float polyBlep(float t, float dt);
+   // Its integral: the same correction for a corner rather than a step.
+   static float polyBlamp(float t, float dt);
    static float softClip(float x);
    // Linear up to `knee` and compressing above it, so a stage that is not being
    // driven is left exactly alone. Both the ladder's input pair and the Muffler
@@ -168,6 +209,10 @@ private:
    static float softKnee(float x, float knee);
 
    void updateDerived();
+   // One voice's next sample before the square's droop, its phase moved on by
+   // `dt`. `aux` is what the waveform needs besides: the band-limit level for
+   // the wavetable, the hold increment for the noise, and nothing otherwise.
+   float voiceSample(int v, float dt, float aux);
    // One control block's step of the glide from mParams towards mTarget, for
    // a block of `frames` samples.
    void glideParams(uint32_t frames);
@@ -206,13 +251,51 @@ private:
    float mSlideCoef = 1.0f;
    int16_t mCurrentKey = 45;
 
-   // VCO
-   float mPhase = 0.0f;
-   OnePoleHp mSquareDroop;        // the tilt the printed square wave shows
-   OnePoleHp mDcBlock;
+   // VCO. One phase per unison voice; voice 0 is the oscillator itself.
+   float mPhase[kMaxUnison] = {0.0f};
+   // Noise: a generator per voice, and the sample-and-hold Noise Grain puts on it.
+   uint32_t mNoiseState[kMaxUnison] = {0};
+   float mNoiseHold[kMaxUnison] = {0.0f};
+   float mNoisePhase[kMaxUnison] = {0.0f};
+   // Per voice, from the unison controls: its pitch ratio, its weights into the
+   // two channels and log2 of its ratio, for the wavetable's level.
+   float mVoiceRatio[kMaxUnison] = {0.0f};
+   float mVoiceOct[kMaxUnison] = {0.0f};
+   float mVoiceL[kMaxUnison] = {0.0f};
+   float mVoiceR[kMaxUnison] = {0.0f};
+   int mVoices = 1;
+   float mUnisonNorm = 1.0f;      // 1 / sqrt(voices)
+   float mPulseWidth = 0.5f;      // from Pulse Width
+   float mTriApex = 0.5f;         // from Tri Skew
+   float mSineKnee = 0.5f;        // from Sine Bend
+   float mSineOffset = 0.0f;      // the bent sine's DC, taken out
+   float mSineScale = 1.0f;       // and its peak put back at 1
+   const Wavetable *mUserTable = nullptr;
+   const Wavetable *mTable = nullptr; // what the Wavetable waveform reads
 
-   // VCF -- four one-pole stages, zero delay feedback.
-   float mZ[4] = {0.0f, 0.0f, 0.0f, 0.0f};
+   // Everything from the oscillator's output to the engine's: the ladder, the
+   // amplifier's output stages, the drive, the tone and the DC blocker. One
+   // per channel. Only the first runs unless unison is spreading voices, and
+   // the second starts as a copy of it, so switching it in does not click.
+   struct Path {
+      OnePoleHp squareDroop;      // the tilt the printed square wave shows
+      // VCF -- four one-pole stages, zero delay feedback.
+      float z[4] = {0.0f, 0.0f, 0.0f, 0.0f};
+      // The drive stage: eight models out of the literature, in dsp/drive.h.
+      // Everything about it -- the shapes, their gain staging, their filters
+      // and the oversampling around them -- lives there rather than here,
+      // because none of it comes from the service notes the rest of this file
+      // is built from.
+      DriveStage drive;
+      OnePoleLp tone;
+      OnePoleHp dcBlock;
+      // Filter FM reads the amplifier's output, so it reads it one sample
+      // late -- which is what makes it a feedback path rather than an
+      // impossibility.
+      float lastOut = 0.0f;
+   };
+   Path mPath[2];
+   bool mStereo = false;          // whether the second path is running
 
    // Envelopes
    float mVcfEnv = 0.0f;          // decay only: triggered, then it falls
@@ -227,24 +310,12 @@ private:
    float mAccentSweep = 0.0f;     // C62's charge, for the filter
    float mAccentSweepCoef = 0.0f;
 
-   // Post
-   OnePoleLp mTone;
-   // The drive stage: eight models out of the literature, in dsp/drive.h.
-   // Everything about it -- the shapes, their gain staging, their filters and
-   // the oversampling around them -- lives there rather than here, because
-   // none of it comes from the service notes the rest of this file is built
-   // from.
-   DriveStage mDriveStage;
-
    // The Muffler's knee -- the level above which it starts to bite, 0 when it is
    // off -- and the gain that puts back what the compression took, so the
    // switch changes the shape of the sound rather than its level.
    float mMufflerKnee = 0.0f;
    float mMufflerMakeup = 1.0f;
 
-   // Filter FM reads the amplifier's output, so it reads it one sample late --
-   // which is what makes it a feedback path rather than an impossibility.
-   float mLastOut = 0.0f;
    float mFmOctaves = 0.0f;       // 0 when Filter FM is off, and then the
                                   // coefficients stay on the control block
 

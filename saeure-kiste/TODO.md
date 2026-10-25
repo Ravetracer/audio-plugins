@@ -39,7 +39,21 @@ preset, which exists for exactly this.
 - **No factory preset uses the delay.** It is off in all twenty-seven, which is
   deliberate -- it is what makes them render byte for byte what they did before
   the stage existed -- but it means nothing in the library demonstrates it.
-- **The VCO waveforms are ideal.** A linear falling ramp and a hard square. The
+- **Nothing modulates the waveform controls but the host.** They are
+  automatable and modulatable, and the display follows both, but there is no
+  LFO or envelope of the plugin's own on them -- the obvious next step for WT
+  Position and Pulse Width.
+- **The bent sine still aliases at the top of its range.** At full Sine Bend its
+  first half lasts a few samples above a couple of kHz, which is bandwidth
+  rather than a corner, so the polyBLAMP cannot help: -16 dB off the
+  harmonics at 2950 Hz. Irrelevant on a bass line, audible on a lead three
+  octaves up. Oversampling the oscillator, or a table for it, would fix it.
+- **The user wavetable is one per instance.** Picking another replaces it, and
+  presets carry only the table in use when they are saved.
+- **Which user wavetable is playing cannot be automated.** It is not a
+  parameter, because the folder's list has no fixed length. A host that wants
+  to switch tables mid-song can switch presets that carry them.
+- **The machine's VCO waveforms are ideal.** A linear falling ramp and a hard square. The
   real integrator's ramp curves slightly and its reset takes a finite time.
   Worth measuring off reference audio rather than guessing, and it is the one
   remaining part of the signal path with no control over it.

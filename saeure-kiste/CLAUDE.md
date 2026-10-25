@@ -12,9 +12,13 @@ of truth for what works and what does not.
 
 ## What it is, in one paragraph
 
-Linux and Windows, CLAP and VST3, 63 parameters, 30 presets. VCO → four-stage transistor
+Linux and Windows, CLAP and VST3, 74 parameters, 30 presets. VCO → four-stage transistor
 ladder → VCA, with the decay envelope, the accent circuit and the slide lag
-around it, then a drive stage of seven models and a delay after all of it. It plays either
+around it, then a drive stage of seven models and a delay after all of it. The
+oscillator also has an experimental end that is not the machine's: five more
+waveforms with a control each and a display of the cycle, wavetables (eight
+built in, plus a user folder browsed as a tree), and unison of up to sixteen
+voices. It plays either
 from the host over MIDI or from its own sequencer locked to the host transport,
 which runs 1 to 128 steps and draws on a bank of sixty-four patterns.
 
@@ -146,6 +150,8 @@ saeure-kiste/
 │   │                        walk that turns a library into shelves of presets
 │   ├── gui/dragfile.{h,cpp} the desktop drag itself: XDND on X11, OLE on win32
 │   ├── gui/seqwindow.{h,cpp} the sequencer's piano-roll window
+│   ├── dsp/wavetable.{h,cpp} band-limited wavetables: the built-in eight,
+│   │                        the WAV reader, the stored form's base64
 │   └── dsp/acid_engine.{h,cpp}  the circuit
 ├── demos/                   plain WAV renders — GITIGNORED
 └── !dev/                    the Roland service-note PDFs — GITIGNORED
@@ -455,6 +461,41 @@ tool names and an environment variable from the folder name, and
   that *divides* the length and reproduces it with `==` on every step. No
   tolerance, no "close enough": a pattern that nearly repeats is a pattern that
   does not, and shortening it would throw away the bar that differs.
+- **The oscillator's additions must leave the machine alone.** None of the
+  five waveform controls touches Sawtooth and Square, one unison voice is the oscillator as it was,
+  and a stereo path runs only with more than one voice *and* Spread above zero.
+  That is what keeps every factory preset bit-identical to 0.15.2, and the
+  self-test asserts all three. New waveforms go at the *end* of `WaveformKind`
+  and `kWaveformNames`: a preset stores the name, a blob the index.
+- **The engine has two output paths, not one.** Everything from the droop to
+  the DC blocker is `AcidEngine::Path`. The second is switched in as a whole
+  copy of the first (state and settings), and its drive stage is only rederived
+  while it runs -- so anything added to the output half must go in `Path` and
+  be set for both, or the right channel silently keeps a stale value.
+- **The user wavetable crosses threads by pointer.** It is built on the main
+  thread, published through `mUserTable`, and the audio thread writes the
+  pointer it is about to read into `mUserTableInUse` and re-checks
+  `mUserTable` before using it. `publishUserTable()` frees only tables that are
+  neither. Never free a table anywhere else, and never build one on the audio
+  thread.
+- **The stored form of a table is the truth.** A loaded WAV is band-limited,
+  normalised and quantised to int16 cycles of 1024 *before* the table is built,
+  and the live table is built from those ints -- so a project or preset
+  reloaded plays exactly what was saved. Do not build the live table from the
+  WAV's floats.
+- **A wavetable level shorter than 512 samples aliases.** Linear interpolation
+  leaves images of each harmonic around the table's own rate; at 128 samples
+  they came back 45 dB down. The self-test measures it on the Sync table.
+- **One control per added waveform, never a shared one.** The first cut had a
+  single Shape whose meaning changed with the waveform, and it failed in a DAW:
+  nobody could find "pulse width" in the host's list, and automation drawn for
+  one waveform moved another after a switch. A new waveform gets its own
+  parameter, appended, and `waveControl()` in `plugin.cpp` tells the display
+  which one to edit.
+- **Which user wavetable is playing is not a parameter, on purpose.** The list
+  is whatever is in the folder, so it cannot be an enum with a fixed range;
+  the table itself is in the state and the preset instead, which is what lets
+  a song survive the file being moved.
 - **The version lives in two places** — `project(... VERSION)` in
   `CMakeLists.txt` and `kPluginVersion` in `src/saeurekiste.h`. A
   `static_assert` fails the build when they disagree. Bump both.

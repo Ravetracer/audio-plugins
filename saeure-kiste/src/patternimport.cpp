@@ -186,7 +186,9 @@ void mapKnobs(const std::vector<std::pair<std::string, double>> &knobs, PresetDa
       else if (k == "accent")
          mapNormalized(preset, kParamAccent, v);
       else if (k == "waveform")
-         mapNormalized(preset, kParamWaveform, v);
+         // ABL's switch has the machine's two positions. Not a normalised
+         // sweep of this plugin's list, which has five more after them.
+         setParam(preset, kParamWaveform, v >= 0.5 ? kWaveSquare : kWaveSawtooth);
       else if (k == "drive")
          mapNormalized(preset, kParamDrive, v);
       else if (k == "distort")

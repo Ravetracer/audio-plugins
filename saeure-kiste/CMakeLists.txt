@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.16)
-project(SaeureKiste VERSION 0.15.2 LANGUAGES CXX)
+project(SaeureKiste VERSION 0.16.0 LANGUAGES CXX)
 
 # SaeureKiste builds as a CLAP and as a VST3, for Linux and for Windows.
 #
@@ -168,6 +168,7 @@ add_library(SaeureKiste-impl STATIC
    src/dsp/acid_engine.cpp
    src/dsp/drive.cpp
    src/dsp/delay.cpp
+   src/dsp/wavetable.cpp
    src/pattern.cpp
    src/midifile.cpp
    src/patternimport.cpp
@@ -253,7 +254,8 @@ if(SAEUREKISTE_BUILD_TOOLS)
    # that the feedback stays bounded past unity, and neither is visible from
    # outside the plugin.
    add_executable(saeurekiste-render tools/render.cpp src/preset.cpp src/params.cpp src/pattern.cpp
-                  src/midifile.cpp src/patternimport.cpp src/dsp/drive.cpp src/dsp/delay.cpp)
+                  src/midifile.cpp src/patternimport.cpp src/dsp/drive.cpp src/dsp/delay.cpp
+                  src/dsp/wavetable.cpp)
    target_link_libraries(saeurekiste-render PRIVATE plugincore::shared)
    target_include_directories(saeurekiste-render PRIVATE
       "${CLAP_INCLUDE_DIR}"

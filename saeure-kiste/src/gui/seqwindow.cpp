@@ -613,7 +613,7 @@ private:
             continue;
          }
          topTaken = false;
-         const int span = cellSpan(id);
+         const int span = id == mSpec.waveViewParam ? 2 : cellSpan(id);
          if (col + span > spec.cols) {
             col = 0;
             ++row;
@@ -652,6 +652,15 @@ private:
          return true;
       if (mDirty)
          return true;
+      if (hasWaveView()) {
+         const uint64_t key = mSpec.host->windowWaveKey();
+         if (key != mWaveKey)
+            return true;
+         if (!mWaveStatus.empty() && std::chrono::steady_clock::now() >= mWaveStatusUntil) {
+            mWaveStatus.clear();
+            return true;
+         }
+      }
       for (uint32_t i = 0; i < mSpec.paramCount; ++i) {
          const double v = mDelegate.guiParamValue(i);
          if (std::fabs(v - mShown[i]) > 1.0e-9)
@@ -690,6 +699,8 @@ private:
       mDirty = false;
       for (uint32_t i = 0; i < mSpec.paramCount; ++i)
          mShown[i] = mDelegate.guiParamValue(i);
+      if (hasWaveView())
+         mWaveKey = mSpec.host->windowWaveKey();
 
       cairo_save(cr);
       cairo_scale(cr, mScale, mScale);
@@ -709,6 +720,8 @@ private:
          drawMixer(cr);
       if (mMenuParam >= 0)
          drawMenu(cr);
+      if (mTableOpen)
+         drawTableSelector(cr);
       if (mSaveOpen)
          drawSaveDialog(cr);
 
@@ -949,6 +962,10 @@ private:
    }
 
    void drawCell(cairo_t *cr, const Rect &r, uint32_t id) {
+      if (id == mSpec.waveViewParam && hasWaveView()) {
+         drawWaveCell(cr, r);
+         return;
+      }
       const ParamDesc &d = mSpec.params[id];
       const double raw = mDelegate.guiParamValue(id);
       const bool hot = (mHover == static_cast<int>(id)) || (mDrag == static_cast<int>(id));
@@ -979,7 +996,14 @@ private:
          drawTriangle(cr, cx + 9, cy + ch * 0.5, 7, -1);
          drawTriangle(cr, cx + cw - 9, cy + ch * 0.5, 7, 1);
          setColor(cr, mSpec.theme.text);
-         drawText(cr, cx + cw * 0.5, cy + 15, text, 10, false, Align::Center);
+         if (isTableChip(id)) {
+            // The table's own name, a user file's included, cut to fit
+            // between the arrows.
+            const std::string name = fitText(cr, mSpec.host->windowTableLabel(), cw - 30, 10);
+            drawText(cr, cx + cw * 0.5, cy + 15, name.c_str(), 10, false, Align::Center);
+         } else {
+            drawText(cr, cx + cw * 0.5, cy + 15, text, 10, false, Align::Center);
+         }
          return;
       }
 
@@ -1022,6 +1046,401 @@ private:
       }
       setColor(cr, hot ? mSpec.theme.accent : mSpec.theme.text, hot ? 1.0 : 0.85);
       drawText(cr, cx, r.y + 86, text, 9.5, false, Align::Center);
+   }
+
+   // ------------------------------------------------------------ the display
+   //
+   // One cycle of what the oscillator is making, where Shape's knob would be.
+   // The plugin draws the cycle from the same shape code the engine runs, so
+   // what is on screen is what reaches the filter -- band-limiting and the
+   // square's droop aside.
+
+   bool hasWaveView() const { return mSpec.host && mSpec.waveViewParam != kNoParam; }
+
+   Rect waveScreenRect(const Rect &cell) const {
+      return {cell.x + 6, cell.y + 21, cell.w - 12, 50};
+   }
+
+   // The parameter the display is editing right now: the control of the
+   // selected waveform, or kNoParam when it has none.
+   uint32_t waveTarget() const {
+      if (!hasWaveView())
+         return kNoParam;
+      const uint32_t id = mSpec.host->windowWaveParam();
+      return id < mSpec.paramCount ? id : kNoParam;
+   }
+
+   // The display cell: the label and value of whatever it is editing, which
+   // is the selected waveform's own control, and the picture between them.
+   void drawWaveCell(cairo_t *cr, const Rect &r) {
+      const uint32_t target = waveTarget();
+      const bool has = target != kNoParam;
+      const bool hot = has && (mHover == static_cast<int>(target) ||
+                               mDrag == static_cast<int>(target));
+      char label[64];
+      if (has)
+         upperCase(mSpec.params[target].name, label, sizeof(label));
+      else
+         std::snprintf(label, sizeof(label), "OSCILLATOR");
+      setColor(cr, hot ? mSpec.theme.text : mSpec.theme.textDim);
+      drawLabel(cr, r, label);
+      drawWaveView(cr, r, hot);
+      if (!has)
+         return;
+      if (mEntryParam == static_cast<int>(target)) {
+         drawEntryField(cr, r);
+         return;
+      }
+      char text[128];
+      if (!paramValueToText(mSpec.params[target], mDelegate.guiParamValue(target), text,
+                            sizeof(text)))
+         std::snprintf(text, sizeof(text), "--");
+      setColor(cr, hot ? mSpec.theme.accent : mSpec.theme.text, hot ? 1.0 : 0.85);
+      drawText(cr, r.x + r.w * 0.5, r.y + 86, text, 9.5, false, Align::Center);
+   }
+
+   // A text cut down with an ellipsis until it fits `width`.
+   std::string fitText(cairo_t *cr, std::string text, double width, double size) const {
+      if (textWidth(cr, text.c_str(), size, false) <= width)
+         return text;
+      while (!text.empty()) {
+         // Drop a whole UTF-8 character, not a byte of one.
+         do
+            text.pop_back();
+         while (!text.empty() && (static_cast<unsigned char>(text.back()) & 0xC0) == 0x80);
+         const std::string tried = text + "...";
+         if (textWidth(cr, tried.c_str(), size, false) <= width)
+            return tried;
+      }
+      return text;
+   }
+
+   void drawWaveView(cairo_t *cr, const Rect &cell, bool hot) {
+      const Rect v = waveScreenRect(cell);
+      setColor(cr, mSpec.theme.knobFace);
+      roundedRect(cr, v.x, v.y, v.w, v.h, 3);
+      cairo_fill_preserve(cr);
+      setColor(cr, hot ? mSpec.theme.accent : mSpec.theme.panelEdge, hot ? 0.6 : 1.0);
+      cairo_set_line_width(cr, 1.0);
+      cairo_stroke(cr);
+
+      constexpr int kPoints = 240;
+      float cycle[kPoints];
+      std::string caption;
+      mSpec.host->windowWaveCycle(cycle, kPoints, caption);
+
+      // A caption gets a strip of its own along the top, and the cycle is
+      // drawn in what is left, so the two never cross.
+      const bool captioned = !caption.empty() || !mWaveStatus.empty();
+      const double top = captioned ? v.y + 13 : v.y;
+      const double mid = top + (v.y + v.h - top) * 0.5;
+      const double half = (v.y + v.h - top) * 0.5 - (captioned ? 3 : 5);
+      setColor(cr, mSpec.theme.track, 0.9);
+      cairo_move_to(cr, v.x + 3, mid);
+      cairo_line_to(cr, v.x + v.w - 3, mid);
+      cairo_stroke(cr);
+
+      // One cycle across the screen, closed back to where it began so a
+      // periodic shape reads as one.
+      const double x0 = v.x + 4;
+      const double w = v.w - 8;
+      auto yAt = [&](int i) {
+         const float c = cycle[i % kPoints];
+         const double clamped = c > 1.2f ? 1.2 : (c < -1.2f ? -1.2 : static_cast<double>(c));
+         return mid - clamped * half;
+      };
+      cairo_save(cr);
+      cairo_rectangle(cr, v.x + 1, top + 1, v.w - 2, v.y + v.h - top - 2);
+      cairo_clip(cr);
+      cairo_new_path(cr);
+      for (int i = 0; i <= kPoints; ++i) {
+         const double x = x0 + w * i / kPoints;
+         if (i == 0)
+            cairo_move_to(cr, x, yAt(i));
+         else
+            cairo_line_to(cr, x, yAt(i));
+      }
+      cairo_line_to(cr, x0 + w, mid);
+      cairo_line_to(cr, x0, mid);
+      cairo_close_path(cr);
+      setColor(cr, mSpec.theme.accent, 0.12);
+      cairo_fill(cr);
+
+      cairo_new_path(cr);
+      for (int i = 0; i <= kPoints; ++i) {
+         const double x = x0 + w * i / kPoints;
+         if (i == 0)
+            cairo_move_to(cr, x, yAt(i));
+         else
+            cairo_line_to(cr, x, yAt(i));
+      }
+      cairo_set_line_width(cr, 1.4);
+      setColor(cr, mSpec.theme.accent, 0.95);
+      cairo_stroke(cr);
+      cairo_restore(cr);
+
+      // What it is, small, in the corner -- or why the last load failed. Cut
+      // at the display's edge, because a file name can be any length.
+      cairo_save(cr);
+      cairo_rectangle(cr, v.x + 1, v.y + 1, v.w - 2, v.h - 2);
+      cairo_clip(cr);
+      if (!mWaveStatus.empty()) {
+         cairo_set_source_rgb(cr, 0.85, 0.30, 0.30);
+         drawText(cr, v.x + 5, v.y + 10, mWaveStatus.c_str(), 8, false, Align::Left);
+      } else if (!caption.empty()) {
+         setColor(cr, mSpec.theme.textDim);
+         drawText(cr, v.x + 5, v.y + 10, caption.c_str(), 8, false, Align::Left);
+      }
+      cairo_restore(cr);
+   }
+
+   void loadWavetable() {
+      mDelegate.guiKeyboardTaken();
+      const std::string path = openFileDialog("Load a wavetable", "WAV file", "wav");
+      if (path.empty())
+         return;
+      std::string error;
+      if (mSpec.host->windowLoadWavetable(path, error)) {
+         mWaveStatus.clear();
+      } else {
+         mWaveStatus = error.empty() ? std::string("could not load that file") : error;
+         mWaveStatusUntil = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+      }
+      mDirty = true;
+   }
+
+   // ------------------------------------------------------ the table selector
+   //
+   // The Table chip opens a tree rather than a list: the built-in tables, then
+   // the user's wavetable folder with its subfolders, which open and close,
+   // then a way to load a file from anywhere and a way to open the folder.
+   // Picking a table leaves the list open, so tables can be auditioned one
+   // after the other; a click outside or Escape closes it.
+
+   bool isTableChip(uint32_t id) const {
+      return mSpec.host && mSpec.tableParam != kNoParam && id == mSpec.tableParam;
+   }
+
+   void openTableSelector() {
+      closeMenu();
+      mBrowserOpen = false;
+      refreshTableRows();
+      mTableOpen = true;
+      mTableHover = -1;
+      // The current table in view.
+      mTableScroll = 0;
+      const int rows = tableVisibleRows();
+      for (size_t k = 0; k < mTableShown.size(); ++k)
+         if (mTableRows[static_cast<size_t>(mTableShown[k])].current &&
+             static_cast<int>(k) >= rows)
+            mTableScroll = static_cast<int>(k) - rows / 2;
+      clampTableScroll();
+      mDirty = true;
+   }
+
+   void refreshTableRows() {
+      mSpec.host->windowTableRows(mTableRows);
+      mTableRows.push_back({TableRow::Kind::Heading, std::string(), std::string(), 0, false});
+      if (fileDialogAvailable())
+         mTableRows.push_back(
+            {TableRow::Kind::Table, "Load file...", "action:load", 0, false});
+      mTableRows.push_back({TableRow::Kind::Table, "Open folder", "action:open", 0, false});
+      // Which rows show: everything but what is inside a closed folder.
+      mTableShown.clear();
+      int hiddenBelow = -1;
+      for (size_t i = 0; i < mTableRows.size(); ++i) {
+         const TableRow &row = mTableRows[i];
+         if (hiddenBelow >= 0) {
+            if (row.depth > hiddenBelow && row.kind != TableRow::Kind::Heading)
+               continue;
+            hiddenBelow = -1;
+         }
+         mTableShown.push_back(static_cast<int>(i));
+         if (row.kind == TableRow::Kind::Folder && tableFolderClosed(row.key))
+            hiddenBelow = row.depth;
+      }
+      clampTableScroll();
+   }
+
+   bool tableFolderClosed(const std::string &key) const {
+      return std::find(mTableClosed.begin(), mTableClosed.end(), key) != mTableClosed.end();
+   }
+
+   void stepTable(int direction) {
+      mSpec.host->windowStepTable(direction);
+      if (mTableOpen)
+         refreshTableRows();
+      mDirty = true;
+   }
+
+   Rect tablePanel() const {
+      const Rect chip = chipRect(cellRectFor(mSpec.tableParam));
+      Rect r;
+      r.x = chip.x;
+      r.y = chip.y + chip.h + 2;
+      r.w = 300;
+      r.h = tableVisibleRows() * kMenuRowH + 2 * kMenuPad;
+      return r;
+   }
+
+   // How many rows fit between the chip and the bottom of the window.
+   int tableVisibleRows() const {
+      const Rect chip = chipRect(cellRectFor(mSpec.tableParam));
+      const double top = chip.y + chip.h + 2;
+      const int fit = static_cast<int>((currentH() - 8 - top - 2 * kMenuPad) / kMenuRowH);
+      return std::max(1, std::min(static_cast<int>(mTableShown.size()), std::max(4, fit)));
+   }
+
+   void clampTableScroll() {
+      const int maxScroll =
+         std::max(0, static_cast<int>(mTableShown.size()) - tableVisibleRows());
+      mTableScroll = std::max(0, std::min(mTableScroll, maxScroll));
+   }
+
+   Rect tableSlotRect(int slot) const {
+      const Rect p = tablePanel();
+      return {p.x + kMenuPad, p.y + kMenuPad + slot * kMenuRowH, p.w - 2 * kMenuPad, kMenuRowH};
+   }
+
+   // The row under the pointer, as an index into mTableShown, or -1.
+   int tableRowAt(double x, double y) const {
+      const int rows = tableVisibleRows();
+      for (int slot = 0; slot < rows; ++slot)
+         if (tableSlotRect(slot).contains(x, y)) {
+            const int k = mTableScroll + slot;
+            return k < static_cast<int>(mTableShown.size()) ? k : -1;
+         }
+      return -1;
+   }
+
+   void onTableDown(double x, double y, unsigned button) {
+      if (button == kWheelUp || button == kWheelDown) {
+         mTableScroll += button == kWheelUp ? -2 : 2;
+         clampTableScroll();
+         mTableHover = tableRowAt(x, y);
+         return;
+      }
+      if (button != kButtonLeft)
+         return;
+      const int k = tableRowAt(x, y);
+      if (k < 0) {
+         if (!tablePanel().contains(x, y))
+            mTableOpen = false;
+         return;
+      }
+      const TableRow row = mTableRows[static_cast<size_t>(mTableShown[static_cast<size_t>(k)])];
+      if (row.kind == TableRow::Kind::Folder) {
+         const auto it = std::find(mTableClosed.begin(), mTableClosed.end(), row.key);
+         if (it == mTableClosed.end())
+            mTableClosed.push_back(row.key);
+         else
+            mTableClosed.erase(it);
+         refreshTableRows();
+         return;
+      }
+      if (row.kind != TableRow::Kind::Table)
+         return;
+      if (row.key == "action:load") {
+         mTableOpen = false;
+         loadWavetable();
+         return;
+      }
+      if (row.key == "action:open") {
+         revealFolder(mSpec.host->windowTableFolder());
+         return;
+      }
+      std::string error;
+      if (!mSpec.host->windowSelectTable(row.key, error)) {
+         mWaveStatus = error.empty() ? std::string("could not load that file") : error;
+         mWaveStatusUntil = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+      } else {
+         mWaveStatus.clear();
+      }
+      refreshTableRows();
+   }
+
+   void drawTableSelector(cairo_t *cr) {
+      const Rect p = tablePanel();
+      setColor(cr, mSpec.theme.panelFill);
+      roundedRect(cr, p.x, p.y, p.w, p.h, 5);
+      cairo_fill_preserve(cr);
+      setColor(cr, mSpec.theme.accent, 0.5);
+      cairo_set_line_width(cr, 1.0);
+      cairo_stroke(cr);
+
+      const int rows = tableVisibleRows();
+      for (int slot = 0; slot < rows; ++slot) {
+         const int k = mTableScroll + slot;
+         if (k >= static_cast<int>(mTableShown.size()))
+            break;
+         const TableRow &row = mTableRows[static_cast<size_t>(mTableShown[static_cast<size_t>(k)])];
+         const Rect r = tableSlotRect(slot);
+         const double indent = r.x + 8 + 14.0 * row.depth;
+         const double base = r.y + r.h * 0.5 + 4;
+         const bool hot = mTableHover == k;
+         switch (row.kind) {
+         case TableRow::Kind::Heading:
+            if (row.label.empty()) {
+               setColor(cr, mSpec.theme.panelEdge);
+               cairo_move_to(cr, r.x + 4, r.y + r.h * 0.5);
+               cairo_line_to(cr, r.x + r.w - 4, r.y + r.h * 0.5);
+               cairo_stroke(cr);
+            } else {
+               setColor(cr, mSpec.theme.accent, 0.85);
+               drawText(cr, indent, base, row.label.c_str(), 9, true, Align::Left);
+            }
+            break;
+         case TableRow::Kind::Folder: {
+            if (hot) {
+               setColor(cr, mSpec.theme.accent, 0.12);
+               roundedRect(cr, r.x, r.y, r.w, r.h, 3);
+               cairo_fill(cr);
+            }
+            const bool closed = tableFolderClosed(row.key);
+            setColor(cr, mSpec.theme.textDim);
+            drawTriangle(cr, indent + 4, r.y + r.h * 0.5, 7, closed ? 1 : 0);
+            setColor(cr, hot ? mSpec.theme.text : mSpec.theme.textDim);
+            const std::string name =
+               fitText(cr, row.label, r.x + r.w - indent - 20, 10);
+            drawText(cr, indent + 14, base, name.c_str(), 10, true, Align::Left);
+            break;
+         }
+         case TableRow::Kind::Table: {
+            if (hot || row.current) {
+               setColor(cr, mSpec.theme.accent, hot ? 0.20 : 0.10);
+               roundedRect(cr, r.x, r.y, r.w, r.h, 3);
+               cairo_fill(cr);
+            }
+            const bool action = row.key.compare(0, 7, "action:") == 0;
+            if (row.current)
+               setColor(cr, mSpec.theme.accent);
+            else
+               setColor(cr, action ? mSpec.theme.textDim : mSpec.theme.text, hot ? 1.0 : 0.85);
+            const std::string name =
+               fitText(cr, row.label, r.x + r.w - indent - 20, 10);
+            drawText(cr, indent + 14, base, name.c_str(), 10, row.current, Align::Left);
+            break;
+         }
+         case TableRow::Kind::Note: {
+            setColor(cr, mSpec.theme.textMute);
+            const std::string text = fitText(cr, row.label, r.x + r.w - indent - 20, 9);
+            drawText(cr, indent + 14, base, text.c_str(), 9, false, Align::Left);
+            break;
+         }
+         }
+      }
+
+      // Where the list is, when it does not all fit.
+      const int total = static_cast<int>(mTableShown.size());
+      if (total > rows) {
+         const double trackH = p.h - 2 * kMenuPad;
+         const double barH = std::max(16.0, trackH * rows / total);
+         const double barY =
+            p.y + kMenuPad + (trackH - barH) * mTableScroll / std::max(1, total - rows);
+         setColor(cr, mSpec.theme.accent, 0.35);
+         roundedRect(cr, p.x + p.w - 5, barY, 3, barH, 1.5);
+         cairo_fill(cr);
+      }
    }
 
    const char *presetLabel(char *buf, size_t size) const {
@@ -1398,6 +1817,15 @@ private:
    // lists learnt to navigate. Whether keys arrive at all is up to the host:
    // an embedded window is not given the focus by every one of them.
    void onOverlayKey(KeyCommand cmd) {
+      if (mTableOpen) {
+         if (cmd == KeyCommand::Up || cmd == KeyCommand::Down) {
+            stepTable(cmd == KeyCommand::Up ? -1 : 1);
+            return;
+         }
+         mTableOpen = false;
+         mDirty = true;
+         return;
+      }
       if (mMenuParam >= 0) {
          if (cmd == KeyCommand::Up || cmd == KeyCommand::Down) {
             stepMenu(cmd == KeyCommand::Up ? -1 : 1);
@@ -3813,9 +4241,17 @@ private:
 #endif
 
    int cellAt(double x, double y) const {
-      for (size_t i = 0; i < mCellRects.size(); ++i)
-         if (mCellRects[i].contains(x, y))
-            return static_cast<int>(mCells[i].param);
+      for (size_t i = 0; i < mCellRects.size(); ++i) {
+         if (!mCellRects[i].contains(x, y))
+            continue;
+         // The display cell answers for whatever it is editing, so dragging,
+         // the wheel, typing, a reset and the help line all reach that.
+         if (mCells[i].param == mSpec.waveViewParam && hasWaveView()) {
+            const uint32_t target = waveTarget();
+            return target == kNoParam ? -1 : static_cast<int>(target);
+         }
+         return static_cast<int>(mCells[i].param);
+      }
       return -1;
    }
 
@@ -3860,6 +4296,12 @@ private:
          // would have done; a double-click on the value falls through to the
          // reset it has always been.
          closeEntry();
+      }
+
+      if (mTableOpen) {
+         onTableDown(x, y, be.button);
+         mDirty = true;
+         return;
       }
 
       if (mMenuParam >= 0) {
@@ -4050,7 +4492,7 @@ private:
 
       if (isChip(d)) {
          // The two arrows still step by one; the name between them opens the
-         // full list.
+         // full list -- or, on the Table chip, the wavetable selector.
          const Rect chip = chipRect(cellRectFor(static_cast<uint32_t>(id)));
          const double chipX = chip.x;
          const double chipW = chip.w;
@@ -4058,6 +4500,8 @@ private:
             nudge(static_cast<uint32_t>(id), -1, false);
          } else if (x > chipX + chipW - 18.0) {
             nudge(static_cast<uint32_t>(id), 1, false);
+         } else if (isTableChip(static_cast<uint32_t>(id))) {
+            openTableSelector();
          } else {
             mMenuParam = id;
             mMenuHover = menuItemAt(x, y);
@@ -4160,6 +4604,15 @@ private:
 
       if (mSaveOpen)
          return;
+
+      if (mTableOpen) {
+         const int row = tableRowAt(x, y);
+         if (row != mTableHover) {
+            mTableHover = row;
+            mDirty = true;
+         }
+         return;
+      }
 
       if (mMenuParam >= 0) {
          const int item = menuItemAt(x, y);
@@ -4264,6 +4717,9 @@ private:
    }
 
    const Rect &cellRectFor(uint32_t id) const {
+      // The display's target has no cell of its own; it lives in the display's.
+      if (hasWaveView() && id != kNoParam && id == waveTarget())
+         id = mSpec.waveViewParam;
       for (size_t i = 0; i < mCells.size(); ++i)
          if (mCells[i].param == id)
             return mCellRects[i];
@@ -4271,6 +4727,10 @@ private:
    }
 
    void nudge(uint32_t id, int direction, bool fine) {
+      if (isTableChip(id)) {
+         stepTable(direction);
+         return;
+      }
       const ParamDesc &d = mSpec.params[id];
       const double span = d.max - d.min;
       double v = mDelegate.guiParamValue(id);
@@ -4425,6 +4885,20 @@ private:
    bool mAdvancedOpen = false;
 
    bool mDirty = true;
+   // The display's last picture, and a failed load's message with how long it
+   // stays up.
+   uint64_t mWaveKey = 0;
+   // The wavetable selector: whether it is open, the rows the plugin gave it
+   // plus its own two actions, which of them show, which folders are closed,
+   // how far it is scrolled and the row under the pointer.
+   bool mTableOpen = false;
+   std::vector<TableRow> mTableRows;
+   std::vector<int> mTableShown;
+   std::vector<std::string> mTableClosed;
+   int mTableScroll = 0;
+   int mTableHover = -1;
+   std::string mWaveStatus;
+   std::chrono::steady_clock::time_point mWaveStatusUntil{};
    int mHover = -1;
    Widget mHoverWidget = Widget::NoWidget;
    int mDrag = -1;

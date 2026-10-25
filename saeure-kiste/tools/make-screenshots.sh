@@ -22,6 +22,12 @@
 # of the collapsible half is simply cut off, which is exactly the half that
 # needs photographing. One scale for every image beats a sharp one for some of
 # them.
+#
+# It deletes nothing. Its two scratch captures and its empty preset library
+# live in build/ and are overwritten on the next run.
+#
+# Run it on a display of its own -- `Xvfb :87 &` and DISPLAY=:87 -- rather than
+# on a desktop somebody is using: it moves the pointer and clicks.
 
 set -euo pipefail
 
@@ -37,6 +43,8 @@ done
    echo "no guihost at ${build} -- configure with -DSAEUREKISTE_BUILD_TOOLS=ON" >&2; exit 1; }
 
 mkdir -p "$out"
+full="${build}/.screenshot-full.png"
+opened="${build}/.screenshot-open.png"
 
 # A clean preset library for the whole run.
 #
@@ -45,8 +53,39 @@ mkdir -p "$out"
 # shipped a picture of one of the author's own presets. Pointing
 # XDG_CONFIG_HOME at an empty directory leaves the real one untouched and gives
 # every machine the same factory-only library to photograph.
-clean_config="$(mktemp -d)"
+clean_config="${build}/screenshot-config"
+mkdir -p "$clean_config"
+[ -z "$(ls -A "${clean_config}/SaeureKiste/presets" 2>/dev/null)" ] || {
+   echo "${clean_config}/SaeureKiste/presets is not empty -- the browser would photograph it" >&2
+   exit 1; }
 export XDG_CONFIG_HOME="$clean_config"
+
+# A small wavetable folder for the selector to show, made rather than copied
+# so that nothing of anybody's own library ends up in the manual. Written over
+# on every run.
+command -v python3 >/dev/null 2>&1 || { echo "python3 not found" >&2; exit 1; }
+python3 -I - "${clean_config}/SaeureKiste/wavetables" <<'PY'
+import math, os, struct, sys
+root = sys.argv[1]
+def table(rel, shape, frames):
+    path = os.path.join(root, rel)
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    pcm = bytearray()
+    for f in range(frames):
+        t = f / max(1, frames - 1)
+        for i in range(2048):
+            v = max(-1.0, min(1.0, shape(i / 2048, t)))
+            pcm += struct.pack('<h', int(v * 30000))
+    fmt = struct.pack('<HHIIHH', 1, 1, 48000, 96000, 2, 16)
+    body = b'WAVE' + b'fmt ' + struct.pack('<I', len(fmt)) + fmt + b'data' + struct.pack('<I', len(pcm)) + bytes(pcm)
+    with open(path, 'wb') as out:
+        out.write(b'RIFF' + struct.pack('<I', len(body)) + body)
+tau = 2 * math.pi
+table('Basses/Growl.wav', lambda p, t: 0.8 * math.sin(tau * p + (1 + 5 * t) * math.sin(2 * tau * p)), 16)
+table('Basses/Reese.wav', lambda p, t: 0.5 * ((1 - 2 * p) + (1 - 2 * ((p * 1.0 + 0.3 * t) % 1))), 8)
+table('Leads/Buzz.wav', lambda p, t: 0.9 * (1 - 2 * ((p * (1 + 3 * t)) % 1)), 8)
+table('Vowels.wav', lambda p, t: 0.6 * math.sin(tau * p) + 0.4 * math.sin(tau * (3 + 4 * t) * p), 12)
+PY
 
 # ----------------------------------------------------------------- the layout
 #
@@ -54,7 +93,9 @@ export XDG_CONFIG_HOME="$clean_config"
 # kCellH 96, kHeaderH 66, kBarH 32, kSeqPaneHeight 315, kContentW 1408. A
 # panel is cols*84 + 16 wide -- every one of them, including the last on a
 # row: the window stopped stretching that one out to the right margin in
-# 0.12.0, so a row that does not fill the width ends in background.
+# 0.12.0, so a row that does not fill the width ends in background. The VCO
+# panel is four columns as of 0.16.0: the Waveform and Table chips stacked,
+# the two-column oscillator display, and Tuning.
 WIN_W=1440; WIN_H=765; WIN_H_OPEN=1037
 ROW0_Y=74; ROW1_Y=210; PANEL_H=128
 SEQ_Y=346; SEQ_H=315; BANK_X=1192; BANK_W=232; SEQ_W=1168
@@ -74,7 +115,6 @@ window=""
 
 cleanup() {
    [ -n "$host_pid" ] && kill "$host_pid" 2>/dev/null
-   [ -n "${clean_config:-}" ] && rm -rf "$clean_config"
    true
 }
 trap cleanup EXIT
@@ -135,8 +175,8 @@ park() { xdotool mousemove $((WX + WIN_W - 4)) $((WY + 4)); sleep 0.35; }
 grab() {
    local name="$1" x="$2" y="$3" w="$4" h="$5"
    park
-   import -window "$window" "${out}/.full.png"
-   convert "${out}/.full.png" -crop "${w}x${h}+${x}+${y}" +repage "${out}/${name}.png"
+   import -window "$window" "$full"
+   convert "$full" -crop "${w}x${h}+${x}+${y}" +repage "${out}/${name}.png"
    printf '    %-28s %sx%s\n' "${name}.png" "$w" "$h"
 }
 
@@ -144,10 +184,10 @@ grab() {
 start_host "$WIN_H"
 
 grab window            0        0        $WIN_W $WIN_H
-grab panel-vco         16       $ROW0_Y  184    $PANEL_H
-grab panel-vcf         208      $ROW0_Y  436    $PANEL_H
-grab panel-drive       652      $ROW0_Y  436    $PANEL_H
-grab panel-output      1096     $ROW0_Y  100    $PANEL_H
+grab panel-vco         16       $ROW0_Y  352    $PANEL_H
+grab panel-vcf         376      $ROW0_Y  436    $PANEL_H
+grab panel-drive       820      $ROW0_Y  436    $PANEL_H
+grab panel-output      1264     $ROW0_Y  100    $PANEL_H
 grab panel-sequencer   16       $ROW1_Y  352    $PANEL_H
 grab panel-generator   376      $ROW1_Y  520    $PANEL_H
 grab panel-delay       904      $ROW1_Y  520    $PANEL_H
@@ -219,21 +259,46 @@ BROWSER_X=56; BROWSER_W=1328
 start_host "$WIN_H"
 click $PRESET_NAME_X $PRESET_NAME_Y 0.8
 park
-import -window "$window" "${out}/.open.png"
+import -window "$window" "$opened"
 
-span="$(convert "${out}/.open.png" -crop "1x${WIN_H}+$((BROWSER_X + BROWSER_W / 2))+0" +repage \
+span="$(convert "$opened" -crop "1x${WIN_H}+$((BROWSER_X + BROWSER_W / 2))+0" +repage \
    -colorspace gray -threshold 15% -format '%@' info:)"     # WxH+X+Y
 bh=${span#*x}; bh=${bh%%+*}
 by=${span##*+}
 [ "${bh:-0}" -gt 200 ] || { echo "the preset browser did not open (height ${bh:-0})" >&2; exit 1; }
 
 pad=5
-convert "${out}/.open.png" \
+convert "$opened" \
    -crop "$((BROWSER_W + 2 * pad))x$((bh + 2 * pad))+$((BROWSER_X - pad))+$((by - pad))" \
    +repage "${out}/preset-browser.png"
 printf '    %-28s %s\n' "preset-browser.png" \
    "$(identify -format '%wx%h' "${out}/preset-browser.png")"
-rm -f "${out}/.open.png"
+stop_host
+
+# ------------------------------------------------------- the oscillator display
+#
+# The display with a wavetable in it. The Waveform chip's right arrow five
+# times (Sawtooth to Wavetable), the Table chip's twice (Analog to Vocal), and
+# a Shape typed into the display's value field.
+start_host "$WIN_H"
+CHIP_ARROW_X=94; WAVE_CHIP_Y=126; TABLE_CHIP_Y=174
+SHAPE_VALUE_X=192; SHAPE_VALUE_Y=183
+for _ in 1 2 3 4 5; do click $CHIP_ARROW_X $WAVE_CHIP_Y 0.25; done
+for _ in 1 2; do click $CHIP_ARROW_X $TABLE_CHIP_Y 0.25; done
+click $SHAPE_VALUE_X $SHAPE_VALUE_Y 0.3
+xdotool type --delay 60 "45"; xdotool key Return; sleep 0.4
+grab panel-vco-wavetable 16     $ROW0_Y  352    $PANEL_H
+stop_host
+
+# ------------------------------------------------------ the wavetable selector
+#
+# The Table chip's name opens it; a user table is picked so the list shows
+# where the selection is. Rows are 20 px from the panel's top + 4: BUILT-IN,
+# eight tables, USER, Basses, Growl -- row 11.
+start_host "$WIN_H"
+click 66 $TABLE_CHIP_Y 0.6
+click 120 $((187 + 4 + 11 * 20 + 10)) 0.8
+grab table-selector    16       $ROW0_Y  340    506
 stop_host
 
 # ------------------------------------------------------- the collapsible half
@@ -248,13 +313,13 @@ done
 [ -n "$window" ] || { echo "the editor did not grow when ADVANCED was pressed" >&2; exit 1; }
 
 grab window-advanced   0        0        $WIN_W $WIN_H_OPEN
-grab panel-vcfmod      16       $ADV_ROW2_Y 268 $PANEL_H
-grab panel-slide       292      $ADV_ROW2_Y 100 $PANEL_H
-grab panel-vibrato     400      $ADV_ROW2_Y 268 $PANEL_H
-grab panel-amp         676      $ADV_ROW2_Y 268 $PANEL_H
+grab panel-unison      16       $ADV_ROW2_Y 268 $PANEL_H
+grab panel-vcfmod      292      $ADV_ROW2_Y 268 $PANEL_H
+grab panel-slide       568      $ADV_ROW2_Y 100 $PANEL_H
+grab panel-vibrato     676      $ADV_ROW2_Y 268 $PANEL_H
+grab panel-amp         952      $ADV_ROW2_Y 268 $PANEL_H
 grab panel-mods        16       $ADV_ROW3_Y 1108 $PANEL_H
 stop_host
 
-rm -f "${out}/.full.png"
 echo
 echo "screenshots written to ${out}"

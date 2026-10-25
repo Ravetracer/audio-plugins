@@ -177,12 +177,44 @@ enum ParamId : uint32_t {
    // pattern on screen; see the plugin's GuiDelegate.
    kParamChainRepeat,
 
+   // The oscillator's additions: one control for each added waveform, which
+   // wavetable the Wavetable waveform reads, and unison. None of it is on the
+   // machine, and every default leaves the machine alone -- none of the five
+   // touches the sawtooth or the square, and one voice is the oscillator as it
+   // was. Five named parameters rather than one Shape that means something
+   // different per waveform: a host lists them by name, and an automation lane
+   // for the pulse width must not move the wavetable when the waveform changes.
+   // Appended here rather than beside Waveform because a parameter id is
+   // persisted and may never move.
+   kParamPulseWidth,
+   kParamWtPosition,
+   kParamTriSkew,
+   kParamSineBend,
+   kParamNoiseGrain,
+   kParamWavetable,
+   kParamUnisonVoices,
+   kParamUnisonDetune,
+   kParamUnisonSpread,
+
    kNumParams
 };
 
 // The waveform switch, S1 on the main board. Two positions, no blend: the
 // hardware routes one or the other into the filter.
-enum WaveformKind { kWaveSawtooth = 0, kWaveSquare, kNumWaveforms };
+//
+// The rest are additions for the experimental end of the instrument and come
+// after the machine's two, because a preset stores the *name* and a state blob
+// the index: appending is the one change that moves neither.
+enum WaveformKind {
+   kWaveSawtooth = 0,
+   kWaveSquare,
+   kWaveSine,
+   kWaveTriangle,
+   kWavePulse,
+   kWaveWavetable,
+   kWaveNoise,
+   kNumWaveforms
+};
 
 // Where the notes come from.
 //

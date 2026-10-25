@@ -8,6 +8,7 @@
 #   include <windows.h>
 #   include <commdlg.h>
 #   include <shlobj.h>
+#   include <shellapi.h>
 #else
 #   include <unistd.h>
 #endif
@@ -110,6 +111,13 @@ std::string openFolderDialog(const std::string &title) {
    return ok ? narrow(path) : std::string();
 }
 
+
+void revealFolder(const std::string &path) {
+   if (path.empty())
+      return;
+   ShellExecuteW(nullptr, L"open", widen(path).c_str(), nullptr, nullptr, SW_SHOWNORMAL);
+}
+
 #else
 
 namespace {
@@ -204,6 +212,16 @@ std::string saveFileDialog(const std::string &title, const std::string &suggeste
    return runChooser("kdialog --title " + quote(title) + " --getsavefilename " +
                      quote(suggestedPath) + " " + quote("*." + extension + "|" + filterName) +
                      " 2>/dev/null");
+}
+
+void revealFolder(const std::string &path) {
+   if (path.empty())
+      return;
+   // xdg-open hands it to whatever file manager the desktop has, and the
+   // trailing & keeps the editor from waiting for that to close.
+   const std::string command = "xdg-open " + quote(path) + " >/dev/null 2>&1 &";
+   const int ignored = std::system(command.c_str());
+   (void)ignored;
 }
 
 std::string openFolderDialog(const std::string &title) {

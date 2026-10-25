@@ -1,8 +1,11 @@
 #include "saeurekiste.h"
 
 #include "params.h"
+#include "dsp/wavetable.h"
 
 #include <cctype>
+#include <cstdlib>
+#include <filesystem>
 #include <fstream>
 #include <sstream>
 
@@ -23,6 +26,13 @@ const PresetContext &presetContext() {
 std::string factoryPresetDir() { return plugincore::factoryPresetDir(presetContext()); }
 
 std::string userPresetDir() { return plugincore::userPresetDir(presetContext()); }
+
+std::string userWavetableDir() {
+   const std::string presets = userPresetDir();
+   if (presets.empty())
+      return {};
+   return (std::filesystem::u8path(presets).parent_path() / "wavetables").u8string();
+}
 
 bool parsePreset(const char *text, size_t length, PresetData &out, std::string &error) {
    return plugincore::parsePreset(presetContext(), text, length, out, error);
@@ -58,6 +68,33 @@ void trimEnds(std::string &s) {
    s = s.substr(b, e - b);
 }
 
+// The user's wavetable: its name on one line and its samples on the next, as
+// "user_table = <frames> <base64>". A table that does not decode to exactly
+// that many frames is dropped rather than half-loaded.
+constexpr const char *kTableNameKey = "user_table_name";
+constexpr const char *kTableKey = "user_table";
+
+bool parseTableLine(const std::string &key, const std::string &value, PatternData &out) {
+   if (key == kTableNameKey) {
+      out.tableName = value;
+      return true;
+   }
+   if (key != kTableKey)
+      return false;
+   const size_t space = value.find(' ');
+   if (space == std::string::npos)
+      return true;
+   const int frames = std::atoi(value.substr(0, space).c_str());
+   std::vector<int16_t> samples;
+   if (frames < 1 || frames > kWtMaxFrames || !decodeTable(value.substr(space + 1), samples) ||
+       samples.size() != static_cast<size_t>(frames) * kWtSourceLen)
+      return true;
+   out.tablePresent = true;
+   out.tableFrames = frames;
+   out.table = std::move(samples);
+   return true;
+}
+
 void scanPatternLines(const char *text, size_t length, PatternData &out) {
    std::string all(text, length);
    std::istringstream in(all);
@@ -76,7 +113,8 @@ void scanPatternLines(const char *text, size_t length, PatternData &out) {
       std::string value = trimmed.substr(eq + 1);
       trimEnds(key);
       trimEnds(value);
-      parsePatternLine(key, value, out);
+      if (!parseTableLine(key, value, out))
+         parsePatternLine(key, value, out);
    }
 }
 
@@ -112,8 +150,18 @@ bool parsePresetFile(const std::string &path, PresetData &out, PatternData *patt
 
 std::string formatPreset(const PresetData &preset, const PatternData *pattern) {
    std::string out = plugincore::formatPreset(presetContext(), preset);
-   if (pattern)
+   if (pattern) {
       out += formatPattern(*pattern);
+      if (pattern->tablePresent && !pattern->table.empty()) {
+         std::string name = pattern->tableName;
+         for (char &c : name)
+            if (c == '\n' || c == '\r')
+               c = ' ';
+         out += std::string(kTableNameKey) + " = " + name + "\n";
+         out += std::string(kTableKey) + " = " + std::to_string(pattern->tableFrames) + " " +
+                encodeTable(pattern->table) + "\n";
+      }
+   }
    return out;
 }
 

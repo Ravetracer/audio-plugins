@@ -60,8 +60,11 @@ done
 python3 -c "import markdown" 2>/dev/null || {
    echo "python3 markdown module not found -- pip install markdown" >&2; exit 1; }
 
-work="$(mktemp -d)"
-trap 'rm -rf "$work"' EXIT
+# Scratch for the generated sections. A fixed folder under the gitignored
+# dist/, overwritten on every run rather than made fresh and deleted: nothing
+# in the release tooling deletes files.
+work="${root}/dist/.manual-work/${name}"
+mkdir -p "$work"
 
 # ------------------------------------------------------- the generated sections
 "${CXX:-g++}" -std=c++17 -O1 -Wall -Wextra \

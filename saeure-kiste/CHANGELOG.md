@@ -3,6 +3,38 @@
 Versions follow `X.Y.Z`: major / new features / bug fixes. Dates are the day
 the version was committed.
 
+## 0.16.0 -- 2026-10-25
+
+- **Five new waveforms**: Sine, Triangle, Pulse, Wavetable and Noise, after
+  Sawtooth and Square in the Waveform list. Presets and projects that use the
+  first two are unaffected.
+- **Each has an automatable control of its own**: Pulse Width (50 % is the
+  square), WT Position, Tri Skew, Sine Bend (phase distortion) and Noise Grain
+  (sample-and-hold up to one value per cycle of the note). None of them
+  touches the sawtooth or the square, and each waveform ignores the others'.
+- **A live display of the oscillator's cycle** sits on the VCO panel where a
+  knob would. It edits the selected waveform's control -- its label says which
+  -- is dragged, wheeled and typed into like a knob, and follows host
+  automation and modulation.
+- **Wavetables**: eight built-in tables (Analog, PWM, Vocal, Additive, Sync, FM,
+  Fold, Resonant), band-limited per octave, and a **user wavetable folder**
+  beside the presets (`~/.config/SaeureKiste/wavetables`,
+  `%APPDATA%\SaeureKiste\wavetables`). The Table chip opens a selector with the
+  built-in tables and the folder as a tree of collapsible subfolders; it stays
+  open for auditioning, and the chip's arrows step through every table. **Load
+  file...** reads a WAV from anywhere and **Open folder** shows the folder.
+  WAVs: 8/16/24/32-bit PCM or 32-bit float; frame length from the file's own
+  marker, else 2048, else one single cycle; up to 64 frames. The table in use
+  is saved in the project (state version 5) and in presets saved while Table
+  is User.
+- **Unison**: a new UNISON panel behind ADVANCED with Voices (1-16), Detune and
+  Spread. With Spread above zero each side of the stereo field runs its own
+  ladder, drive, tone and output stage.
+- ABL `.pat` import maps the waveform knob to Sawtooth or Square explicitly
+  rather than as a normalised sweep of the longer list.
+- Every factory preset renders bit for bit what 0.15.2 rendered, at 44.1, 48
+  and 96 kHz.
+
 ## 0.15.2 -- 2026-09-25
 
 - **The continuous controls glide.** Cutoff, Resonance, Env Mod, Volume, Drive,

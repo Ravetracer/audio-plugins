@@ -33,7 +33,8 @@ namespace {
 // Row 1 is now the widest rather than row 0: the sequencer, the generator and
 // the delay side by side come to exactly this, with the sequencer's Mode and
 // Rate stacked into one column and the generator's Seed moved out to the step
-// grid where its own buttons already are. Row 0 has the slack instead.
+// grid where its own buttons already are. Row 0 has the slack instead -- 60 px
+// of it since the VCO panel grew to four columns for the oscillator display.
 constexpr int kContentW = 1408;
 
 // -------------------------------------------------------------------- panels
@@ -43,7 +44,19 @@ constexpr int kContentW = 1408;
 // the drive and the output. What is not on the front panel -- the mods, and the
 // three circuits nobody re-tunes twice in a session -- is in the collapsible
 // half below the preset bar.
-constexpr uint32_t kVcoParams[] = {kParamWaveform, kParamTuning};
+//
+// The VCO panel carries the oscillator's additions too: Waveform and Table are
+// chips and share a column, and the oscillator display -- the cycle the
+// oscillator is making, two columns wide -- sits where a knob would. The
+// display edits whichever of the five added waveforms' controls belongs to the
+// one selected; WT Position is only the parameter it is filed under. Tuning
+// stays last, beside Cutoff, so the machine's own row still reads in lid order.
+constexpr uint32_t kVcoParams[] = {kParamWaveform | kStacked, kParamWavetable | kStacked,
+                                   kParamWtPosition, kParamTuning};
+// Unison: the oscillator stacked, detuned and spread. First in the collapsible
+// section because it is the first stage of the signal.
+constexpr uint32_t kUnisonParams[] = {kParamUnisonVoices, kParamUnisonDetune,
+                                      kParamUnisonSpread};
 // The front panel of the machine, in the order it is printed on the lid:
 // Tuning, Cutoff, Resonance, Env Mod, Decay, Accent. Tuning stays on the VCO
 // panel because that is the circuit VR2 is in, and the row still reads in that
@@ -108,10 +121,11 @@ constexpr uint32_t kModParams[] = {
 // The first four panels are the window that opens with the plugin; the rest
 // are the section behind the ADVANCED button.
 constexpr PanelSpec kPanelSpecs[] = {
-   PANEL("VCO", 2, 1, kVcoParams),        PANEL("VCF", 5, 1, kVcfParams),
+   PANEL("VCO", 4, 1, kVcoParams),        PANEL("VCF", 5, 1, kVcfParams),
    PANEL("DRIVE", 5, 1, kDriveParams),    PANEL("OUTPUT", 1, 1, kOutParams),
    PANEL("SEQUENCER", 4, 1, kSeqParams),  PANEL("GENERATOR", 6, 1, kRandParams),
-   PANEL("DELAY", 6, 1, kDelayParams),    PANEL("VCF MOD", 3, 1, kVcfModParams),
+   PANEL("DELAY", 6, 1, kDelayParams),    PANEL("UNISON", 3, 1, kUnisonParams),
+   PANEL("VCF MOD", 3, 1, kVcfModParams),
    PANEL("SLIDE", 1, 1, kSlideParams),    PANEL("VIBRATO", 3, 1, kVibParams),
    PANEL("AMP", 3, 1, kAmpParams),        PANEL("MODS", 13, 1, kModParams),
 };
@@ -123,8 +137,8 @@ constexpr int kNumPanels = static_cast<int>(sizeof(kPanelSpecs) / sizeof(kPanelS
 // width: a panel is as wide as its cells and what is left over stays dark,
 // because a panel stretched over empty space reads as a panel with something
 // missing from it.
-constexpr int kRowStart[] = {0, 4, 7, 11};
-constexpr int kRowCount[] = {4, 3, 4, 1};
+constexpr int kRowStart[] = {0, 4, 7, 12};
+constexpr int kRowCount[] = {4, 3, 5, 1};
 constexpr int kNumRows = 4;
 // Rows from here on are the collapsible section, drawn below the preset bar.
 constexpr int kAdvancedRow = 2;
@@ -134,9 +148,13 @@ constexpr int kAdvancedRow = 2;
 // label and its own - and + buttons up there next to GEN, which is where
 // anybody reaching for it is already looking -- and they are named here so the
 // check that every parameter has a home still counts them.
+//
+// The four added waveforms' controls that are not WT Position are here too:
+// the oscillator display edits them, one at a time, in WT Position's cell.
 constexpr uint32_t kPaneParams[] = {kParamPattern,       kParamChainMode,      kParamChainLength,
                                     kParamRandSeed,      kParamPatternOctave,  kParamPatternTrigger,
-                                    kParamChainRepeat};
+                                    kParamChainRepeat,   kParamPulseWidth,     kParamTriSkew,
+                                    kParamSineBend,      kParamNoiseGrain};
 constexpr int kNumPaneParams = static_cast<int>(sizeof(kPaneParams) / sizeof(kPaneParams[0]));
 
 // What RESET does not touch. Everything else goes back to the default in
@@ -194,7 +212,8 @@ constexpr int windowHeight(bool expanded) {
 constexpr int kWindowH = windowHeight(false);
 constexpr int kWindowExpandedH = windowHeight(true);
 
-// How many columns a panel's parameters take up. A stacked pair shares one.
+// How many columns a panel's parameters take up. A stacked pair shares one,
+// and the oscillator display takes two.
 constexpr int panelColumnsUsed(const PanelSpec &s) {
    int n = 0;
    bool top = false;
@@ -205,7 +224,7 @@ constexpr int panelColumnsUsed(const PanelSpec &s) {
          continue;
       }
       top = stack;
-      ++n;
+      n += (s.params[i] & kParamMask) == kParamWtPosition ? 2 : 1;
    }
    return n;
 }
@@ -468,6 +487,8 @@ const WindowSpec kSpec = {
    /* resetKeep      */ kResetKeep,
    /* resetKeepCount */ kNumResetKeep,
    /* host           */ nullptr, // filled in by createGui: it is the plugin too
+   /* waveViewParam  */ kParamWtPosition,
+   /* tableParam     */ kParamWavetable,
 };
 
 } // namespace

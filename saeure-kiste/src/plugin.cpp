@@ -7,6 +7,8 @@
 #include <cmath>
 #include <cstdio>
 #include <cstring>
+#include <memory>
+#include <mutex>
 #include <string>
 #include <vector>
 
@@ -16,6 +18,7 @@
 #include "plugincore/dsp/fastmath.h"
 #include "dsp/acid_engine.h"
 #include "dsp/delay.h"
+#include "dsp/wavetable.h"
 #include "entry.h"
 #include "factories.h"
 #include "patternimport.h"
@@ -90,7 +93,17 @@ constexpr uint32_t kStateMagic = 0x54534B53u; // 'SKST' little-endian
 // Version 4 appends each pattern's chain mode and repeat count after the
 // pattern map. A blob without them has the old global Chain and Chain Repeat
 // parameters instead, which are copied into every pattern.
-constexpr uint32_t kStateVersion = 4;
+//
+// Version 5 appends the user's wavetable: a 32-bit name length and the name,
+// then a 32-bit frame count and that many frames of kWtSourceLen int16
+// samples. Zero frames is no table. A blob without it loads with no table.
+constexpr uint32_t kStateVersion = 5;
+
+// More than this in a name is a corrupt blob rather than a long file name.
+constexpr uint32_t kMaxTableNameBytes = 1024;
+
+// What windowWaveParam() says when the waveform has no control of its own.
+constexpr uint32_t kNoWaveControl = 0xFFFFFFFFu;
 
 // How many steps per pattern a blob of a given version carries.
 constexpr int kStateStepsInVersion1 = 16;
@@ -218,6 +231,15 @@ private:
       // VCO
       p.waveform = static_cast<int>(realValue(kParamWaveform));
       p.tuningCents = static_cast<float>(realValue(kParamTuning));
+      p.pulseWidth = static_cast<float>(realValue(kParamPulseWidth)) * 0.01f;
+      p.wtPosition = static_cast<float>(realValue(kParamWtPosition));
+      p.triSkew = static_cast<float>(realValue(kParamTriSkew));
+      p.sineBend = static_cast<float>(realValue(kParamSineBend));
+      p.noiseGrain = static_cast<float>(realValue(kParamNoiseGrain));
+      p.wavetable = static_cast<int>(realValue(kParamWavetable));
+      p.unisonVoices = static_cast<int>(realValue(kParamUnisonVoices));
+      p.unisonDetuneCents = static_cast<float>(realValue(kParamUnisonDetune));
+      p.unisonSpread = static_cast<float>(realValue(kParamUnisonSpread));
 
       // VCF
       p.cutoffHz = static_cast<float>(realValue(kParamCutoff));
@@ -447,6 +469,22 @@ private:
          blob.append(reinterpret_cast<const char *>(&repeat), sizeof(repeat));
       }
 
+      // Version 5: the user's wavetable, so a project that uses one opens
+      // with it rather than with whatever file it once came from.
+      {
+         std::lock_guard<std::mutex> lock(plug->mTableMutex);
+         const Wavetable *table = plug->mUserTable.load();
+         const std::string name = table ? table->name.substr(0, kMaxTableNameBytes) : std::string();
+         const uint32_t nameLen = static_cast<uint32_t>(name.size());
+         const uint32_t frames = table ? static_cast<uint32_t>(table->frames()) : 0u;
+         blob.append(reinterpret_cast<const char *>(&nameLen), sizeof(nameLen));
+         blob.append(name);
+         blob.append(reinterpret_cast<const char *>(&frames), sizeof(frames));
+         if (frames > 0)
+            blob.append(reinterpret_cast<const char *>(table->stored().data()),
+                        table->stored().size() * sizeof(int16_t));
+      }
+
       size_t written = 0;
       while (written < blob.size()) {
          const int64_t n =
@@ -541,14 +579,87 @@ private:
          plug->setChainFromLegacy();
       }
 
+      // The wavetable, from version 5 on. Anything short of a whole table is
+      // no table: the Table parameter then falls back to the first built-in.
+      std::unique_ptr<Wavetable> table;
+      uint32_t nameLen = 0;
+      if (readExactly(stream, &nameLen, sizeof(nameLen)) && nameLen <= kMaxTableNameBytes) {
+         std::string name(nameLen, '\0');
+         uint32_t frames = 0;
+         if ((nameLen == 0 || readExactly(stream, &name[0], nameLen)) &&
+             readExactly(stream, &frames, sizeof(frames)) && frames > 0 &&
+             frames <= static_cast<uint32_t>(kWtMaxFrames)) {
+            std::vector<int16_t> samples(static_cast<size_t>(frames) * kWtSourceLen);
+            if (readExactly(stream, samples.data(), samples.size() * sizeof(int16_t))) {
+               table = std::make_unique<Wavetable>();
+               if (table->build(samples.data(), static_cast<int>(frames)))
+                  table->name = name;
+               else
+                  table.reset();
+            }
+         }
+      }
+      plug->publishUserTable(std::move(table));
+
       plug->mParamsDirty.store(true, std::memory_order_release);
       plug->notifyParamValuesChanged();
       return true;
    }
 
+   // ------------------------------------------------------------ the wavetable
+   //
+   // The user's table is built and owned here, on the main thread, and handed
+   // to the audio thread as a pointer. The audio thread says which table it is
+   // using in mUserTableInUse before it touches one -- and checks that it is
+   // still the published one after saying so -- so a table is freed only when
+   // it is neither published nor in use. Old tables are collected on the next
+   // publish; there are never more than a few. [main-thread]
+   void publishUserTable(std::unique_ptr<Wavetable> table) {
+      std::lock_guard<std::mutex> lock(mTableMutex);
+      const Wavetable *raw = table.get();
+      if (table)
+         mTables.push_back(std::move(table));
+      mUserTable.store(raw);
+      mUserTableGeneration.fetch_add(1, std::memory_order_relaxed);
+      const Wavetable *inUse = mUserTableInUse.load();
+      mTables.erase(std::remove_if(mTables.begin(), mTables.end(),
+                                   [&](const std::unique_ptr<Wavetable> &t) {
+                                      return t.get() != raw && t.get() != inUse;
+                                   }),
+                    mTables.end());
+      mParamsDirty.store(true, std::memory_order_release);
+   }
+
+   // The table a preset or the editor should save: the user's, if Table is
+   // set to it. [main-thread]
+   void userTableForPreset(PatternData &out) {
+      if (static_cast<int>(paramToReal(paramTable()[kParamWavetable],
+                                       mValues[kParamWavetable].load(std::memory_order_relaxed))) !=
+          kTableUser)
+         return;
+      std::lock_guard<std::mutex> lock(mTableMutex);
+      const Wavetable *table = mUserTable.load();
+      if (!table || table->empty())
+         return;
+      out.tablePresent = true;
+      out.tableName = table->name;
+      out.tableFrames = table->frames();
+      out.table = table->stored();
+   }
+
    // -------------------------------------------------------------- preset load
 
    void applyPattern(const PatternData &pattern) {
+      // A preset with a table of its own brings it; one without leaves the
+      // loaded table alone, so browsing presets does not throw away a file
+      // somebody has just loaded.
+      if (pattern.tablePresent) {
+         auto table = std::make_unique<Wavetable>();
+         if (table->build(pattern.table.data(), pattern.tableFrames)) {
+            table->name = pattern.tableName;
+            publishUserTable(std::move(table));
+         }
+      }
       // A preset older than per-pattern chains carries the global parameters
       // instead, and applyPreset() has just loaded them.
       if (pattern.chainPresent)
@@ -1617,6 +1728,18 @@ private:
 
       drainGuiEdits(pr->out_events, 0);
 
+      // The user's wavetable: announce which one this block reads before
+      // reading it, and make sure it was not replaced in between -- see
+      // publishUserTable().
+      {
+         const Wavetable *table;
+         do {
+            table = mUserTable.load();
+            mUserTableInUse.store(table);
+         } while (mUserTable.load() != table);
+         mEngine.setUserTable(table);
+      }
+
       // The note output port writes into the same list, at whatever frame the
       // split loop below has reached.
       mOut = pr->out_events;
@@ -2016,6 +2139,7 @@ private:
          pattern.chainMode[p] = mChainMode[p].load(std::memory_order_relaxed);
          pattern.chainRepeat[p] = mChainRepeat[p].load(std::memory_order_relaxed);
       }
+      userTableForPreset(pattern);
 
       if (!writePresetFile(path, formatPreset(data, &pattern), error))
          return false;
@@ -2226,6 +2350,207 @@ private:
 
    void windowSetAdvancedOpen(bool open) override {
       mAdvancedOpen.store(open, std::memory_order_relaxed);
+   }
+
+   // The control that belongs to a waveform, or none for the machine's two.
+   static uint32_t waveControl(int wave) {
+      switch (wave) {
+      case kWavePulse:
+         return kParamPulseWidth;
+      case kWaveWavetable:
+         return kParamWtPosition;
+      case kWaveTriangle:
+         return kParamTriSkew;
+      case kWaveSine:
+         return kParamSineBend;
+      case kWaveNoise:
+         return kParamNoiseGrain;
+      default:
+         return kNoWaveControl;
+      }
+   }
+
+   uint64_t windowWaveKey() const override {
+      const int wave = static_cast<int>(realValue(kParamWaveform));
+      const uint32_t control = waveControl(wave);
+      const double value = control == kNoWaveControl ? 0.0 : effective(control);
+      uint64_t bits = 0;
+      std::memcpy(&bits, &value, sizeof(bits));
+      uint64_t key = static_cast<uint64_t>(wave);
+      key = key * 131u + static_cast<uint64_t>(realValue(kParamWavetable));
+      key = key * 1000003u + mUserTableGeneration.load(std::memory_order_relaxed);
+      return key * 0x9E3779B97F4A7C15ull ^ bits;
+   }
+
+   void windowWaveCycle(float *out, int n, std::string &caption) override {
+      // The controls as the engine has them, with the host's modulation on
+      // top, so the display follows a modulator and not only the knob.
+      EngineParams p;
+      p.waveform = static_cast<int>(realValue(kParamWaveform));
+      p.pulseWidth = static_cast<float>(realValue(kParamPulseWidth)) * 0.01f;
+      p.wtPosition = static_cast<float>(realValue(kParamWtPosition));
+      p.triSkew = static_cast<float>(realValue(kParamTriSkew));
+      p.sineBend = static_cast<float>(realValue(kParamSineBend));
+      p.noiseGrain = static_cast<float>(realValue(kParamNoiseGrain));
+      const int index = static_cast<int>(realValue(kParamWavetable));
+      std::lock_guard<std::mutex> lock(mTableMutex);
+      const Wavetable *table =
+         index < kNumBuiltinTables ? &builtinTable(index) : mUserTable.load();
+      AcidEngine::drawCycle(p, table, out, n);
+      if (p.waveform != kWaveWavetable)
+         caption.clear();
+      else if (index < kNumBuiltinTables)
+         caption = builtinTable(index).name;
+      else if (table && !table->empty())
+         caption = "User: " + table->name;
+      else
+         caption = "User: none loaded";
+   }
+
+   uint32_t windowWaveParam() const override {
+      return waveControl(static_cast<int>(realValue(kParamWaveform)));
+   }
+
+   // ------------------------------------------------------- the table selector
+
+   // Sets a parameter the way the window's own edits do, so the host hears
+   // about it and records it.
+   void setFromEditor(uint32_t id, double value) {
+      guiBeginEdit(id);
+      guiSetParam(id, value);
+      guiEndEdit(id);
+   }
+
+   // The user's table's name, or empty when none is loaded.
+   std::string userTableName() {
+      std::lock_guard<std::mutex> lock(mTableMutex);
+      const Wavetable *table = mUserTable.load();
+      return table && !table->empty() ? table->name : std::string();
+   }
+
+   bool tableIsUser() const {
+      return static_cast<int>(realValue(kParamWavetable)) == kTableUser;
+   }
+
+   void windowTableRows(std::vector<TableRow> &rows) override {
+      rows.clear();
+      const int index = static_cast<int>(realValue(kParamWavetable));
+      rows.push_back({TableRow::Kind::Heading, "BUILT-IN", std::string(), 0, false});
+      for (int t = 0; t < kNumBuiltinTables; ++t)
+         rows.push_back({TableRow::Kind::Table, builtinTable(t).name,
+                         "builtin:" + std::to_string(t), 1, index == t});
+
+      const std::string folder = windowTableFolder();
+      rows.push_back({TableRow::Kind::Heading, "USER", std::string(), 0, false});
+      const std::string current = tableIsUser() ? userTableName() : std::string();
+      const std::vector<TableFile> files = listWavetableFolder(folder);
+      for (const TableFile &f : files) {
+         if (f.folder)
+            rows.push_back({TableRow::Kind::Folder, f.label, f.path, f.depth + 1, false});
+         else
+            rows.push_back({TableRow::Kind::Table, f.label, "file:" + f.path, f.depth + 1,
+                            !current.empty() && tableNameFor(f.path) == current});
+      }
+      if (files.empty())
+         rows.push_back({TableRow::Kind::Note,
+                         folder.empty() ? std::string("No user folder: HOME is not set")
+                                        : "No WAV files in " + folder + " yet",
+                         std::string(), 1, false});
+   }
+
+   bool windowSelectTable(const std::string &key, std::string &error) override {
+      if (key.compare(0, 8, "builtin:") == 0) {
+         const int t = std::atoi(key.c_str() + 8);
+         if (t < 0 || t >= kNumBuiltinTables)
+            return false;
+         setFromEditor(kParamWavetable, static_cast<double>(t));
+      } else if (key.compare(0, 5, "file:") == 0) {
+         const std::string relative = key.substr(5);
+         const std::string path =
+            (std::filesystem::u8path(windowTableFolder()) / std::filesystem::u8path(relative))
+               .u8string();
+         std::vector<int16_t> stored;
+         int frames = 0;
+         if (!readWavetableWav(path, stored, frames, error))
+            return false;
+         auto table = std::make_unique<Wavetable>();
+         if (!table->build(stored.data(), frames)) {
+            error = "the file has no usable cycle in it";
+            return false;
+         }
+         table->name = tableNameFor(relative);
+         publishUserTable(std::move(table));
+         setFromEditor(kParamWavetable, static_cast<double>(kTableUser));
+      } else {
+         return false;
+      }
+      if (static_cast<int>(realValue(kParamWaveform)) != kWaveWavetable)
+         setFromEditor(kParamWaveform, static_cast<double>(kWaveWavetable));
+      return true;
+   }
+
+   void windowStepTable(int direction) override {
+      // Every table in list order: the built-in ones, then the folder's files.
+      std::vector<std::string> keys;
+      for (int t = 0; t < kNumBuiltinTables; ++t)
+         keys.push_back("builtin:" + std::to_string(t));
+      const std::string current = tableIsUser() ? userTableName() : std::string();
+      int at = tableIsUser() ? -1 : static_cast<int>(realValue(kParamWavetable));
+      for (const TableFile &f : listWavetableFolder(windowTableFolder())) {
+         if (f.folder)
+            continue;
+         if (!current.empty() && tableNameFor(f.path) == current)
+            at = static_cast<int>(keys.size());
+         keys.push_back("file:" + f.path);
+      }
+      int next;
+      if (at < 0) // a user table from outside the folder sits between the two
+         next = direction > 0 ? kNumBuiltinTables : kNumBuiltinTables - 1;
+      else
+         next = at + (direction > 0 ? 1 : -1);
+      if (next < 0 || next >= static_cast<int>(keys.size()))
+         return;
+      std::string error;
+      windowSelectTable(keys[static_cast<size_t>(next)], error);
+   }
+
+   std::string windowTableLabel() const override {
+      const int index = static_cast<int>(realValue(kParamWavetable));
+      if (index < kNumBuiltinTables)
+         return builtinTable(index).name;
+      std::lock_guard<std::mutex> lock(mTableMutex);
+      const Wavetable *table = mUserTable.load();
+      if (!table || table->empty())
+         return "User";
+      const size_t slash = table->name.find_last_of('/');
+      return slash == std::string::npos ? table->name : table->name.substr(slash + 1);
+   }
+
+   std::string windowTableFolder() override {
+      const std::string dir = userWavetableDir();
+      if (!dir.empty()) {
+         std::error_code ec;
+         std::filesystem::create_directories(std::filesystem::u8path(dir), ec);
+      }
+      return dir;
+   }
+
+   bool windowLoadWavetable(const std::string &path, std::string &error) override {
+      std::vector<int16_t> stored;
+      int frames = 0;
+      if (!readWavetableWav(path, stored, frames, error))
+         return false;
+      auto table = std::make_unique<Wavetable>();
+      if (!table->build(stored.data(), frames)) {
+         error = "the file has no usable cycle in it";
+         return false;
+      }
+      table->name = std::filesystem::u8path(path).stem().u8string();
+      publishUserTable(std::move(table));
+      setFromEditor(kParamWavetable, static_cast<double>(kTableUser));
+      if (static_cast<int>(realValue(kParamWaveform)) != kWaveWavetable)
+         setFromEditor(kParamWaveform, static_cast<double>(kWaveWavetable));
+      return true;
    }
 
    // ----------------------------------------------------------- gui extension
@@ -2546,6 +2871,15 @@ private:
    std::thread mGuiThread;
    std::atomic<bool> mGuiThreadRun{false};
 #endif
+
+   // The user's wavetable; see publishUserTable(). The list owns every table
+   // that might still be read and the mutex guards it against the editor's
+   // fallback thread as well as the main thread.
+   mutable std::mutex mTableMutex;
+   std::vector<std::unique_ptr<Wavetable>> mTables;
+   std::atomic<const Wavetable *> mUserTable{nullptr};
+   std::atomic<const Wavetable *> mUserTableInUse{nullptr};
+   std::atomic<uint32_t> mUserTableGeneration{0};
 
    AcidEngine mEngine;
    DelayStage mDelay;
