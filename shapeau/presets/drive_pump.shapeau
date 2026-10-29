@@ -1,0 +1,69 @@
+# Shapeau preset
+format = 1
+name = Drive Pump
+author = Shapeau
+description = Distortion that arrives with the beat: the drive curve is a duck shape, so the signal is clean between hits and saturated on them. The mid band is driven hardest, the low band moderately and the high band barely at all.
+
+# Global
+mix = 100
+split_low = 180
+split_high = 2200
+band_low = On
+band_mid = On
+band_high = On
+
+# Volume
+vol_on = Off
+vol_trim = 0
+vol_rate = 1/4
+vol_phase = 0
+vol_smooth = 15
+
+# Filter
+flt_on = Off
+flt_cutoff = 1000
+flt_res = 25
+flt_depth = 5
+flt_drive = 0
+flt_type_low = Lowpass
+flt_type_mid = Lowpass
+flt_type_high = Lowpass
+flt_rate = 1/4
+flt_phase = 0
+flt_smooth = 25
+
+# Drive
+drv_on = On
+drv_style = Soft Clip
+drv_drive = 72
+drv_input = 6
+drv_output = -4
+drv_tone = -15
+drv_mix = 85
+drv_rate = 1/4
+drv_phase = 0
+drv_smooth = 10
+
+# Time
+tim_on = Off
+tim_range = 500
+tim_step = 30
+tim_rate = 1/4
+tim_phase = 0
+tim_smooth = 10
+
+# Shape curves. One line per module and band, in normalised time
+# and value, with each point's weight: 0 hard, 1 medium, 2 soft.
+# Bands are 0 low, 1 mid, 2 high.
+curve vol 0 = 0.0000 1.0000 0, 1.0000 1.0000 0
+curve vol 1 = 0.0000 1.0000 0, 1.0000 1.0000 0
+curve vol 2 = 0.0000 1.0000 0, 1.0000 1.0000 0
+curve flt 0 = 0.0000 1.0000 0, 1.0000 1.0000 0
+curve flt 1 = 0.0000 1.0000 0, 1.0000 1.0000 0
+curve flt 2 = 0.0000 1.0000 0, 1.0000 1.0000 0
+curve drv 0 = 0.0000 0.5500 2, 0.2000 0.5500 2, 1.0000 0.5500 2
+curve drv 1 = 0.0000 0.0000 2, 0.1800 1.0000 2, 1.0000 0.3000 2
+curve drv 2 = 0.0000 1.0000 2, 0.1800 0.3000 2, 1.0000 1.0000 2
+curve tim 0 = 0.0000 1.0000 0, 1.0000 1.0000 0
+curve tim 1 = 0.0000 1.0000 0, 1.0000 1.0000 0
+curve tim 2 = 0.0000 1.0000 0, 1.0000 1.0000 0

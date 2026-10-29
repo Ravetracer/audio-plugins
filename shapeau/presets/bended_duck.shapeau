@@ -1,0 +1,64 @@
+# Shapeau preset
+format = 1
+name = Bended Duck
+author = Shapeau
+description = A quarter-note duck with a bent recovery: the level comes back fast, then eases into unity instead of arriving in a straight line. Drawn across all three bands so the whole signal breathes together.
+
+# Global
+mix = 100
+split_low = 220
+split_high = 1800
+band_low = On
+band_mid = On
+band_high = On
+
+# Volume
+vol_on = On
+vol_trim = 0
+vol_rate = 1/4
+vol_phase = 0
+vol_smooth = 8
+
+# Filter
+flt_on = Off
+
+# Drive
+drv_on = Off
+
+# Crush
+crs_on = Off
+
+# Time
+tim_on = Off
+
+# Pan
+pan_on = Off
+
+# Width
+wid_on = Off
+
+# Shape curves. One line per module and band, in normalised time
+# and value, with each point's corner weight (0 hard, 1 medium, 2
+# soft) and the bend of the segment leaving it (-1 .. +1).
+# Bands are 0 low, 1 mid, 2 high.
+curve vol 0 = 0.0000 0.0600 2 0.850, 0.3400 1.0000 2 0.000, 1.0000 1.0000 0 0.000
+curve vol 1 = 0.0000 0.0600 2 0.850, 0.3400 1.0000 2 0.000, 1.0000 1.0000 0 0.000
+curve vol 2 = 0.0000 0.0600 2 0.850, 0.3400 1.0000 2 0.000, 1.0000 1.0000 0 0.000
+curve flt 0 = 0.0000 1.0000 0 0.000, 1.0000 1.0000 0 0.000
+curve flt 1 = 0.0000 1.0000 0 0.000, 1.0000 1.0000 0 0.000
+curve flt 2 = 0.0000 1.0000 0 0.000, 1.0000 1.0000 0 0.000
+curve drv 0 = 0.0000 1.0000 0 0.000, 1.0000 1.0000 0 0.000
+curve drv 1 = 0.0000 1.0000 0 0.000, 1.0000 1.0000 0 0.000
+curve drv 2 = 0.0000 1.0000 0 0.000, 1.0000 1.0000 0 0.000
+curve tim 0 = 0.0000 1.0000 0 0.000, 1.0000 1.0000 0 0.000
+curve tim 1 = 0.0000 1.0000 0 0.000, 1.0000 1.0000 0 0.000
+curve tim 2 = 0.0000 1.0000 0 0.000, 1.0000 1.0000 0 0.000
+curve crs 0 = 0.0000 1.0000 0 0.000, 1.0000 1.0000 0 0.000
+curve crs 1 = 0.0000 1.0000 0 0.000, 1.0000 1.0000 0 0.000
+curve crs 2 = 0.0000 1.0000 0 0.000, 1.0000 1.0000 0 0.000
+curve pan 0 = 0.0000 0.5000 0 0.000, 1.0000 0.5000 0 0.000
+curve pan 1 = 0.0000 0.5000 0 0.000, 1.0000 0.5000 0 0.000
+curve pan 2 = 0.0000 0.5000 0 0.000, 1.0000 0.5000 0 0.000
+curve wid 0 = 0.0000 0.5000 0 0.000, 1.0000 0.5000 0 0.000
+curve wid 1 = 0.0000 0.5000 0 0.000, 1.0000 0.5000 0 0.000
+curve wid 2 = 0.0000 0.5000 0 0.000, 1.0000 0.5000 0 0.000

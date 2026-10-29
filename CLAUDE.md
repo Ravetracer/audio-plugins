@@ -47,7 +47,8 @@ audio-plugins/
 ├── saeure-kiste/     SaeureKiste — a TB-303 model
 ├── rumpel-kiste/     RumpelKiste — a TR-909 model
 ├── aurum/            Aurum — an algorithmic reverb, NOT built on shared/
-└── substrike/        Substrike — a kick drum designer, NOT built on shared/
+├── substrike/        Substrike — a kick drum designer, NOT built on shared/
+└── shapeau/          Shapeau — a multiband drawing rack, see *Shapeau* below
 ```
 
 ## The plugins
@@ -58,6 +59,7 @@ audio-plugins/
 | 2 | **RumpelKiste** | `rumpel-kiste/` | 0.2.1 | Linux, Windows | CLAP, VST3 | a Roland TR-909 model, from the 1984 service notes, with SäureKiste's sequencer and drive stage |
 | 3 | **Aurum** | `aurum/` | 0.3.1 | Linux, Windows | CLAP, VST3 | a clean-room algorithmic reverb (FDN, allpass ring, plate) with a per-frequency decay contour; own DSP and GUI, see *Aurum* below |
 | 4 | **Substrike** | `substrike/` | 1.1.0 | Linux, Windows | CLAP, VST3 | a layered kick drum designer for every style; standalone like Aurum, see *Substrike* below |
+| 5 | **Shapeau** | `shapeau/` | 0.3.0 | Linux, Windows | CLAP, VST3 | a multiband drawing rack: a reorderable chain of shape-driven effects per band, with the audio drawn behind the shape; see *Shapeau* below |
 
 Naming follows the plugin, not a pattern: the CMake project, the installed
 artifact and the display name are CamelCase (`SaeureKiste`), the folder is
@@ -506,6 +508,40 @@ What to know before working there:
 - `substrike/!references/` holds third-party kick samples used to measure the
   ranges the engine must reach (the table in PLAN.md). Gitignored via
   `*/\!references/`; never commit, never ship, never name the packs.
+
+## Shapeau
+
+`shapeau/` is a multiband drawing rack: a chain of effects, each driven by a
+shape drawn per frequency band and locked to the beat. It is built on
+`shared/` (parameters, presets, the toolkit) with a **fork** of the window in
+`src/gui/window.cpp`, like SäureKiste's, plus its own shape editor
+(`src/gui/curvepanel.*`). The *Rule for a shared change* covers it.
+
+`docs/PLAN.md` is the source of truth: four phases towards the commercial
+shape-based effects rack it is modelled on. Phase 1 (0.3.0) is done -- the
+scope behind the shape, one effect at a time, a reorderable chain; phases 2-4
+are editing tools, timing and triggers, and more effects.
+
+Rules specific to Shapeau:
+
+- **Never name the reference product or its vendor** anywhere in the
+  repository -- code, comments, docs, presets, commit messages -- the same rule
+  as Aurum's, for the same reason: a free public release. Shapeau's names are
+  its own. The reference's manual is in `Documents/` and stays there.
+- **The chain lives in `CurveSet`**, with the shapes: state, not parameters,
+  handed to the audio thread through the engine's seqlock. An effect switched
+  on but not listed still runs, after the listed ones in the old order
+  (`effectiveChain()`), which is what keeps presets from before the chain
+  playing as they did. Every chain edit in the plugin starts by writing the
+  effective order into the list (`materializeChain()`).
+- **The scope is written by the audio thread**, bin by bin at the shape's own
+  phase (`Scope` in `dsp/engine.h`), and only while a window is open. A new
+  scope view is a new reader of those bins, not a new writer.
+- `shapeau-render --selftest` is the test harness, as elsewhere; the GUI host
+  (`shapeau-guihost`, X11 only) plays a drum loop so the scope has something
+  to show. Windows: cross-build with `-DSHAPEAU_WIN_CAIRO=<abs path>` and run
+  the self-test under wine; the win32 editor can be opened with Aurum's
+  `clap_gui_host.exe`, which loads any CLAP plugin.
 
 ## Build and install
 

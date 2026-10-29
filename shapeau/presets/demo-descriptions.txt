@@ -1,0 +1,16 @@
+# One line per factory preset, for the website demos and their blurbs.
+#
+# shared/tools/make-demos.sh prefers these over the preset's own description,
+# which is written as documentation. One "Preset Name = text" per line; blank
+# lines and # comments are ignored. Every preset must have a line here, or the
+# script falls back and warns.
+
+Kick Duck = The bass dips out of the way of the kick, and nothing above it moves.
+Half Speed Stop = One bar drags into half speed and hangs there until the next downbeat.
+Filter Wobble = A resonant cutoff sweep on the eighth notes, moving under the bass rather than over it.
+Gated Stabs = A hard sixteenth-note chop, with the low end jumping on the off-beats.
+Drive Pump = Clean between the hits, saturated on them.
+Live Stutter = The top end retriggers in sixteenths while the kick and bass hold the floor.
+Crush Steps = A sixteenth-note pattern of bit and sample-rate crush, moving with the beat.
+Pan Steps = The bottom end jumps left and right in sixteenths while the rest holds the centre.
+Bended Duck = A quarter-note duck that snaps back fast and then eases into unity.

@@ -1,0 +1,69 @@
+# Shapeau preset
+format = 1
+name = Filter Wobble
+author = Shapeau
+description = A cutoff sweep on the eighth notes, dark and resonant in the low band and opening across the mid and high, so the movement sits under a bass line instead of on top of it. Cutoff at 420 Hz, five octaves of depth.
+
+# Global
+mix = 100
+split_low = 260
+split_high = 1600
+band_low = On
+band_mid = On
+band_high = On
+
+# Volume
+vol_on = Off
+vol_trim = 0
+vol_rate = 1/8
+vol_phase = 0
+vol_smooth = 15
+
+# Filter
+flt_on = On
+flt_cutoff = 420
+flt_res = 55
+flt_depth = 5
+flt_drive = 20
+flt_type_low = Lowpass
+flt_type_mid = Lowpass
+flt_type_high = Bandpass
+flt_rate = 1/8
+flt_phase = 0
+flt_smooth = 30
+
+# Drive
+drv_on = Off
+drv_style = Soft Clip
+drv_drive = 40
+drv_input = 0
+drv_output = 0
+drv_tone = 0
+drv_mix = 100
+drv_rate = 1/4
+drv_phase = 0
+drv_smooth = 20
+
+# Time
+tim_on = Off
+tim_range = 500
+tim_step = 30
+tim_rate = 1/4
+tim_phase = 0
+tim_smooth = 10
+
+# Shape curves. One line per module and band, in normalised time
+# and value, with each point's weight: 0 hard, 1 medium, 2 soft.
+# Bands are 0 low, 1 mid, 2 high.
+curve vol 0 = 0.0000 1.0000 0, 1.0000 1.0000 0
+curve vol 1 = 0.0000 1.0000 0, 1.0000 1.0000 0
+curve vol 2 = 0.0000 1.0000 0, 1.0000 1.0000 0
+curve flt 0 = 0.0000 0.0000 2, 0.4400 1.0000 2, 1.0000 0.3500 2
+curve flt 1 = 0.0000 0.2000 2, 0.4400 1.0000 2, 1.0000 1.0000 2
+curve flt 2 = 0.0000 1.0000 2, 0.4400 0.0000 2, 1.0000 0.5000 2
+curve drv 0 = 0.0000 1.0000 0, 1.0000 1.0000 0
+curve drv 1 = 0.0000 1.0000 0, 1.0000 1.0000 0
+curve drv 2 = 0.0000 1.0000 0, 1.0000 1.0000 0
+curve tim 0 = 0.0000 1.0000 0, 1.0000 1.0000 0
+curve tim 1 = 0.0000 1.0000 0, 1.0000 1.0000 0
+curve tim 2 = 0.0000 1.0000 0, 1.0000 1.0000 0
