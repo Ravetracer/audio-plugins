@@ -13,9 +13,12 @@ applied -- so a duck is drawn onto the kick it ducks for.
 
 What that buys:
 
-- **Ducking without a sidechain.** Draw the dip on the low band and leave the
-  mid and high bands flat: the bass gets out of the kick's way and the top of
-  the mix does not pump with it.
+- **Ducking, with or without a sidechain.** Draw the dip on the low band and
+  leave the mid and high bands flat: the bass gets out of the kick's way and
+  the top of the mix does not pump with it. Route the kick into the sidechain
+  input and set the effect's Trigger to Audio, and the duck starts on every
+  kick, wherever it falls -- with the kick drawn in amber behind the shape, so
+  the dip can be fitted to it by eye.
 - **A filter sweep as a line.** The shape is a cutoff position — the top of the
   editor is the Cutoff knob, the bottom is that value pushed down by Depth
   octaves — so one drawing is a two-octave wobble at 400 Hz or an eight-octave
@@ -31,10 +34,13 @@ What that buys:
 - **A stereo image that moves.** Width takes a band from mono to double width;
   pan walks it across the field. Both are drawn, both are per band.
 
-Three Linkwitz-Riley fourth-order bands, a chain of up to seven effects per
-band, one mixed output. No latency.
+Any effect can also be restarted by a MIDI note or a hit -- once, holding at an
+End marker until the next one, or looping -- instead of following the beat.
 
-Fifty-six parameters, nine presets. Shapes are stored in the preset as text, so
+Three Linkwitz-Riley fourth-order bands, a chain of up to seven effects per
+band, one mixed output, a sidechain input. No latency.
+
+Eighty-three parameters, ten presets. Shapes are stored in the preset as text, so
 a drawing survives a save, a reload and a different machine.
 
 ## The window
@@ -42,7 +48,8 @@ a drawing survives a save, a reload and a different machine.
 The editor fills the top: the **effect bar** on the left (the chain, in order --
 a dot bypasses an effect, × takes it out, drag moves it, + adds one), the band
 tabs and the editing aids on the right, and the shape over the audio it shapes.
-Under it are two panels: GLOBAL, and the selected effect's controls. An empty
+Under it are GLOBAL and TRIGGER (the audio and MIDI trigger setup), and the
+selected effect's controls. An empty
 chain shows the seven effects in the editor, one click from being added.
 
 ## The shape editor

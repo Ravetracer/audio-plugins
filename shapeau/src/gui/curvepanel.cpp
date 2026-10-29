@@ -287,6 +287,7 @@ void CurvePanel::draw(cairo_t *cr, const CurvePalette &pal, const CurveAccess &a
       return;
    }
    drawScope(cr, pal, access);
+   drawTrigger(cr, pal, access);
 
    // The grid: sixteenths across, quarters up. In step mode every cell is also
    // a click target, which the sixteen divisions already say.
@@ -474,6 +475,31 @@ void CurvePanel::drawScope(cairo_t *cr, const CurvePalette &pal, const CurveAcce
    setColor(cr, pal.accent, 0.28);
    band(scope->outLo, scope->outHi);
 
+   // The sidechain, over both and in its own colour with an edge, so the hit a
+   // duck is drawn around reads through the audio it ducks. Only when there is
+   // one: an unconnected or silent sidechain draws nothing at all.
+   bool side = false;
+   for (int i = 0; i < n && !side; ++i)
+      side = std::fabs(scope->sideHi[i].load(std::memory_order_relaxed)) > 1.0e-4f ||
+             std::fabs(scope->sideLo[i].load(std::memory_order_relaxed)) > 1.0e-4f;
+   if (side) {
+      setColor(cr, pal.sidechain, 0.16);
+      band(scope->sideLo, scope->sideHi);
+      setColor(cr, pal.sidechain, 0.85);
+      cairo_set_line_width(cr, 1.0);
+      for (int i = 0; i < n; ++i) {
+         float top = scope->sideHi[i].load(std::memory_order_relaxed);
+         if (!centred)
+            top = std::max(std::fabs(top),
+                           std::fabs(scope->sideLo[i].load(std::memory_order_relaxed)));
+         i == 0 ? cairo_move_to(cr, xAt(i), yAt(top)) : cairo_line_to(cr, xAt(i), yAt(top));
+      }
+      if (centred)
+         for (int i = n - 1; i >= 0; --i)
+            cairo_line_to(cr, xAt(i), yAt(scope->sideLo[i].load(std::memory_order_relaxed)));
+      cairo_stroke(cr);
+   }
+
    // The trace, where the modulation leaves the drawn shape.
    setColor(cr, pal.text, 0.55);
    cairo_set_line_width(cr, 1.2);
@@ -499,6 +525,81 @@ void CurvePanel::drawScope(cairo_t *cr, const CurvePalette &pal, const CurveAcce
       cairo_line_to(cr, x, g.y + g.h);
       cairo_stroke(cr);
    }
+}
+
+bool CurvePanel::showsEnd(const CurveAccess &access) const {
+   const int module = access.curveModule();
+   return access.curveTriggerMode(module) != kTrigSync && !access.curveTriggerLoop(module);
+}
+
+bool CurvePanel::endAt(double x, double y, const CurveAccess &access) const {
+   if (!showsEnd(access))
+      return false;
+   const Rect g = graphRect();
+   return y >= g.y && y <= g.y + g.h &&
+          std::fabs(x - xOf(access.curveEnd(access.curveModule()))) <= 5.0;
+}
+
+// What a triggered effect shows: what starts it and whether it loops, a lamp
+// that lights on every trigger -- which is how a threshold is set by eye --
+// and, for a shape run once, its End marker with the part of the shape it
+// never reaches dimmed.
+void CurvePanel::drawTrigger(cairo_t *cr, const CurvePalette &pal, const CurveAccess &access) const {
+   const int module = access.curveModule();
+   const int mode = access.curveTriggerMode(module);
+   if (mode == kTrigSync)
+      return;
+   const Rect g = graphRect();
+
+   if (showsEnd(access)) {
+      const double x = std::floor(xOf(access.curveEnd(module))) + 0.5;
+      setColor(cr, pal.panelFill, 0.55);
+      cairo_rectangle(cr, x, g.y, g.x + g.w - x, g.h);
+      cairo_fill(cr);
+      const bool hot = mEndHover || mDragEnd >= 0;
+      setColor(cr, pal.sidechain, hot ? 1.0 : 0.75);
+      cairo_set_line_width(cr, hot ? 2.0 : 1.4);
+      const double dash[] = {4.0, 3.0};
+      cairo_set_dash(cr, dash, 2, 0.0);
+      cairo_move_to(cr, x, g.y);
+      cairo_line_to(cr, x, g.y + g.h);
+      cairo_stroke(cr);
+      cairo_set_dash(cr, nullptr, 0, 0.0);
+      // A flag at the top says what the line is and where to take hold of it.
+      const double fw = 30.0, fh = 14.0;
+      const double fx = std::min(x, g.x + g.w - fw);
+      roundedRect(cr, fx, g.y, fw, fh, 3);
+      cairo_fill(cr);
+      setColor(cr, pal.panelFill);
+      drawText(cr, fx + fw * 0.5, g.y + 10.5, "END", 7.5, true, Align::Center);
+   }
+
+   const char *label = mode == kTrigMidi ? (access.curveTriggerLoop(module) ? "MIDI  LOOP" : "MIDI  ONCE")
+                                         : (access.curveTriggerLoop(module) ? "AUDIO  LOOP"
+                                                                            : "AUDIO  ONCE");
+   const Scope *scope = access.curveScope();
+   if (scope) {
+      const uint32_t count = scope->triggers.load(std::memory_order_relaxed);
+      if (count != mSeenTriggers) {
+         mSeenTriggers = count;
+         mLampPaints = 4;
+      } else if (mLampPaints > 0) {
+         --mLampPaints;
+      }
+   }
+   const double lx = g.x + 14.0, ly = g.y + 14.0;
+   cairo_new_path(cr); // text leaves a current point, and an arc would join it
+   cairo_arc(cr, lx, ly, 4.0, 0.0, 2.0 * kPi);
+   if (mLampPaints > 0) {
+      setColor(cr, pal.sidechain);
+      cairo_fill(cr);
+   } else {
+      setColor(cr, pal.sidechain, 0.6);
+      cairo_set_line_width(cr, 1.2);
+      cairo_stroke(cr);
+   }
+   setColor(cr, pal.sidechain, 0.9);
+   drawText(cr, lx + 10.0, ly + 3.5, label, 8.0, true, Align::Left);
 }
 
 // What an empty chain shows instead of a shape: the effects there are, one
@@ -672,6 +773,14 @@ bool CurvePanel::press(double x, double y, unsigned button, double timeMs, Curve
       return true;
    }
 
+   if (hit < 0 && endAt(x, y, access)) {
+      // A point owns its spot, so a point at the end of the shape stays
+      // draggable; everywhere else along its line, the End marker is held.
+      mDragEnd = module;
+      access.curveBeginEnd(module);
+      return true;
+   }
+
    if (hit >= 0) {
       mDragPoint = hit;
    } else {
@@ -721,6 +830,13 @@ void CurvePanel::motion(double x, double y, CurveAccess &access) {
       paintStep(stepAt(x), toValue(y), access);
       return;
    }
+   if (mDragEnd >= 0) {
+      float px = static_cast<float>(toPhase(x));
+      if (access.curveSnap())
+         px = snapPhase(px);
+      access.curveSetEnd(mDragEnd, px);
+      return;
+   }
    if (mDragPoint >= 0) {
       float px = static_cast<float>(toPhase(x));
       if (access.curveSnap())
@@ -744,13 +860,17 @@ void CurvePanel::motion(double x, double y, CurveAccess &access) {
    }
    if (graphRect().contains(x, y)) {
       mHoverPoint = pointAt(x, y, access.curveAt(access.curveModule(), access.curveBand()));
+      mEndHover = mHoverPoint < 0 && endAt(x, y, access);
       mHoverSegment =
          mHoverPoint < 0
             ? segmentAt(x, y, access.curveAt(access.curveModule(), access.curveBand()))
             : -1;
+      if (mEndHover)
+         mHoverSegment = -1;
    } else {
       mHoverPoint = -1;
       mHoverSegment = -1;
+      mEndHover = false;
    }
 }
 
@@ -767,6 +887,10 @@ void CurvePanel::release(CurveAccess &access) {
          access.curveChainMove(mTabDrag, std::max(0, std::min(place, n - 1)));
       }
       mTabDrag = -1;
+   }
+   if (mDragEnd >= 0) {
+      access.curveFinishEnd(mDragEnd);
+      mDragEnd = -1;
    }
    mDragPoint = -1;
    mDragSegment = -1;

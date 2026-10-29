@@ -5,7 +5,7 @@ author = Shapeau
 description = A quarter-note duck with a bent recovery: the level comes back fast, then eases into unity instead of arriving in a straight line. Drawn across all three bands so the whole signal breathes together.
 
 # Global
-mix = 100
+mix = 1
 split_low = 220
 split_high = 1800
 band_low = On
@@ -17,7 +17,7 @@ vol_on = On
 vol_trim = 0
 vol_rate = 1/4
 vol_phase = 0
-vol_smooth = 8
+vol_smooth = 0.08
 
 # Filter
 flt_on = Off

@@ -5,7 +5,7 @@ author = Shapeau
 description = A cutoff sweep on the eighth notes, dark and resonant in the low band and opening across the mid and high, so the movement sits under a bass line instead of on top of it. Cutoff at 420 Hz, five octaves of depth.
 
 # Global
-mix = 100
+mix = 1
 split_low = 260
 split_high = 1600
 band_low = On
@@ -17,40 +17,40 @@ vol_on = Off
 vol_trim = 0
 vol_rate = 1/8
 vol_phase = 0
-vol_smooth = 15
+vol_smooth = 0.15
 
 # Filter
 flt_on = On
 flt_cutoff = 420
-flt_res = 55
+flt_res = 0.55
 flt_depth = 5
-flt_drive = 20
+flt_drive = 0.2
 flt_type_low = Lowpass
 flt_type_mid = Lowpass
 flt_type_high = Bandpass
 flt_rate = 1/8
 flt_phase = 0
-flt_smooth = 30
+flt_smooth = 0.3
 
 # Drive
 drv_on = Off
 drv_style = Soft Clip
-drv_drive = 40
+drv_drive = 0.4
 drv_input = 0
 drv_output = 0
 drv_tone = 0
-drv_mix = 100
+drv_mix = 1
 drv_rate = 1/4
 drv_phase = 0
-drv_smooth = 20
+drv_smooth = 0.2
 
 # Time
 tim_on = Off
 tim_range = 500
-tim_step = 30
+tim_step = 0.3
 tim_rate = 1/4
 tim_phase = 0
-tim_smooth = 10
+tim_smooth = 0.1
 
 # Shape curves. One line per module and band, in normalised time
 # and value, with each point's weight: 0 hard, 1 medium, 2 soft.

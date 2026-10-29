@@ -14,3 +14,4 @@ Live Stutter = The top end retriggers in sixteenths while the kick and bass hold
 Crush Steps = A sixteenth-note pattern of bit and sample-rate crush, moving with the beat.
 Pan Steps = The bottom end jumps left and right in sixteenths while the rest holds the centre.
 Bended Duck = A quarter-note duck that snaps back fast and then eases into unity.
+Sidechain Duck = The whole mix breathes around the kick, hit for hit, however the kick is programmed.

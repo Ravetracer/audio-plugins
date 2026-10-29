@@ -2,11 +2,15 @@
 // and photographed without a DAW. The plugin's GUI is embedded (non-floating),
 // so a host has to supply the parent window; that is all this does.
 //
-//   ./shapeau-guihost [plugin.clap] [seconds]
+//   ./shapeau-guihost [plugin.clap] [seconds] [--scale s] [--sidechain]
+//                     [--param Module/Name=value ...]
 //
 // It processes a drum loop on a thread as well, because the editor reads its
 // parameter values, its peaks and its scope back through the same path a host
-// would -- and a scope fed a steady tone shows nothing a scope is for.
+// would -- and a scope fed a steady tone shows nothing a scope is for. With
+// --sidechain the input is a bass line and the kick goes to the sidechain
+// instead, the way a duck is set up in a DAW. --param sets a parameter by the
+// name a host lists it under, as text: Volume/Trigger=Audio, Trigger/Threshold=-30.
 
 #include <clap/clap.h>
 
@@ -24,7 +28,9 @@
 #include <cstdlib>
 #include <cstring>
 #include <string>
+#include <strings.h>
 #include <thread>
+#include <vector>
 
 namespace {
 
@@ -96,9 +102,17 @@ int main(int argc, char **argv) {
    // a host on a high-density screen would; screenshots for print and the web
    // are taken at 1.5.
    double scale = 0.0;
-   for (int i = 3; i + 1 < argc; ++i)
-      if (std::string(argv[i]) == "--scale")
-         scale = std::atof(argv[i + 1]);
+   bool sidechain = false;
+   std::vector<std::string> settings;
+   for (int i = 3; i < argc; ++i) {
+      const std::string a = argv[i];
+      if (a == "--scale" && i + 1 < argc)
+         scale = std::atof(argv[++i]);
+      else if (a == "--sidechain")
+         sidechain = true;
+      else if (a == "--param" && i + 1 < argc)
+         settings.push_back(argv[++i]);
+   }
 
    void *handle = openLibrary(path.c_str());
    if (!handle) {
@@ -127,6 +141,47 @@ int main(int argc, char **argv) {
    plugin->init(plugin);
    plugin->activate(plugin, 48000.0, 1, 512);
    plugin->start_processing(plugin);
+
+   // Parameters by the name a host shows them under, and their value as text,
+   // through the same flush a host uses.
+   const auto *params =
+      static_cast<const clap_plugin_params_t *>(plugin->get_extension(plugin, CLAP_EXT_PARAMS));
+   for (const std::string &setting : settings) {
+      const size_t eq = setting.find('=');
+      if (!params || eq == std::string::npos)
+         continue;
+      const std::string name = setting.substr(0, eq), text = setting.substr(eq + 1);
+      uint32_t id = UINT32_MAX;
+      for (uint32_t i = 0; i < params->count(plugin); ++i) {
+         clap_param_info_t info{};
+         if (params->get_info(plugin, i, &info) &&
+             strcasecmp((std::string(info.module) + "/" + info.name).c_str(), name.c_str()) == 0)
+            id = info.id;
+      }
+      double value = 0.0;
+      if (id == UINT32_MAX || !params->text_to_value(plugin, id, text.c_str(), &value)) {
+         std::fprintf(stderr, "cannot set %s\n", setting.c_str());
+         continue;
+      }
+      clap_event_param_value_t ev{};
+      ev.header.size = sizeof(ev);
+      ev.header.type = CLAP_EVENT_PARAM_VALUE;
+      ev.header.space_id = CLAP_CORE_EVENT_SPACE_ID;
+      ev.param_id = id;
+      ev.note_id = -1;
+      ev.port_index = -1;
+      ev.channel = -1;
+      ev.key = -1;
+      ev.value = value;
+      const clap_event_header_t *header = &ev.header;
+      clap_input_events_t in{&header, [](const clap_input_events_t *) { return 1u; },
+                             [](const clap_input_events_t *list, uint32_t) {
+                                return *static_cast<const clap_event_header_t *const *>(list->ctx);
+                             }};
+      clap_output_events_t out{nullptr, [](const clap_output_events_t *,
+                                           const clap_event_header_t *) { return true; }};
+      params->flush(plugin, &in, &out);
+   }
 
    const auto *gui =
       static_cast<const clap_plugin_gui_t *>(plugin->get_extension(plugin, CLAP_EXT_GUI));
@@ -171,39 +226,56 @@ int main(int argc, char **argv) {
 
    std::thread audio([&] {
       float left[512] = {0}, right[512] = {0};
+      float sideL[512] = {0}, sideR[512] = {0};
       // A drum loop at 120 BPM, so the editor's scope has something to show:
       // a kick on every beat whose pitch falls from 160 to 50 Hz, a hat on
-      // every off-beat, and a quiet bass note under both.
+      // every off-beat, and a quiet bass note under both. With --sidechain
+      // the kick -- with an extra one on the last sixteenth of the bar, which
+      // a duck in Sync cannot follow and one set to Audio can -- is on the
+      // sidechain, and the input is an eighth-note bass line and the hats.
       double phase = 0.0, kickPhase = 0.0;
       uint64_t frame = 0;
       uint32_t noise = 12345u;
       while (gRunning.load()) {
          for (int i = 0; i < 512; ++i, ++frame) {
-            const double t = static_cast<double>(frame % 24000) / 48000.0;  // into the beat
+            const uint64_t inBar = frame % 96000;
+            uint64_t sinceKick = frame % 24000;
+            if (sidechain && inBar >= 90000)
+               sinceKick = inBar - 90000;
+            const double t = static_cast<double>(sinceKick) / 48000.0; // since the kick
             const double off = static_cast<double>((frame + 12000) % 24000) / 48000.0;
             kickPhase = t < 1.0 / 48000.0 ? 0.0 : kickPhase;
             kickPhase += 2.0 * 3.14159265358979 * (50.0 + 110.0 * std::exp(-t * 30.0)) / 48000.0;
             noise = noise * 1664525u + 1013904223u;
             const double white = static_cast<double>(noise >> 8) / 8388608.0 - 1.0;
-            const double s = 0.7 * std::exp(-t * 9.0) * std::sin(kickPhase) +
-                             0.12 * std::exp(-off * 60.0) * white +
-                             0.08 * std::sin(phase);
-            left[i] = static_cast<float>(s);
-            right[i] = static_cast<float>(s);
+            const double kick = 0.7 * std::exp(-t * 9.0) * std::sin(kickPhase);
+            const double hat = 0.12 * std::exp(-off * 60.0) * white;
+            if (sidechain) {
+               const double eighth = static_cast<double>(frame % 12000) / 48000.0;
+               const double bass = 0.45 * std::min(1.0, eighth * 400.0) *
+                                   (std::sin(phase) + 0.3 * std::sin(2.0 * phase));
+               left[i] = right[i] = static_cast<float>(bass + hat);
+               sideL[i] = sideR[i] = static_cast<float>(kick);
+            } else {
+               left[i] = right[i] = static_cast<float>(kick + hat + 0.08 * std::sin(phase));
+            }
             phase += 2.0 * 3.14159265358979 * 55.0 / 48000.0;
          }
          float *inPtrs[2] = {left, right};
+         float *sidePtrs[2] = {sideL, sideR};
          float *outPtrs[2] = {left, right};
-         clap_audio_buffer_t inBuf{};
-         inBuf.data32 = inPtrs;
-         inBuf.channel_count = 2;
+         clap_audio_buffer_t inBufs[2] = {};
+         inBufs[0].data32 = inPtrs;
+         inBufs[0].channel_count = 2;
+         inBufs[1].data32 = sidePtrs;
+         inBufs[1].channel_count = 2;
          clap_audio_buffer_t outBuf{};
          outBuf.data32 = outPtrs;
          outBuf.channel_count = 2;
          clap_process_t proc{};
          proc.frames_count = 512;
-         proc.audio_inputs = &inBuf;
-         proc.audio_inputs_count = 1;
+         proc.audio_inputs = inBufs;
+         proc.audio_inputs_count = sidechain ? 2 : 1;
          proc.audio_outputs = &outBuf;
          proc.audio_outputs_count = 1;
          plugin->process(plugin, &proc);

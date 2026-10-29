@@ -1,16 +1,60 @@
 # Shapeau — status
 
-Version 0.3.0. Linux and Windows, CLAP and VST3. 56 parameters, 9 factory
+Version 0.4.0. Linux and Windows, CLAP and VST3. 83 parameters, 10 factory
 presets.
 
 Builds clean on Linux and cross-built for Windows in the repository's build
-container (`./devbox.sh`). `shapeau-render --selftest` passes all 40 checks on
+container (`./devbox.sh`). `shapeau-render --selftest` passes all 58 checks on
 Linux and under wine; the Windows build imports only system DLLs and its win32
 editor has been opened and photographed under wine. No DAW has loaded it and
 nothing has been listened to -- the user tests on another machine.
 
 `docs/PLAN.md` is the plan: four phases towards the shape-based effects rack it
-is modelled on. Phase 1 is this release.
+is modelled on. Phase 1 was 0.3.0; 0.4.0 pulls the triggers forward from
+phase 3.
+
+## 0.4.0 -- triggers and the sidechain
+
+- **A sidechain input.** A second stereo input port ("Sidechain", not main). It
+  is never heard: the audio trigger listens to it and the scope draws it, in
+  amber over the input and output, for the effect and band on screen -- in
+  every trigger mode, so a beat-synced duck can be lined up with a kick on
+  another track as well.
+- **Trigger, Loop and End on every effect** (`<fx>_trigger`, `<fx>_loop`,
+  `<fx>_end`, appended after the old ids in Module order). Sync is what every
+  effect did before and stays the default. MIDI restarts the cycle on a note at
+  the note's frame; Audio on a hit the detector finds. A triggered cycle runs
+  at the effect's Rate counted from the trigger, with Phase on top; Loop Off
+  runs it once and holds at End, Loop On cycles until the next trigger. Before
+  its first trigger a cycle rests at End (Loop On: at 1), so a duck drawn back
+  to the top is transparent until something starts it. A trigger moves the
+  phase at the control-block boundary (16 samples), and the existing
+  interpolation and Smooth make the restart the ramp it needs to be.
+- **The TRIGGER panel**, beside GLOBAL: Source (Sidechain / Input), Threshold,
+  Focus (a two-pole lowpass in front of the detector only), Hold, and the MIDI
+  Note and Octave. The detector is a peak follower with a 30 ms release that
+  fires on crossing the threshold, re-arms 6 dB below it, and never fires twice
+  within Hold. One note input, CLAP and MIDI dialects; a MIDI note-on at
+  velocity zero is a note-off, as MIDI defines it.
+- **In the editor:** the trigger mode and a lamp that lights on every trigger;
+  for a cycle run once, a dashed END marker that is dragged like a point (a
+  point at the same place wins) and sets the End parameter as a host gesture,
+  with the shape after it dimmed. A triggered cycle's scope is laid out from
+  the trigger, so the kick that started it sits at the left edge, and nothing
+  is written while it holds.
+- **The factory presets loaded wrong, and now do not.** The preset format
+  stores a percentage as a ratio (0..1) and all nine Shapeau presets were
+  written as 0..100, so every Smooth, Drive, Resonance, Mix, Step, Phase and
+  Tone that was not exactly 0 or 100 loaded at **100 %** -- Kick Duck smoothed
+  its duck over 30 ms and ducked a 60 Hz tone by 8 dB instead of 26. Every
+  preset changes sound with this, to what it was written to be. A self-test
+  check now reads every percentage back against the file.
+- **Sidechain Duck**, a tenth preset: a full-band duck set to Audio.
+- The GUI host takes `--sidechain` (a bass line on the input, the kick -- with
+  an extra one on the last sixteenth -- on the sidechain) and
+  `--param Module/Name=value`.
+- Sync renders are bit-identical to 0.3.0's for every preset at 48 and
+  44.1 kHz (old and new plugin, same preset files).
 
 ## 0.3.0 -- the scope and the chain
 
@@ -72,7 +116,9 @@ is modelled on. Phase 1 is this release.
 - **Beat lock.** Per-stage Rate (1/32 to 4 bars) and Phase, taken from the
   host's transport position. With the transport stopped the shapes free-run at
   the host's tempo (120 BPM if the host has none).
-- **Presets.** Nine factory presets, compiled in, each carrying its shapes; the
+- **Triggers.** Sync, MIDI or Audio per effect, once or looping, with an End
+  marker; the audio trigger on the sidechain or the input. See 0.4.0 above.
+- **Presets.** Ten factory presets, compiled in, each carrying its shapes; the
   shared text format with the shapes as extra lines; user presets and CLAP
   preset discovery through the shared provider.
 
@@ -98,8 +144,20 @@ From `--selftest`, on the built plugin:
 | Crush at 4 bits / 8x | -7.9 dB against the clean signal, bounded |
 | Crush at zero amount | 0.000 dB against the clean signal |
 | Preset text with shapes | round-trips point for point |
-| All nine factory presets | parse with their shapes |
-| The built `.clap` through the CLAP API | loads, instantiates, exposes 56 params, one stereo in / one stereo out, processes without producing anything non-finite, offers preset-load, loads a factory preset |
+| All ten factory presets | parse with their shapes |
+| Every percentage in every factory preset | loads as written |
+| Volume shape (silent first half) set to MIDI, no note | rests at End: nothing ducked |
+| The same, one note | silent half a cycle from the note, then open and held |
+| Loop on | the duck repeats every cycle from the note |
+| End at 25 % | holds silent from the note on |
+| Two kicks in the sidechain, Audio | two triggers; duck down (< 1 %) 128 samples after each onset |
+| A hit at -30 dB, threshold -24 dB | no trigger |
+| Two hits 60 ms apart | one trigger with Hold 100 ms, two with Hold 20 ms |
+| Source Input, a 440 Hz tone over the trigger threshold plus a kick | Focus 150 Hz: one trigger, at the kick (down within 256 samples); Focus open: the tone fires first |
+| A sidechain in Sync mode | output bit-identical to none |
+| Scope on a triggered effect | the kick that triggered it at the start of the picture; a cycle cut short by a retrigger leaves its end unwritten |
+| Through the CLAP API | two inputs (main + stereo sidechain, not main), one note input; Kick Duck set to MIDI ducks a 60 Hz tone 0.432 -> 0.022 on a note, set to Audio by a kick in the sidechain buffer, 0.432 -> 0.024 |
+| The built `.clap` through the CLAP API | loads, instantiates, exposes 83 params, stereo in plus sidechain / stereo out, processes without producing anything non-finite, offers preset-load, loads a factory preset |
 
 Measured by hand while tuning the filter:
 
@@ -117,6 +175,14 @@ deliberate: the filter drive in front of it is meant to be able to excite it.
 
 ## What is not verified
 
+- **No DAW has routed a sidechain or MIDI into it.** The sidechain is a
+  second CLAP input port and the VST3 build maps it to an aux bus through the
+  clap-wrapper; both are exercised only by the self-test and the GUI host.
+  Whether a given DAW offers the port as a sidechain target, and whether it
+  sends notes to an effect, is untested.
+- **The detector is tuned on synthetic kicks.** Threshold, the 30 ms release,
+  the 6 dB re-arm and Hold were chosen against a decaying-sine kick and short
+  bursts; a real drum loop through Focus has not been tried.
 - **No DAW has loaded it.** The `.clap` has been loaded through the CLAP API
   by the self-test and by the GUI host, under Xvfb. Bitwig has not been tried.
 - **Windows is not built.** The CMake blocks for Win32 and VST3 are written
@@ -128,7 +194,7 @@ deliberate: the filter drive in front of it is meant to be able to excite it.
   (`SHAPEAU_WIN_CAIRO`).
 - **The VST3 is not built.** `-DSHAPEAU_BUILD_VST3=ON` is wired to the
   clap-wrapper the same way; it has never been configured.
-- **Nothing is tuned by ear.** The defaults, the nine presets and the drive
+- **Nothing is tuned by ear.** The defaults, the ten presets and the drive
   and crush levels were chosen from the measurements above, not from listening.
   The self-test proves the stages do what they claim and that nothing is
   non-finite or unbounded; it cannot say whether the presets sound good. The

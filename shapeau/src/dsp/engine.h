@@ -90,6 +90,18 @@ struct EngineParams {
    int widRate = kRate4;
    float widPhase = 0.0f;
    float widSmooth = 0.15f;
+
+   // Triggers, per module in Module order: what starts its cycle (TriggerMode),
+   // whether a triggered cycle loops, and where one that does not loop stops.
+   int trigMode[kNumModules] = {};
+   bool trigLoop[kNumModules] = {};
+   float trigEnd[kNumModules] = {1.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f};
+
+   // The audio trigger's detector, shared by every module set to Audio.
+   bool trigFromInput = false;      // false: the sidechain
+   float trigThreshold = 0.063f;    // linear, -24 dB
+   float trigFilterHz = 20000.0f;   // at the top the detector hears the full band
+   float trigHoldSec = 0.05f;
 };
 
 // The whole audio path: three Linkwitz-Riley bands, each through volume, filter,
@@ -111,9 +123,13 @@ struct Scope {
    static constexpr int kBins = 480;
    std::atomic<float> inLo[kBins], inHi[kBins];   // input, the lowest and highest sample
    std::atomic<float> outLo[kBins], outHi[kBins]; // output, the same
+   std::atomic<float> sideLo[kBins], sideHi[kBins]; // the sidechain input, the same
    std::atomic<float> trace[kBins];               // the modulation, 0..1; < 0 is none
    std::atomic<float> playhead{-1.0f};            // where the shape is being read, 0..1
    std::atomic<uint32_t> blocks{0};               // counts blocks written, for repainting
+   // Counts every trigger that fired, MIDI or audio, whether or not a window
+   // is open: the editor flashes on it, and the self-test counts with it.
+   std::atomic<uint32_t> triggers{0};
 
    Scope() { clear(); }
    void clear() {
@@ -122,6 +138,8 @@ struct Scope {
          inHi[i].store(0.0f, std::memory_order_relaxed);
          outLo[i].store(0.0f, std::memory_order_relaxed);
          outHi[i].store(0.0f, std::memory_order_relaxed);
+         sideLo[i].store(0.0f, std::memory_order_relaxed);
+         sideHi[i].store(0.0f, std::memory_order_relaxed);
          trace[i].store(-1.0f, std::memory_order_relaxed);
       }
       playhead.store(-1.0f, std::memory_order_relaxed);
@@ -138,7 +156,13 @@ public:
    // `beats` is the host's position in quarter notes at the top of this block;
    // a negative value means the transport is not running and the curves free-run
    // at `bpm` (or 120 if that is not positive either).
-   void process(float *left, float *right, uint32_t frames, double beats, double bpm);
+   //
+   // `sideL`/`sideR` are the sidechain input, null when the host connected
+   // none; it is listened to and drawn, never heard. `notes` are the frames of
+   // this block at which a MIDI trigger note started, in ascending order.
+   void process(float *left, float *right, uint32_t frames, double beats, double bpm,
+                const float *sideL = nullptr, const float *sideR = nullptr,
+                const uint32_t *notes = nullptr, uint32_t noteCount = 0);
 
    // How long the time stage can keep sounding after its input stops: its own
    // look-back range, plus the release of the filters behind it.
@@ -184,6 +208,18 @@ private:
    void readCurves(CurveSet &into);
    void updateSplit();
    float phaseAt(int rate, float phaseOffset, uint32_t frame, double beats, double bpm) const;
+
+   // Where module m's shape is read at `frame` of this block: phaseAt() for a
+   // module in Sync, the time since its last trigger for one in MIDI or Audio.
+   // `holding` is set when a cycle run once has reached its End marker or has
+   // not been triggered yet, which the scope does not draw into.
+   float modulePhase(int module, uint32_t frame, double beats, double bpm,
+                     bool *holding = nullptr) const;
+   void cycleOf(int module, int &rate, float &offset) const;
+   // Beats since module m's last trigger at `frame`, or < 0 if it has none.
+   double triggerElapsed(int module, uint32_t frame, double bpm) const;
+   void detectTriggers(const float *l, const float *r, uint32_t frames);
+   void endTriggerBlock(uint32_t frames, double bpm);
    static float driveShape(int style, float x, float amount);
    static float smootherCoef(float smooth, double sampleRate);
 
@@ -221,6 +257,24 @@ private:
    // transport is stopped. Reset with the engine.
    double mFreeBeats = 0.0;
 
+   // Triggers. This block's MIDI and audio trigger frames, ascending, and per
+   // module the beats since its last trigger at the top of the block (< 0:
+   // never triggered, so it rests at its End).
+   static constexpr uint32_t kMaxTriggers = 64;
+   uint32_t mMidiTrig[kMaxTriggers] = {};
+   uint32_t mMidiTrigCount = 0;
+   uint32_t mAudioTrig[kMaxTriggers] = {};
+   uint32_t mAudioTrigCount = 0;
+   double mTrigElapsed[kNumModules] = {-1.0, -1.0, -1.0, -1.0, -1.0, -1.0, -1.0};
+
+   // The detector: a two-pole lowpass per channel, a peak follower, and the
+   // state that keeps one hit from firing twice.
+   plugincore::OnePoleLp mDetLp[2][2];
+   float mDetLpCached = -1.0f;
+   float mDetEnv = 0.0f;
+   bool mDetArmed = true;
+   uint32_t mDetSince = 0xffffffffu;
+
    // The published curve set, and the seqlock that hands it across.
    CurveSet mCurves;
    std::atomic<uint32_t> mCurveSeq{0};
@@ -231,7 +285,8 @@ private:
    // clears the bins, because a waveform laid out along one effect's cycle is
    // meaningless along another's.
    void scopeBlock(uint32_t frames, double beats, double bpm);
-   void scopeSample(uint32_t frame, float inL, float inR, float outL, float outR, float trace);
+   void scopeSample(uint32_t frame, float inL, float inR, float outL, float outR, float sideL,
+                    float sideR, float trace);
    void scopeEnd();
    float traceOf(int module, int band, float y) const;
    Scope mScope;
@@ -244,8 +299,11 @@ private:
    int mScopeLastModule = -2, mScopeLastBand = -2;
    bool mScopeLastAll = false;
    double mScopePos0 = 0.0, mScopeInc = 0.0;
+   bool mScopeTriggered = false; // the target is in MIDI or Audio: its phase is not a line
+   double mScopeBeats = -1.0, mScopeBpm = 120.0;
    int mScopeBin = -1;
    float mBinInLo = 0.0f, mBinInHi = 0.0f, mBinOutLo = 0.0f, mBinOutHi = 0.0f, mBinTrace = -1.0f;
+   float mBinSideLo = 0.0f, mBinSideHi = 0.0f;
 
    // The order the effects run in, worked out once per block from the chain
    // and the switches; see effectiveChain().

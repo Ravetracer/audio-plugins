@@ -5,7 +5,7 @@ author = Shapeau
 description = A sixteenth-note stutter on the mid and high bands only, with the low band left alone so the kick and bass hold the floor while everything above them retriggers. Hard steps and a short 90 ms range.
 
 # Global
-mix = 80
+mix = 0.8
 split_low = 240
 split_high = 1900
 band_low = On
@@ -17,12 +17,12 @@ vol_on = Off
 vol_trim = 0
 vol_rate = 1/4
 vol_phase = 0
-vol_smooth = 15
+vol_smooth = 0.15
 
 # Filter
 flt_on = Off
 flt_cutoff = 1000
-flt_res = 25
+flt_res = 0.25
 flt_depth = 5
 flt_drive = 0
 flt_type_low = Lowpass
@@ -30,24 +30,24 @@ flt_type_mid = Lowpass
 flt_type_high = Lowpass
 flt_rate = 1/4
 flt_phase = 0
-flt_smooth = 25
+flt_smooth = 0.25
 
 # Drive
 drv_on = Off
 drv_style = Soft Clip
-drv_drive = 40
+drv_drive = 0.4
 drv_input = 0
 drv_output = 0
 drv_tone = 0
-drv_mix = 100
+drv_mix = 1
 drv_rate = 1/4
 drv_phase = 0
-drv_smooth = 20
+drv_smooth = 0.2
 
 # Time
 tim_on = On
 tim_range = 90
-tim_step = 8
+tim_step = 0.08
 tim_rate = 1/16
 tim_phase = 0
 tim_smooth = 0

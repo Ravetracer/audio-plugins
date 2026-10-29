@@ -5,7 +5,7 @@ author = Shapeau
 description = The low band dips on every quarter note and the mid and high bands are left alone, so a bass line gets out of the way of a kick without the top of the mix pumping with it. Around 130 BPM.
 
 # Global
-mix = 100
+mix = 1
 split_low = 220
 split_high = 1800
 band_low = On
@@ -17,12 +17,12 @@ vol_on = On
 vol_trim = 0
 vol_rate = 1/4
 vol_phase = 0
-vol_smooth = 12
+vol_smooth = 0.12
 
 # Filter
 flt_on = Off
 flt_cutoff = 1000
-flt_res = 25
+flt_res = 0.25
 flt_depth = 5
 flt_drive = 0
 flt_type_low = Lowpass
@@ -30,27 +30,27 @@ flt_type_mid = Lowpass
 flt_type_high = Lowpass
 flt_rate = 1/4
 flt_phase = 0
-flt_smooth = 25
+flt_smooth = 0.25
 
 # Drive
 drv_on = Off
 drv_style = Soft Clip
-drv_drive = 40
+drv_drive = 0.4
 drv_input = 0
 drv_output = 0
 drv_tone = 0
-drv_mix = 100
+drv_mix = 1
 drv_rate = 1/4
 drv_phase = 0
-drv_smooth = 20
+drv_smooth = 0.2
 
 # Time
 tim_on = Off
 tim_range = 500
-tim_step = 30
+tim_step = 0.3
 tim_rate = 1/4
 tim_phase = 0
-tim_smooth = 10
+tim_smooth = 0.1
 
 # Shape curves. One line per module and band, in normalised time
 # and value, with each point's weight: 0 hard, 1 medium, 2 soft.

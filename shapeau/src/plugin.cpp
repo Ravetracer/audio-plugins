@@ -194,6 +194,16 @@ private:
       p.widPhase = static_cast<float>(realValue(kParamWidPhase));
       p.widSmooth = static_cast<float>(realValue(kParamWidSmooth));
 
+      for (int m = 0; m < kNumModules; ++m) {
+         p.trigMode[m] = std::clamp(enumValue(triggerParam(m)), 0, kNumTriggerModes - 1);
+         p.trigLoop[m] = switched(loopParam(m));
+         p.trigEnd[m] = static_cast<float>(realValue(endParam(m)));
+      }
+      p.trigFromInput = enumValue(kParamTrigSource) == 1;
+      p.trigThreshold = static_cast<float>(std::pow(10.0, realValue(kParamTrigThreshold) / 20.0));
+      p.trigFilterHz = static_cast<float>(realValue(kParamTrigFilter));
+      p.trigHoldSec = static_cast<float>(realValue(kParamTrigHold) * 0.001);
+
       mEngine.setParams(p);
    }
 
@@ -243,6 +253,21 @@ private:
       for (uint32_t i = 0; i < n; ++i)
          plug->handleEvent(in->get(in, i));
       plug->drainGuiEdits(out, 0);
+   }
+
+   // The key of a note-on, in either dialect, or -1 for anything else. A MIDI
+   // note-on at velocity zero is a note-off, as MIDI defines it.
+   static int noteOnKey(const clap_event_header_t *ev) {
+      if (!ev || ev->space_id != CLAP_CORE_EVENT_SPACE_ID)
+         return -1;
+      if (ev->type == CLAP_EVENT_NOTE_ON)
+         return reinterpret_cast<const clap_event_note_t *>(ev)->key;
+      if (ev->type == CLAP_EVENT_MIDI) {
+         const uint8_t *d = reinterpret_cast<const clap_event_midi_t *>(ev)->data;
+         if ((d[0] & 0xF0) == 0x90 && d[2] > 0)
+            return d[1];
+      }
+      return -1;
    }
 
    void handleEvent(const clap_event_header_t *ev) {
@@ -414,6 +439,10 @@ private:
          return false;
       if (header[2] > 4096)
          return false;
+      // A blob from before a parameter existed does not mention it, and it must
+      // come back at its default rather than at whatever this instance held.
+      for (uint32_t i = 0; i < kNumParams; ++i)
+         plug->mValues[i].store(paramTable()[i].def, std::memory_order_relaxed);
       for (uint32_t i = 0; i < header[2]; ++i) {
          uint32_t id = 0;
          double value = 0.0;
@@ -575,10 +604,24 @@ private:
 
    // -------------------------------------------------------------------- ports
 
-   static uint32_t audioPortsCount(const clap_plugin_t *, bool) { return 1; }
+   // The main stereo pair, and on the input side a second one for the
+   // sidechain: never heard, only listened to by the audio trigger and drawn
+   // behind the shape. It is not main, so a host that does not route anything
+   // to it leaves it silent or unconnected, and both are handled.
+   static uint32_t audioPortsCount(const clap_plugin_t *, bool isInput) { return isInput ? 2 : 1; }
 
    static bool audioPortsGet(const clap_plugin_t *, uint32_t index, bool isInput,
                              clap_audio_port_info_t *info) {
+      if (isInput && index == 1) {
+         std::memset(info, 0, sizeof(*info));
+         info->id = 2u;
+         std::snprintf(info->name, sizeof(info->name), "%s", "Sidechain");
+         info->flags = 0;
+         info->channel_count = 2;
+         info->port_type = CLAP_PORT_STEREO;
+         info->in_place_pair = CLAP_INVALID_ID;
+         return true;
+      }
       if (index != 0)
          return false;
       std::memset(info, 0, sizeof(*info));
@@ -589,6 +632,31 @@ private:
       info->port_type = CLAP_PORT_STEREO;
       info->in_place_pair = isInput ? 1u : 0u;
       return true;
+   }
+
+   // One note input, for the MIDI trigger. Nothing is played; a note only
+   // restarts the effects set to MIDI.
+   static uint32_t notePortsCount(const clap_plugin_t *, bool isInput) { return isInput ? 1 : 0; }
+
+   static bool notePortsGet(const clap_plugin_t *, uint32_t index, bool isInput,
+                            clap_note_port_info_t *info) {
+      if (!isInput || index != 0)
+         return false;
+      std::memset(info, 0, sizeof(*info));
+      info->id = 0;
+      info->supported_dialects = CLAP_NOTE_DIALECT_CLAP | CLAP_NOTE_DIALECT_MIDI;
+      info->preferred_dialect = CLAP_NOTE_DIALECT_CLAP;
+      std::snprintf(info->name, sizeof(info->name), "%s", "Trigger");
+      return true;
+   }
+
+   // Whether a note answers the Note and Octave the Trigger panel sets.
+   bool noteTriggers(int key) const {
+      if (key < 0 || key > 127)
+         return false;
+      const int note = enumValue(kParamTrigNote);     // 0 any, 1..12 C..B
+      const int octave = enumValue(kParamTrigOctave); // 0 any, 1..11 is -1..9
+      return (note == 0 || key % 12 == note - 1) && (octave == 0 || key / 12 == octave - 1);
    }
 
    static uint32_t tailGet(const clap_plugin_t *p) {
@@ -606,10 +674,22 @@ private:
 
       // Host events first: a parameter change applies to the whole block. The
       // event's time offset is ignored on purpose -- see TODO.md, where making
-      // the block split at every event is the next piece of work.
+      // the block split at every event is the next piece of work. A trigger
+      // note is the exception: it keeps its frame, which is where the effects
+      // set to MIDI restart.
       const uint32_t count = pr->in_events ? pr->in_events->size(pr->in_events) : 0;
-      for (uint32_t i = 0; i < count; ++i)
-         handleEvent(pr->in_events->get(pr->in_events, i));
+      uint32_t notes[64];
+      uint32_t noteCount = 0;
+      for (uint32_t i = 0; i < count; ++i) {
+         const clap_event_header_t *ev = pr->in_events->get(pr->in_events, i);
+         const int key = noteOnKey(ev);
+         if (key >= 0) {
+            if (noteTriggers(key) && noteCount < 64)
+               notes[noteCount++] = ev->time;
+            continue;
+         }
+         handleEvent(ev);
+      }
       drainGuiEdits(pr->out_events, frames);
 
       if (frames == 0)
@@ -635,6 +715,17 @@ private:
       if (mParamsDirty.exchange(false, std::memory_order_acq_rel))
          syncEngine();
 
+      // The sidechain, when the host connected one. A mono one is used for both
+      // sides; anything missing is no sidechain at all.
+      const float *sideL = nullptr, *sideR = nullptr;
+      if (pr->audio_inputs_count > 1) {
+         const clap_audio_buffer_t &side = pr->audio_inputs[1];
+         if (side.data32 && side.channel_count > 0 && side.data32[0]) {
+            sideL = side.data32[0];
+            sideR = side.channel_count > 1 && side.data32[1] ? side.data32[1] : sideL;
+         }
+      }
+
       double beats = -1.0;
       double bpm = 0.0;
       if (pr->transport) {
@@ -646,7 +737,7 @@ private:
       }
 
       const plugincore::ScopedNoDenormals denormals;
-      mEngine.process(l, r, frames, beats, bpm);
+      mEngine.process(l, r, frames, beats, bpm, sideL, sideR, notes, noteCount);
       publishOutputPeaks(l, r, frames);
       return CLAP_PROCESS_CONTINUE;
    }
@@ -1062,6 +1153,25 @@ private:
       curveChanged();
    }
 
+   int curveTriggerMode(int module) const override {
+      return enumValue(triggerParam(std::clamp(module, 0, kNumModules - 1)));
+   }
+   bool curveTriggerLoop(int module) const override {
+      return switched(loopParam(std::clamp(module, 0, kNumModules - 1)));
+   }
+   float curveEnd(int module) const override {
+      return static_cast<float>(realValue(endParam(std::clamp(module, 0, kNumModules - 1))));
+   }
+   void curveBeginEnd(int module) override {
+      guiBeginEdit(endParam(std::clamp(module, 0, kNumModules - 1)));
+   }
+   void curveSetEnd(int module, float end) override {
+      guiSetParam(endParam(std::clamp(module, 0, kNumModules - 1)), end);
+   }
+   void curveFinishEnd(int module) override {
+      guiEndEdit(endParam(std::clamp(module, 0, kNumModules - 1)));
+   }
+
    bool curveSnap() const override { return mSnap.load(); }
    void curveToggleSnap() override { mSnap.store(!mSnap.load()); }
 
@@ -1309,6 +1419,7 @@ private:
                                                       paramsGetValue,    paramsValueToText,
                                                       paramsTextToValue, paramsFlush};
       static const clap_plugin_audio_ports_t kAudioPortsExt = {audioPortsCount, audioPortsGet};
+      static const clap_plugin_note_ports_t kNotePortsExt = {notePortsCount, notePortsGet};
       static const clap_plugin_state_t kStateExt = {stateSave, stateLoad};
       static const clap_plugin_tail_t kTailExt = {tailGet};
       static const clap_plugin_preset_load_t kPresetLoadExt = {presetLoadFromLocation};
@@ -1324,6 +1435,8 @@ private:
          return &kParamsExt;
       if (std::strcmp(id, CLAP_EXT_AUDIO_PORTS) == 0)
          return &kAudioPortsExt;
+      if (std::strcmp(id, CLAP_EXT_NOTE_PORTS) == 0)
+         return &kNotePortsExt;
       if (std::strcmp(id, CLAP_EXT_STATE) == 0)
          return &kStateExt;
       if (std::strcmp(id, CLAP_EXT_TAIL) == 0)

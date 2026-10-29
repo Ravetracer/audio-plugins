@@ -59,7 +59,7 @@ audio-plugins/
 | 2 | **RumpelKiste** | `rumpel-kiste/` | 0.2.1 | Linux, Windows | CLAP, VST3 | a Roland TR-909 model, from the 1984 service notes, with SäureKiste's sequencer and drive stage |
 | 3 | **Aurum** | `aurum/` | 0.3.1 | Linux, Windows | CLAP, VST3 | a clean-room algorithmic reverb (FDN, allpass ring, plate) with a per-frequency decay contour; own DSP and GUI, see *Aurum* below |
 | 4 | **Substrike** | `substrike/` | 1.1.0 | Linux, Windows | CLAP, VST3 | a layered kick drum designer for every style; standalone like Aurum, see *Substrike* below |
-| 5 | **Shapeau** | `shapeau/` | 0.3.0 | Linux, Windows | CLAP, VST3 | a multiband drawing rack: a reorderable chain of shape-driven effects per band, with the audio drawn behind the shape; see *Shapeau* below |
+| 5 | **Shapeau** | `shapeau/` | 0.4.0 | Linux, Windows | CLAP, VST3 | a multiband drawing rack: a reorderable chain of shape-driven effects per band, beat-synced or triggered by MIDI or a sidechain hit, with the audio drawn behind the shape; see *Shapeau* below |
 
 Naming follows the plugin, not a pattern: the CMake project, the installed
 artifact and the display name are CamelCase (`SaeureKiste`), the folder is
@@ -519,8 +519,10 @@ shape drawn per frequency band and locked to the beat. It is built on
 
 `docs/PLAN.md` is the source of truth: four phases towards the commercial
 shape-based effects rack it is modelled on. Phase 1 (0.3.0) is done -- the
-scope behind the shape, one effect at a time, a reorderable chain; phases 2-4
-are editing tools, timing and triggers, and more effects.
+scope behind the shape, one effect at a time, a reorderable chain -- and 0.4.0
+pulled the triggers forward from phase 3: a sidechain input drawn behind the
+shape, and per effect a Sync/MIDI/Audio trigger, Loop and an End marker.
+Phases 2-4 are editing tools, the rest of timing, and more effects.
 
 Rules specific to Shapeau:
 
@@ -537,6 +539,13 @@ Rules specific to Shapeau:
 - **The scope is written by the audio thread**, bin by bin at the shape's own
   phase (`Scope` in `dsp/engine.h`), and only while a window is open. A new
   scope view is a new reader of those bins, not a new writer.
+- **Every phase goes through `Engine::modulePhase()`**, never `phaseAt()`
+  directly: it is what makes an effect in MIDI or Audio mode count from its
+  trigger instead of the song position. The sidechain is the second input
+  port; it is listened to and drawn, never mixed into the output.
+- **Factory presets store percentages as ratios** (`vol_smooth = 0.12`), like
+  every preset in the shared format. All nine were once written as 0..100 and
+  loaded at 100 %; `--selftest` now reads every percentage back.
 - `shapeau-render --selftest` is the test harness, as elsewhere; the GUI host
   (`shapeau-guihost`, X11 only) plays a drum loop so the scope has something
   to show. Windows: cross-build with `-DSHAPEAU_WIN_CAIRO=<abs path>` and run

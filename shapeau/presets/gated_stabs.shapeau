@@ -5,7 +5,7 @@ author = Shapeau
 description = A hard sixteenth-note gate across all three bands, with the low band opened only on the off-beats so the bottom jumps while the rest of the chord is chopped. A gate shape rather than a drawn curve: the corners are what make it read.
 
 # Global
-mix = 100
+mix = 1
 split_low = 190
 split_high = 2400
 band_low = On
@@ -22,35 +22,35 @@ vol_smooth = 0
 # Filter
 flt_on = On
 flt_cutoff = 3000
-flt_res = 20
+flt_res = 0.2
 flt_depth = 3
 flt_drive = 0
 flt_type_low = Lowpass
 flt_type_mid = Lowpass
 flt_type_high = Highpass
 flt_rate = 1/16
-flt_phase = 45
-flt_smooth = 10
+flt_phase = 0.45
+flt_smooth = 0.1
 
 # Drive
 drv_on = Off
 drv_style = Soft Clip
-drv_drive = 40
+drv_drive = 0.4
 drv_input = 0
 drv_output = 0
 drv_tone = 0
-drv_mix = 100
+drv_mix = 1
 drv_rate = 1/4
 drv_phase = 0
-drv_smooth = 20
+drv_smooth = 0.2
 
 # Time
 tim_on = Off
 tim_range = 500
-tim_step = 30
+tim_step = 0.3
 tim_rate = 1/4
 tim_phase = 0
-tim_smooth = 10
+tim_smooth = 0.1
 
 # Shape curves. One line per module and band, in normalised time
 # and value, with each point's weight: 0 hard, 1 medium, 2 soft.

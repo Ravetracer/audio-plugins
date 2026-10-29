@@ -40,8 +40,8 @@ export XDG_CONFIG_HOME="${scratch}/config"
 export XDG_DATA_HOME="${scratch}/data"
 mkdir -p "$XDG_CONFIG_HOME" "$XDG_DATA_HOME"
 
-start_host() {
-   "${build_dir}/shapeau-guihost" "${build_dir}/Shapeau.clap" 25 >"${scratch}/guihost.log" 2>&1 &
+start_host() { # extra arguments go to the gui host
+   "${build_dir}/shapeau-guihost" "${build_dir}/Shapeau.clap" 25 "$@" >"${scratch}/guihost.log" 2>&1 &
    gui_pid=$!
    sleep 3
    window="$(xdotool search --name Shapeau | tail -1)"
@@ -70,7 +70,7 @@ fresh_host() {
    kill "$gui_pid" 2>/dev/null || true
    wait "$gui_pid" 2>/dev/null || true
    sleep 1
-   start_host
+   start_host "$@"
 }
 
 step window.png "the window as it opens: an empty chain and its picker"
@@ -119,5 +119,20 @@ done
 xdotool mousemove --window "$window" 700 560
 sleep 1.5
 step filter.png "a cutoff sweep drawn on the filter's mid band"
+
+# The sidechain: a bass line on the input and the kick on the sidechain, the
+# volume set to Audio so the kick starts the duck. The host's kick pattern has
+# an extra kick on the last sixteenth of the bar, which is what a duck that
+# follows the beat cannot do.
+fresh_host --sidechain --param Volume/Trigger=Audio
+xdotool mousemove --window "$window" 343 "$picker_y" click 1 # VOLUME
+sleep 0.4
+xdotool mousemove --window "$window" 1044 "$tab_y" click 1 # SHAPE
+sleep 0.3
+xdotool mousemove --window "$window" 1040 130 click 1 # DUCK
+sleep 0.3
+xdotool mousemove --window "$window" 700 560
+sleep 4.5
+step sidechain.png "a duck started by the kick in the sidechain, drawn in amber"
 
 echo "    -> $out_dir"

@@ -87,8 +87,47 @@ enum ParamId : uint32_t {
    kParamWidPhase,
    kParamWidSmooth,
 
+   // --------------------------------------------------------------- trigger
+   // Appended in 0.4.0: how each effect's cycle is started (the host's beat, a
+   // MIDI note or a transient), and the detector the audio triggers share.
+   kParamTrigSource,    // Sidechain / Input: what the audio trigger listens to
+   kParamTrigThreshold, // the detector's threshold, in dB
+   kParamTrigFilter,    // a lowpass in front of the detector, so a kick is found under hats
+   kParamTrigHold,      // the shortest time between two audio triggers
+   kParamTrigNote,      // which note name a MIDI trigger answers to, or any
+   kParamTrigOctave,    // which octave, or any
+
+   // Per effect, in Module order: Trigger (Sync/MIDI/Audio), Loop, End.
+   kParamVolTrigger,
+   kParamVolLoop,
+   kParamVolEnd,
+   kParamFltTrigger,
+   kParamFltLoop,
+   kParamFltEnd,
+   kParamDrvTrigger,
+   kParamDrvLoop,
+   kParamDrvEnd,
+   kParamTimTrigger,
+   kParamTimLoop,
+   kParamTimEnd,
+   kParamCrsTrigger,
+   kParamCrsLoop,
+   kParamCrsEnd,
+   kParamPanTrigger,
+   kParamPanLoop,
+   kParamPanEnd,
+   kParamWidTrigger,
+   kParamWidLoop,
+   kParamWidEnd,
+
    kNumParams
 };
+
+// The three trigger parameters of module m are kParamVolTrigger + 3 * m and
+// the two after it, which is why they are appended in Module order.
+constexpr uint32_t triggerParam(int module) { return kParamVolTrigger + 3u * static_cast<uint32_t>(module); }
+constexpr uint32_t loopParam(int module) { return triggerParam(module) + 1u; }
+constexpr uint32_t endParam(int module) { return triggerParam(module) + 2u; }
 
 // The stages, in the order they are processed. Also the order the shape curves
 // are stored in: kNumModules * kNumBands of them. New modules are appended so
@@ -126,6 +165,12 @@ enum Rate {
 };
 
 double beatsForRate(int rate);
+
+// What starts an effect's cycle. Sync follows the host's beat, as every effect
+// did before 0.4.0; MIDI restarts it on a note, Audio on a transient in the
+// sidechain (or the input). A triggered cycle either loops until the next
+// trigger or runs once and holds at its End marker.
+enum TriggerMode { kTrigSync = 0, kTrigMidi, kTrigAudio, kNumTriggerModes };
 
 // Filter responses. The values match plugincore::FilterKind, which is what the
 // shared SVF switches on.

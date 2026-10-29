@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.16)
-project(Shapeau VERSION 0.3.0 LANGUAGES CXX)
+project(Shapeau VERSION 0.4.0 LANGUAGES CXX)
 
 # Shapeau builds as a CLAP and as a VST3, for Linux and for Windows.
 #

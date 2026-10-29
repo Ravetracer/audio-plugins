@@ -5,7 +5,7 @@ author = Shapeau
 description = Only the low band moves: sixteen steps throw the bottom of the signal left and right while the mid and high bands hold the centre. The shape is drawn on the low band and the other two are left flat.
 
 # Global
-mix = 100
+mix = 1
 split_low = 240
 split_high = 1800
 band_low = On
@@ -31,7 +31,7 @@ tim_on = Off
 pan_on = On
 pan_rate = 1/1
 pan_phase = 0
-pan_smooth = 12
+pan_smooth = 0.12
 
 # Width
 wid_on = Off

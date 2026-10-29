@@ -81,6 +81,17 @@ void Engine::reset() {
       mBands[b].write = 0;
    }
    mFreeBeats = 0.0;
+   for (int m = 0; m < kNumModules; ++m)
+      mTrigElapsed[m] = -1.0;
+   mMidiTrigCount = 0;
+   mAudioTrigCount = 0;
+   for (int c = 0; c < 2; ++c) {
+      mDetLp[c][0].reset();
+      mDetLp[c][1].reset();
+   }
+   mDetEnv = 0.0f;
+   mDetArmed = true;
+   mDetSince = 0xffffffffu;
    for (int c = 0; c < 2; ++c) {
       for (int s = 0; s < 2; ++s) {
          mSplitLowLp[c][s].reset();
@@ -153,6 +164,136 @@ float Engine::phaseAt(int rate, float phaseOffset, uint32_t frame, double beats,
    return static_cast<float>(phase);
 }
 
+void Engine::cycleOf(int module, int &rate, float &offset) const {
+   switch (module) {
+   case kModuleVolume: rate = mParams.volRate; offset = mParams.volPhase; break;
+   case kModuleFilter: rate = mParams.fltRate; offset = mParams.fltPhase; break;
+   case kModuleDrive: rate = mParams.drvRate; offset = mParams.drvPhase; break;
+   case kModuleCrush: rate = mParams.crsRate; offset = mParams.crsPhase; break;
+   case kModuleTime: rate = mParams.timRate; offset = mParams.timPhase; break;
+   case kModuleWidth: rate = mParams.widRate; offset = mParams.widPhase; break;
+   case kModulePan: rate = mParams.panRate; offset = mParams.panPhase; break;
+   default: rate = kRate4; offset = 0.0f; break;
+   }
+}
+
+double Engine::triggerElapsed(int module, uint32_t frame, double bpm) const {
+   const bool midi = mParams.trigMode[module] == kTrigMidi;
+   const uint32_t *list = midi ? mMidiTrig : mAudioTrig;
+   const uint32_t count = midi ? mMidiTrigCount : mAudioTrigCount;
+   const double perSample = (bpm > 0.0 ? bpm : 120.0) / 60.0 / mSampleRate;
+   for (uint32_t k = count; k-- > 0;)
+      if (list[k] <= frame)
+         return static_cast<double>(frame - list[k]) * perSample;
+   if (mTrigElapsed[module] < 0.0)
+      return -1.0;
+   return mTrigElapsed[module] + static_cast<double>(frame) * perSample;
+}
+
+float Engine::modulePhase(int module, uint32_t frame, double beats, double bpm,
+                          bool *holding) const {
+   int rate = kRate4;
+   float offset = 0.0f;
+   cycleOf(module, rate, offset);
+   if (holding)
+      *holding = false;
+   if (mParams.trigMode[module] == kTrigSync)
+      return phaseAt(rate, offset, frame, beats, bpm);
+
+   // A triggered cycle runs at the same tempo-locked rate, counted from the
+   // trigger instead of from the start of the song. Before its first trigger,
+   // and once a cycle run once has reached its End, it rests there -- which
+   // for a duck drawn back up to the top is the untouched signal.
+   const double elapsed = triggerElapsed(module, frame, bpm);
+   const double end = clampf(mParams.trigEnd[module], 0.0f, 1.0f);
+   const bool loop = mParams.trigLoop[module];
+   double pos;
+   bool held = false;
+   if (elapsed < 0.0) {
+      pos = loop ? 1.0 : end;
+      held = true;
+   } else if (loop) {
+      pos = std::fmod(elapsed / beatsForRate(rate), 1.0);
+   } else {
+      pos = elapsed / beatsForRate(rate);
+      if (pos >= end) {
+         pos = end;
+         held = true;
+      }
+   }
+   if (holding)
+      *holding = held;
+   // Phase shifts the shape under the cycle as it does in Sync. Only past the
+   // end does it wrap, so a cycle resting at 1 reads the shape's last point.
+   double phase = pos + static_cast<double>(offset);
+   if (phase > 1.0)
+      phase -= 1.0;
+   return static_cast<float>(phase);
+}
+
+// The audio trigger: a peak follower after an optional two-pole lowpass,
+// firing when it crosses the threshold, re-arming 6 dB below it, and never
+// twice within the hold time.
+void Engine::detectTriggers(const float *l, const float *r, uint32_t frames) {
+   mAudioTrigCount = 0;
+   const float sr = static_cast<float>(mSampleRate);
+   const bool filtered = mParams.trigFilterHz < 19000.0f;
+   if (filtered && mParams.trigFilterHz != mDetLpCached) {
+      mDetLpCached = mParams.trigFilterHz;
+      for (int c = 0; c < 2; ++c)
+         for (int s = 0; s < 2; ++s)
+            mDetLp[c][s].setCutoff(mParams.trigFilterHz, sr);
+   }
+   // 30 ms: slow enough not to fall between the peaks of a 40 Hz kick tail,
+   // fast enough to re-arm between sixteenths at 170 BPM.
+   const float release = std::exp(-1.0f / (0.03f * sr));
+   const float threshold = std::max(mParams.trigThreshold, 1.0e-6f);
+   const float rearm = 0.5f * threshold;
+   const uint32_t hold = static_cast<uint32_t>(std::max(0.001f, mParams.trigHoldSec) * sr);
+   for (uint32_t i = 0; i < frames; ++i) {
+      float a = l ? l[i] : 0.0f;
+      float b = r ? r[i] : a;
+      if (filtered) {
+         a = mDetLp[0][1].tick(mDetLp[0][0].tick(a));
+         b = mDetLp[1][1].tick(mDetLp[1][0].tick(b));
+      }
+      const float x = std::max(std::fabs(a), std::fabs(b));
+      mDetEnv = x > mDetEnv ? x : mDetEnv * release;
+      if (mDetSince != 0xffffffffu)
+         ++mDetSince;
+      if (mDetArmed && mDetEnv >= threshold && mDetSince >= hold) {
+         if (mAudioTrigCount < kMaxTriggers)
+            mAudioTrig[mAudioTrigCount++] = i;
+         mDetArmed = false;
+         mDetSince = 0;
+         mScope.triggers.fetch_add(1, std::memory_order_relaxed);
+      } else if (!mDetArmed && mDetEnv < rearm) {
+         mDetArmed = true;
+      }
+   }
+}
+
+// Carries every triggered module's time since its trigger into the next block.
+// A looping cycle keeps only its place in the cycle and one run once stops
+// counting at its end, so neither grows without bound over a long session.
+void Engine::endTriggerBlock(uint32_t frames, double bpm) {
+   for (int m = 0; m < kNumModules; ++m) {
+      if (mParams.trigMode[m] == kTrigSync) {
+         mTrigElapsed[m] = -1.0;
+         continue;
+      }
+      double elapsed = triggerElapsed(m, frames, bpm);
+      if (elapsed >= 0.0) {
+         int rate = kRate4;
+         float offset = 0.0f;
+         cycleOf(m, rate, offset);
+         const double cycle = beatsForRate(rate);
+         elapsed = mParams.trigLoop[m] ? std::fmod(elapsed, cycle) : std::min(elapsed, cycle);
+      }
+      mTrigElapsed[m] = elapsed;
+   }
+}
+
 float Engine::driveShape(int style, float x, float amount) {
    switch (style) {
    case kHardClip:
@@ -191,9 +332,29 @@ double Engine::tailSeconds() const {
    return static_cast<double>(mParams.timRangeSec) + 0.05;
 }
 
-void Engine::process(float *left, float *right, uint32_t frames, double beats, double bpm) {
+void Engine::process(float *left, float *right, uint32_t frames, double beats, double bpm,
+                     const float *sideL, const float *sideR, const uint32_t *notes,
+                     uint32_t noteCount) {
    if (!left || !right || frames == 0)
       return;
+   if (sideL && !sideR)
+      sideR = sideL;
+
+   // This block's triggers, before anything writes over the input: the notes
+   // as the host sent them, and the hits the detector finds in its source.
+   mMidiTrigCount = 0;
+   for (uint32_t k = 0; k < noteCount && mMidiTrigCount < kMaxTriggers; ++k) {
+      uint32_t at = std::min(notes[k], frames - 1);
+      if (mMidiTrigCount > 0)
+         at = std::max(at, mMidiTrig[mMidiTrigCount - 1]);
+      mMidiTrig[mMidiTrigCount++] = at;
+   }
+   if (mMidiTrigCount > 0)
+      mScope.triggers.fetch_add(mMidiTrigCount, std::memory_order_relaxed);
+   if (mParams.trigFromInput)
+      detectTriggers(left, right, frames);
+   else
+      detectTriggers(sideL, sideR, frames);
 
    CurveSet curves;
    readCurves(curves);
@@ -222,9 +383,11 @@ void Engine::process(float *left, float *right, uint32_t frames, double beats, d
          left[i] *= g;
          right[i] *= g;
          if (mScopeOn)
-            scopeSample(i, inL, inR, left[i], right[i], -1.0f);
+            scopeSample(i, inL, inR, left[i], right[i], sideL ? sideL[i] : 0.0f,
+                        sideR ? sideR[i] : 0.0f, -1.0f);
       }
       scopeEnd();
+      endTriggerBlock(frames, bpm);
       if (freerun)
          mFreeBeats += freeStep * frames;
       mSilent = false;
@@ -255,30 +418,30 @@ void Engine::process(float *left, float *right, uint32_t frames, double beats, d
       float yFlt[kNumBands];
 
       const float volPhase0 =
-         phaseAt(mParams.volRate, mParams.volPhase, base, beats, bpm);
+         modulePhase(kModuleVolume, base, beats, bpm);
       const float volPhase1 =
-         phaseAt(mParams.volRate, mParams.volPhase, base + n, beats, bpm);
+         modulePhase(kModuleVolume, base + n, beats, bpm);
       const float drvPhase0 =
-         phaseAt(mParams.drvRate, mParams.drvPhase, base, beats, bpm);
+         modulePhase(kModuleDrive, base, beats, bpm);
       const float drvPhase1 =
-         phaseAt(mParams.drvRate, mParams.drvPhase, base + n, beats, bpm);
+         modulePhase(kModuleDrive, base + n, beats, bpm);
       const float timPhase0 =
-         phaseAt(mParams.timRate, mParams.timPhase, base, beats, bpm);
+         modulePhase(kModuleTime, base, beats, bpm);
       const float timPhase1 =
-         phaseAt(mParams.timRate, mParams.timPhase, base + n, beats, bpm);
+         modulePhase(kModuleTime, base + n, beats, bpm);
       const float crsPhase0 =
-         phaseAt(mParams.crsRate, mParams.crsPhase, base, beats, bpm);
+         modulePhase(kModuleCrush, base, beats, bpm);
       const float crsPhase1 =
-         phaseAt(mParams.crsRate, mParams.crsPhase, base + n, beats, bpm);
+         modulePhase(kModuleCrush, base + n, beats, bpm);
       const float panPhase0 =
-         phaseAt(mParams.panRate, mParams.panPhase, base, beats, bpm);
+         modulePhase(kModulePan, base, beats, bpm);
       const float panPhase1 =
-         phaseAt(mParams.panRate, mParams.panPhase, base + n, beats, bpm);
+         modulePhase(kModulePan, base + n, beats, bpm);
       const float widPhase0 =
-         phaseAt(mParams.widRate, mParams.widPhase, base, beats, bpm);
+         modulePhase(kModuleWidth, base, beats, bpm);
       const float widPhase1 =
-         phaseAt(mParams.widRate, mParams.widPhase, base + n, beats, bpm);
-      const float fltPhase = phaseAt(mParams.fltRate, mParams.fltPhase, base, beats, bpm);
+         modulePhase(kModuleWidth, base + n, beats, bpm);
+      const float fltPhase = modulePhase(kModuleFilter, base, beats, bpm);
 
       for (int b = 0; b < kNumBands; ++b) {
          yVol0[b] = curves.curve[kModuleVolume][b].valueAt(volPhase0);
@@ -380,11 +543,13 @@ void Engine::process(float *left, float *right, uint32_t frames, double beats, d
                scopeOutL = left[frame];
                scopeOutR = right[frame];
             }
-            scopeSample(frame, scopeInL, scopeInR, scopeOutL, scopeOutR, scopeTrace);
+            scopeSample(frame, scopeInL, scopeInR, scopeOutL, scopeOutR,
+                        sideL ? sideL[frame] : 0.0f, sideR ? sideR[frame] : 0.0f, scopeTrace);
          }
       }
    }
    scopeEnd();
+   endTriggerBlock(frames, bpm);
 
    if (freerun)
       mFreeBeats += freeStep * frames;
@@ -416,48 +581,63 @@ void Engine::scopeBlock(uint32_t frames, double beats, double bpm) {
    // block, unrolled so every sample lands in its own place.
    int rate = kRate4;
    float offset = 0.0f;
-   switch (module) {
-   case kModuleVolume: rate = mParams.volRate; offset = mParams.volPhase; break;
-   case kModuleFilter: rate = mParams.fltRate; offset = mParams.fltPhase; break;
-   case kModuleDrive: rate = mParams.drvRate; offset = mParams.drvPhase; break;
-   case kModuleCrush: rate = mParams.crsRate; offset = mParams.crsPhase; break;
-   case kModuleTime: rate = mParams.timRate; offset = mParams.timPhase; break;
-   case kModuleWidth: rate = mParams.widRate; offset = mParams.widPhase; break;
-   case kModulePan: rate = mParams.panRate; offset = mParams.panPhase; break;
-   default: break;
-   }
+   cycleOf(module, rate, offset);
+   mScopeTriggered = mParams.trigMode[module] != kTrigSync;
+   mScopeBeats = beats;
+   mScopeBpm = bpm;
    mScopePos0 = phaseAt(rate, offset, 0, beats, bpm);
    mScopeInc = (bpm > 0.0 ? bpm : 120.0) / 60.0 / mSampleRate / beatsForRate(rate);
    (void)frames;
 }
 
 void Engine::scopeSample(uint32_t frame, float inL, float inR, float outL, float outR,
-                         float trace) {
-   double pos = mScopePos0 + mScopeInc * frame;
+                         float sideL, float sideR, float trace) {
+   double pos;
+   if (mScopeTriggered) {
+      // A triggered cycle restarts wherever the trigger fell, so its phase is
+      // worked out per sample. While it holds at its End -- or waits for its
+      // first trigger -- the playhead parks there and no bin is written: a
+      // second of held audio piled into one bin would be one tall spike.
+      bool holding = false;
+      pos = modulePhase(mScopeTarget, frame, mScopeBeats, mScopeBpm, &holding);
+      if (holding) {
+         mScope.playhead.store(static_cast<float>(pos), std::memory_order_relaxed);
+         return;
+      }
+   } else {
+      pos = mScopePos0 + mScopeInc * frame;
+   }
    pos -= std::floor(pos);
    const int bin = std::min(Scope::kBins - 1, static_cast<int>(pos * Scope::kBins));
    const float inLo = std::min(inL, inR), inHi = std::max(inL, inR);
    const float outLo = std::min(outL, outR), outHi = std::max(outL, outR);
+   const float sideLo = std::min(sideL, sideR), sideHi = std::max(sideL, sideR);
    if (bin == mScopeBin) {
       mBinInLo = std::min(mBinInLo, inLo);
       mBinInHi = std::max(mBinInHi, inHi);
       mBinOutLo = std::min(mBinOutLo, outLo);
       mBinOutHi = std::max(mBinOutHi, outHi);
+      mBinSideLo = std::min(mBinSideLo, sideLo);
+      mBinSideHi = std::max(mBinSideHi, sideHi);
       mBinTrace = trace;
       return;
    }
    // A new bin. The one just finished is published; bins the read position
    // skipped over -- a fast rate, or a long block -- take the new sample, so
-   // the picture has no gaps. A jump backwards (a loop, a seek) skips nothing.
+   // the picture has no gaps. A jump backwards (a loop, a seek) skips nothing,
+   // and for a triggered cycle every jump backwards is a restart: read as a
+   // wrap, a trigger late in the cycle would smear one sample over its end.
    if (mScopeBin >= 0) {
       scopeEnd();
       const int ahead = (bin - mScopeBin + Scope::kBins) % Scope::kBins;
-      if (ahead > 1 && ahead < Scope::kBins / 4)
+      if (ahead > 1 && ahead < Scope::kBins / 4 && !(mScopeTriggered && bin < mScopeBin))
          for (int k = (mScopeBin + 1) % Scope::kBins; k != bin; k = (k + 1) % Scope::kBins) {
             mScope.inLo[k].store(inLo, std::memory_order_relaxed);
             mScope.inHi[k].store(inHi, std::memory_order_relaxed);
             mScope.outLo[k].store(outLo, std::memory_order_relaxed);
             mScope.outHi[k].store(outHi, std::memory_order_relaxed);
+            mScope.sideLo[k].store(sideLo, std::memory_order_relaxed);
+            mScope.sideHi[k].store(sideHi, std::memory_order_relaxed);
             mScope.trace[k].store(trace, std::memory_order_relaxed);
          }
    }
@@ -466,6 +646,8 @@ void Engine::scopeSample(uint32_t frame, float inL, float inR, float outL, float
    mBinInHi = inHi;
    mBinOutLo = outLo;
    mBinOutHi = outHi;
+   mBinSideLo = sideLo;
+   mBinSideHi = sideHi;
    mBinTrace = trace;
    mScope.playhead.store(static_cast<float>(pos), std::memory_order_relaxed);
 }
@@ -477,6 +659,8 @@ void Engine::scopeEnd() {
    mScope.inHi[mScopeBin].store(mBinInHi, std::memory_order_relaxed);
    mScope.outLo[mScopeBin].store(mBinOutLo, std::memory_order_relaxed);
    mScope.outHi[mScopeBin].store(mBinOutHi, std::memory_order_relaxed);
+   mScope.sideLo[mScopeBin].store(mBinSideLo, std::memory_order_relaxed);
+   mScope.sideHi[mScopeBin].store(mBinSideHi, std::memory_order_relaxed);
    mScope.trace[mScopeBin].store(mBinTrace, std::memory_order_relaxed);
    mScope.blocks.fetch_add(1, std::memory_order_relaxed);
 }

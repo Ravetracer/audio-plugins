@@ -91,6 +91,17 @@ public:
 
    // The scope the audio thread writes for the effect and band on screen.
    virtual const Scope *curveScope() const = 0;
+
+   // An effect's trigger, which the editor shows: what starts its cycle
+   // (TriggerMode), whether a triggered cycle loops, and its End marker -- the
+   // place a cycle run once holds at, drawn and dragged in the graph. The End
+   // is a parameter, so a drag is a gesture the host can record.
+   virtual int curveTriggerMode(int module) const = 0;
+   virtual bool curveTriggerLoop(int module) const = 0;
+   virtual float curveEnd(int module) const = 0;
+   virtual void curveBeginEnd(int module) = 0;
+   virtual void curveSetEnd(int module, float end) = 0;
+   virtual void curveFinishEnd(int module) = 0;
 };
 
 // The height of the shape editor strip, in design pixels. The fork's layout

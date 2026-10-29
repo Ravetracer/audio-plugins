@@ -9,8 +9,13 @@ width are neutral in the middle, and every drive style stays bounded and
 distinct. None of that says the nine presets are worth having, or that a 4-bit
 crush at 8x is a good default. Things to judge first:
 
-- the duck preset against a real sidechain — is 16 % of a cycle enough dip, and
-  is the low band's 220 Hz split where a kick actually sits
+- the duck presets against a real kick — is 16 % of a cycle enough dip, and
+  is the low band's 220 Hz split where a kick actually sits. Every factory
+  preset sounds different since 0.4.0, which fixed their percentages: the old
+  renders are not a reference for anything
+- the audio trigger on real material: a kick track through the sidechain, and
+  a full drum loop through Source Input with Focus near 150 Hz -- whether the
+  -24 dB default, the 30 ms release and the 6 dB re-arm hold up
 - the filter's resonance at the top of its travel: Q 50 is a whistle on a
   sustained note and might be more than a "wobble" preset wants
 - the drive stage's level compensation across the six styles, which is one
@@ -31,6 +36,10 @@ stage's read head, which is interpolated in samples.
 Both build, and the Windows self-test passes under wine, but neither format has
 been loaded by a real host on Windows.
 
+The sidechain port and the note input have not been routed by any DAW: check
+that each host offers the sidechain (in the VST3 as the clap-wrapper's aux
+bus) and delivers notes to an effect.
+
 ## 4. Features
 
 The features are planned in `docs/PLAN.md`, in four phases, and this list is
@@ -42,4 +51,6 @@ is next.
 
 - **Demo renders.** `presets/demo-descriptions.txt` is written, and
   `shared/tools/make-demos.sh shapeau` has not been run yet. It needs ffmpeg
-  and lame, both in the build container.
+  and lame, both in the build container. Sidechain Duck renders dry without a
+  sidechain, so the renderer needs a way to feed one (a kick pattern on the
+  second input, behind a `--render-arg`) before its demo means anything.

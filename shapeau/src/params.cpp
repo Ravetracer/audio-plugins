@@ -16,6 +16,12 @@ const char *const kFilterNames[] = {"Lowpass", "Highpass", "Bandpass", "Notch"};
 // A preset stores the name, so this list may be appended to but never reordered.
 const char *const kDriveNames[] = {"Soft Clip", "Hard Clip", "Fold",
                                    "Rectify",   "Sine Fold", "Crush"};
+const char *const kTriggerNames[] = {"Sync", "MIDI", "Audio"};
+const char *const kSourceNames[] = {"Sidechain", "Input"};
+const char *const kNoteNames[] = {"Any", "C",  "C#", "D",  "D#", "E", "F",
+                                  "F#",  "G",  "G#", "A",  "A#", "B"};
+const char *const kOctaveNames[] = {"Any", "-1", "0", "1", "2", "3",
+                                    "4",   "5",  "6", "7", "8", "9"};
 
 // A log parameter's default is its position on the travel, not its value.
 double logPos(double lo, double value, double hi) { return std::log(value / lo) / std::log(hi / lo); }
@@ -192,6 +198,90 @@ const ParamDesc kParams[kNumParams] = {
    PCT(kParamWidSmooth, "wid_smooth", "Smooth", "Width", 0.15,
         "Softens the width movement, which keeps a hard step from tearing the "
         "image apart."),
+
+   // --------------------------------------------------------------- trigger
+   ENUM(kParamTrigSource, "trig_source", "Source", "Trigger", 0, kSourceNames,
+        "What an Audio trigger listens to: the sidechain input, where a kick "
+        "track is routed to duck a bass, or the signal coming into the rack."),
+   LIN(kParamTrigThreshold, "trig_threshold", "Threshold", "Trigger", -60.0, 0.0, -24.0, "dB",
+       "How loud a hit must be to start an effect set to Audio. It re-arms once "
+       "the level has fallen 6 dB below this."),
+   LOG(kParamTrigFilter, "trig_filter", "Focus", "Trigger", 1.0, 40.0, 20000.0, "Hz",
+       "A lowpass in front of the detector only, never the sound. Around 150 Hz "
+       "it hears the kick in a drum loop and ignores the rest, a few ms later."),
+   LOG(kParamTrigHold, "trig_hold", "Hold", "Trigger", logPos(5.0, 50.0, 1000.0), 5.0, 1000.0,
+       "ms",
+       "The shortest time between two audio triggers, so a kick with a long or "
+       "doubled attack starts the effect once."),
+   ENUM(kParamTrigNote, "trig_note", "Note", "Trigger", 0, kNoteNames,
+        "Which note starts an effect set to MIDI. Any answers to every note; a "
+        "note name answers to it in the octave chosen beside it."),
+   ENUM(kParamTrigOctave, "trig_octave", "Octave", "Trigger", 0, kOctaveNames,
+        "The octave of the trigger note, with C3 as MIDI note 48. Any lets the "
+        "note name match in every octave."),
+   ENUM(kParamVolTrigger, "vol_trigger", "Trigger", "Volume", 0, kTriggerNames,
+        "What starts the volume cycle: the host's beat, a MIDI note, or a "
+        "hit in the sidechain or the input, as the Trigger panel sets it up."),
+   ENUM(kParamVolLoop, "vol_loop", "Loop", "Volume", 0, kOnOff,
+        "With MIDI or Audio: On keeps cycling until the next trigger, Off runs "
+        "the shape once and holds at its End marker."),
+   PCT(kParamVolEnd, "vol_end", "End", "Volume", 1.0,
+       "Where a shape run once stops and holds, until the next trigger. Drag "
+       "the marker in the editor or turn this; Sync and Loop ignore it."),
+   ENUM(kParamFltTrigger, "flt_trigger", "Trigger", "Filter", 0, kTriggerNames,
+        "What starts the filter cycle: the host's beat, a MIDI note, or a "
+        "hit in the sidechain or the input, as the Trigger panel sets it up."),
+   ENUM(kParamFltLoop, "flt_loop", "Loop", "Filter", 0, kOnOff,
+        "With MIDI or Audio: On keeps cycling until the next trigger, Off runs "
+        "the shape once and holds at its End marker."),
+   PCT(kParamFltEnd, "flt_end", "End", "Filter", 1.0,
+       "Where a shape run once stops and holds, until the next trigger. Drag "
+       "the marker in the editor or turn this; Sync and Loop ignore it."),
+   ENUM(kParamDrvTrigger, "drv_trigger", "Trigger", "Drive", 0, kTriggerNames,
+        "What starts the drive cycle: the host's beat, a MIDI note, or a "
+        "hit in the sidechain or the input, as the Trigger panel sets it up."),
+   ENUM(kParamDrvLoop, "drv_loop", "Loop", "Drive", 0, kOnOff,
+        "With MIDI or Audio: On keeps cycling until the next trigger, Off runs "
+        "the shape once and holds at its End marker."),
+   PCT(kParamDrvEnd, "drv_end", "End", "Drive", 1.0,
+       "Where a shape run once stops and holds, until the next trigger. Drag "
+       "the marker in the editor or turn this; Sync and Loop ignore it."),
+   ENUM(kParamTimTrigger, "tim_trigger", "Trigger", "Time", 0, kTriggerNames,
+        "What starts the time cycle: the host's beat, a MIDI note, or a "
+        "hit in the sidechain or the input, as the Trigger panel sets it up."),
+   ENUM(kParamTimLoop, "tim_loop", "Loop", "Time", 0, kOnOff,
+        "With MIDI or Audio: On keeps cycling until the next trigger, Off runs "
+        "the shape once and holds at its End marker."),
+   PCT(kParamTimEnd, "tim_end", "End", "Time", 1.0,
+       "Where a shape run once stops and holds, until the next trigger. Drag "
+       "the marker in the editor or turn this; Sync and Loop ignore it."),
+   ENUM(kParamCrsTrigger, "crs_trigger", "Trigger", "Crush", 0, kTriggerNames,
+        "What starts the crush cycle: the host's beat, a MIDI note, or a "
+        "hit in the sidechain or the input, as the Trigger panel sets it up."),
+   ENUM(kParamCrsLoop, "crs_loop", "Loop", "Crush", 0, kOnOff,
+        "With MIDI or Audio: On keeps cycling until the next trigger, Off runs "
+        "the shape once and holds at its End marker."),
+   PCT(kParamCrsEnd, "crs_end", "End", "Crush", 1.0,
+       "Where a shape run once stops and holds, until the next trigger. Drag "
+       "the marker in the editor or turn this; Sync and Loop ignore it."),
+   ENUM(kParamPanTrigger, "pan_trigger", "Trigger", "Pan", 0, kTriggerNames,
+        "What starts the pan cycle: the host's beat, a MIDI note, or a "
+        "hit in the sidechain or the input, as the Trigger panel sets it up."),
+   ENUM(kParamPanLoop, "pan_loop", "Loop", "Pan", 0, kOnOff,
+        "With MIDI or Audio: On keeps cycling until the next trigger, Off runs "
+        "the shape once and holds at its End marker."),
+   PCT(kParamPanEnd, "pan_end", "End", "Pan", 1.0,
+       "Where a shape run once stops and holds, until the next trigger. Drag "
+       "the marker in the editor or turn this; Sync and Loop ignore it."),
+   ENUM(kParamWidTrigger, "wid_trigger", "Trigger", "Width", 0, kTriggerNames,
+        "What starts the width cycle: the host's beat, a MIDI note, or a "
+        "hit in the sidechain or the input, as the Trigger panel sets it up."),
+   ENUM(kParamWidLoop, "wid_loop", "Loop", "Width", 0, kOnOff,
+        "With MIDI or Audio: On keeps cycling until the next trigger, Off runs "
+        "the shape once and holds at its End marker."),
+   PCT(kParamWidEnd, "wid_end", "End", "Width", 1.0,
+       "Where a shape run once stops and holds, until the next trigger. Drag "
+       "the marker in the editor or turn this; Sync and Loop ignore it."),
 };
 #undef LIN
 #undef PCT

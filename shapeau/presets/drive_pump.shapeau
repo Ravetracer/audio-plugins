@@ -5,7 +5,7 @@ author = Shapeau
 description = Distortion that arrives with the beat: the drive curve is a duck shape, so the signal is clean between hits and saturated on them. The mid band is driven hardest, the low band moderately and the high band barely at all.
 
 # Global
-mix = 100
+mix = 1
 split_low = 180
 split_high = 2200
 band_low = On
@@ -17,12 +17,12 @@ vol_on = Off
 vol_trim = 0
 vol_rate = 1/4
 vol_phase = 0
-vol_smooth = 15
+vol_smooth = 0.15
 
 # Filter
 flt_on = Off
 flt_cutoff = 1000
-flt_res = 25
+flt_res = 0.25
 flt_depth = 5
 flt_drive = 0
 flt_type_low = Lowpass
@@ -30,27 +30,27 @@ flt_type_mid = Lowpass
 flt_type_high = Lowpass
 flt_rate = 1/4
 flt_phase = 0
-flt_smooth = 25
+flt_smooth = 0.25
 
 # Drive
 drv_on = On
 drv_style = Soft Clip
-drv_drive = 72
+drv_drive = 0.72
 drv_input = 6
 drv_output = -4
-drv_tone = -15
-drv_mix = 85
+drv_tone = -0.15
+drv_mix = 0.85
 drv_rate = 1/4
 drv_phase = 0
-drv_smooth = 10
+drv_smooth = 0.1
 
 # Time
 tim_on = Off
 tim_range = 500
-tim_step = 30
+tim_step = 0.3
 tim_rate = 1/4
 tim_phase = 0
-tim_smooth = 10
+tim_smooth = 0.1
 
 # Shape curves. One line per module and band, in normalised time
 # and value, with each point's weight: 0 hard, 1 medium, 2 soft.

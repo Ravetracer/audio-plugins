@@ -20,49 +20,62 @@ constexpr int kContentW = 1400;
 constexpr uint32_t kGlobalParams[] = {kParamMix,        kParamInput,     kParamOutput,
                                       kParamSplitLow,   kParamSplitHigh, kParamBandLow,
                                       kParamBandMid,    kParamBandHigh};
-constexpr uint32_t kVolumeParams[] = {kParamVolOn, kParamVolTrim, kParamVolRate, kParamVolPhase,
-                                     kParamVolSmooth};
+// What starts an effect's cycle and the detector the audio triggers share;
+// beside GLOBAL, because one setup serves every effect set to Audio or MIDI.
+constexpr uint32_t kTriggerParams[] = {kParamTrigSource, kParamTrigThreshold, kParamTrigFilter,
+                                       kParamTrigHold,   kParamTrigNote,      kParamTrigOctave};
+// Every effect ends with its own Trigger, Loop and End.
+constexpr uint32_t kVolumeParams[] = {kParamVolOn,      kParamVolTrim,  kParamVolRate,
+                                     kParamVolPhase,   kParamVolSmooth, kParamVolTrigger,
+                                     kParamVolLoop,    kParamVolEnd};
 constexpr uint32_t kFilterParams[] = {kParamFltOn,       kParamFltCutoff,  kParamFltRes,
                                       kParamFltDepth,    kParamFltDrive,   kParamFltTypeLow,
                                       kParamFltTypeMid,  kParamFltTypeHigh, kParamFltRate,
-                                      kParamFltPhase,    kParamFltSmooth};
+                                      kParamFltPhase,    kParamFltSmooth,  kParamFltTrigger,
+                                      kParamFltLoop,     kParamFltEnd};
 constexpr uint32_t kDriveParams[] = {kParamDrvOn,    kParamDrvStyle, kParamDrvDrive,
                                     kParamDrvInput, kParamDrvOutput, kParamDrvTone,
                                     kParamDrvMix,   kParamDrvRate,  kParamDrvPhase,
-                                    kParamDrvSmooth};
-constexpr uint32_t kTimeParams[] = {kParamTimOn,    kParamTimRange, kParamTimStep,
-                                   kParamTimRate,  kParamTimPhase, kParamTimSmooth};
+                                    kParamDrvSmooth, kParamDrvTrigger, kParamDrvLoop,
+                                    kParamDrvEnd};
+constexpr uint32_t kTimeParams[] = {kParamTimOn,    kParamTimRange,   kParamTimStep,
+                                   kParamTimRate,  kParamTimPhase,   kParamTimSmooth,
+                                   kParamTimTrigger, kParamTimLoop,  kParamTimEnd};
 constexpr uint32_t kCrushParams[] = {kParamCrsOn,   kParamCrsAmount, kParamCrsBits,
                                     kParamCrsDown, kParamCrsMix,    kParamCrsRate,
-                                    kParamCrsPhase, kParamCrsSmooth};
-constexpr uint32_t kPanParams[] = {kParamPanOn, kParamPanRate, kParamPanPhase,
-                                  kParamPanSmooth};
-constexpr uint32_t kWidthParams[] = {kParamWidOn, kParamWidRate, kParamWidPhase,
-                                    kParamWidSmooth};
+                                    kParamCrsPhase, kParamCrsSmooth, kParamCrsTrigger,
+                                    kParamCrsLoop,  kParamCrsEnd};
+constexpr uint32_t kPanParams[] = {kParamPanOn,     kParamPanRate, kParamPanPhase,
+                                  kParamPanSmooth, kParamPanTrigger, kParamPanLoop,
+                                  kParamPanEnd};
+constexpr uint32_t kWidthParams[] = {kParamWidOn,     kParamWidRate, kParamWidPhase,
+                                    kParamWidSmooth, kParamWidTrigger, kParamWidLoop,
+                                    kParamWidEnd};
 
 #define PANEL(title, cols, rows, arr)                                                              \
    { title, cols, rows, arr, static_cast<int>(sizeof(arr) / sizeof(arr[0])) }
 
-// The global panel, then one panel per effect in Module order -- panel 1 + m is
-// effect m's. The window shows the global row and the selected effect's row,
-// never more, so every row is a single panel.
+// The global and trigger panels, then one panel per effect in Module order --
+// row 1 + m is effect m's. The window shows row 0 and the selected effect's
+// row, never more, so every effect's row is a single panel.
 constexpr PanelSpec kPanelSpecs[] = {
    PANEL("GLOBAL", 8, 1, kGlobalParams),
-   PANEL("VOLUME", 5, 1, kVolumeParams),
-   PANEL("FILTER", 11, 1, kFilterParams),
-   PANEL("DRIVE", 10, 1, kDriveParams),
-   PANEL("TIME", 6, 1, kTimeParams),
-   PANEL("CRUSH", 8, 1, kCrushParams),
-   PANEL("PAN", 4, 1, kPanParams),
-   PANEL("WIDTH", 4, 1, kWidthParams),
+   PANEL("TRIGGER", 6, 1, kTriggerParams),
+   PANEL("VOLUME", 8, 1, kVolumeParams),
+   PANEL("FILTER", 14, 1, kFilterParams),
+   PANEL("DRIVE", 13, 1, kDriveParams),
+   PANEL("TIME", 9, 1, kTimeParams),
+   PANEL("CRUSH", 11, 1, kCrushParams),
+   PANEL("PAN", 7, 1, kPanParams),
+   PANEL("WIDTH", 7, 1, kWidthParams),
 };
 #undef PANEL
 
 constexpr int kNumPanels = static_cast<int>(sizeof(kPanelSpecs) / sizeof(kPanelSpecs[0]));
-static_assert(kNumPanels == 1 + kNumModules, "one panel per effect, after the global one");
+static_assert(kNumPanels == 2 + kNumModules, "one panel per effect, after global and trigger");
 
-constexpr int kRowStart[] = {0, 1, 2, 3, 4, 5, 6, 7};
-constexpr int kRowCount[] = {1, 1, 1, 1, 1, 1, 1, 1};
+constexpr int kRowStart[] = {0, 2, 3, 4, 5, 6, 7, 8};
+constexpr int kRowCount[] = {2, 1, 1, 1, 1, 1, 1, 1};
 constexpr int kNumRows = 8;
 
 constexpr int rowWidth(int row) {

@@ -17,7 +17,7 @@ Vibe coded with Claude.
 | **[RumpelKiste](rumpel-kiste/)** | 0.2.1 | Linux, Windows | CLAP, VST3 | a rhythm composer modelled on the Roland TR-909's voicing board, from the June 1984 service notes, with a 64-pattern step sequencer and a drive bus |
 | **[Aurum](aurum/)** | 0.3.1 | Linux, Windows | CLAP, VST3 | an algorithmic reverb with three engines (feedback delay network, allpass ring, plate), a per-frequency decay contour and a tone EQ; built on its own DSP and window rather than `shared/` |
 | **[Substrike](substrike/)** | 1.1.0 | Linux, Windows | CLAP, VST3 | a layered kick drum designer for every style, from ambient to hardcore: eight synthesised layers (body, click, noise, resonator, and bus lanes for rumble) with per-lane outputs, effect chains with reverb, delays and drive, a transient guard, a modulation matrix with LFOs, envelopes and macros, 117 factory presets with a browser, breakpoint curves and an editor with hit export by drag and drop; built on its own code rather than `shared/` |
-| **[Shapeau](shapeau/)** | 0.3.0 | Linux, Windows | CLAP, VST3 | a multiband drawing rack: a chain of effects (volume, filter, drive, crush, time, width, pan) in any order, each driven by a shape drawn per frequency band and locked to the beat, with the audio drawn behind the shape as it plays |
+| **[Shapeau](shapeau/)** | 0.4.0 | Linux, Windows | CLAP, VST3 | a multiband drawing rack: a chain of effects (volume, filter, drive, crush, time, width, pan) in any order, each driven by a shape drawn per frequency band, locked to the beat or restarted by a MIDI note or a hit in the sidechain, with the audio and the sidechain drawn behind the shape as it plays |
 
 ## Build
 

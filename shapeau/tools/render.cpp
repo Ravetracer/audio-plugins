@@ -19,6 +19,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <deque>
 #include <memory>
 #include <string>
 #include <vector>
@@ -584,6 +585,38 @@ void selftestEngine() {
          }
       }
       check(files > 0 && bad == 0, "every factory preset parses with its shapes");
+
+      // The format stores a percentage as a ratio, 0..1. Written as 0..100 it
+      // still parses -- and every value but 0 and 100 lands on the top of its
+      // range, which is how all nine factory presets once loaded with every
+      // Smooth, Drive and Resonance at 100 %. Each value must load as written.
+      int wrong = 0;
+      for (const auto &entry : std::filesystem::directory_iterator(SHAPEAU_PRESET_DIR, ec)) {
+         if (!entry.is_regular_file() || entry.path().extension() != ".shapeau")
+            continue;
+         std::ifstream in(entry.path());
+         shapeau::PresetData data;
+         shapeau::CurveSet curves;
+         std::string error;
+         shapeau::parsePresetFileWithCurves(entry.path().string(), data, curves, error);
+         std::string line;
+         while (std::getline(in, line)) {
+            const size_t eq = line.find(" = ");
+            if (eq == std::string::npos)
+               continue;
+            const shapeau::ParamDesc *d = shapeau::paramByKey(line.substr(0, eq).c_str());
+            if (!d || d->kind != shapeau::ParamKind::Percent)
+               continue;
+            const double written = std::atof(line.c_str() + eq + 3);
+            for (const auto &kv : data.values)
+               if (kv.first == d->id && std::fabs(kv.second - written) > 1.0e-9) {
+                  std::printf("      %s: %s\n", entry.path().filename().string().c_str(),
+                              line.c_str());
+                  ++wrong;
+               }
+         }
+      }
+      check(files > 0 && wrong == 0, "every factory preset's percentages load as written");
    }
 
    // 14. The chain's order is the audio's order. A volume duck into a hard
@@ -704,6 +737,211 @@ void selftestEngine() {
          trace = std::max(trace, scope.trace[i].load());
       check(std::fabs(trace - 1.0f) < 1.0e-3f, "and traces a flat volume shape at the top");
    }
+
+   // 17. Triggers. A volume shape that is silent for its first half and open
+   //     for its second, a quarter note long at 120 BPM (24000 samples), on a
+   //     steady 0.5 sine. In MIDI or Audio mode it rests at its End until
+   //     something starts it, so nothing is ducked before the first trigger.
+   {
+      const size_t cycle = static_cast<size_t>(sr * 60.0 / 120.0);
+      const size_t len = 6 * cycle;
+      std::vector<float> tone(len);
+      for (size_t i = 0; i < len; ++i)
+         tone[i] = static_cast<float>(0.5 * std::sin(2.0 * kPi * 440.0 * i / sr));
+      // A kick: 60 Hz falling from 150, gone in about 100 ms.
+      auto kickAt = [&](std::vector<float> &into, size_t at, float peak) {
+         double phase = 0.0;
+         for (size_t i = 0; at + i < into.size() && i < static_cast<size_t>(sr * 0.25); ++i) {
+            const double t = i / sr;
+            phase += 2.0 * kPi * (60.0 + 90.0 * std::exp(-t * 40.0)) / sr;
+            into[at + i] += static_cast<float>(peak * std::exp(-t * 25.0) * std::sin(phase));
+         }
+      };
+      shapeau::CurveSet curves;
+      shapeau::resetCurves(curves);
+      for (int b = 0; b < shapeau::kNumBands; ++b) {
+         curves.curve[shapeau::kModuleVolume][b].setStep(0, 2, 0.0f);
+         curves.curve[shapeau::kModuleVolume][b].setStep(1, 2, 1.0f);
+      }
+      shapeau::EngineParams base = neutralParams();
+      base.volSmooth = 0.0f;
+
+      struct Trig {
+         Run out;
+         uint32_t fired = 0;
+      };
+      // Runs the engine with a sidechain and MIDI trigger frames (absolute),
+      // the transport playing from zero at 120 BPM.
+      auto run = [&](const shapeau::EngineParams &p, const std::vector<float> &in,
+                     const std::vector<float> *side, std::vector<size_t> notes,
+                     bool scope = false) {
+         shapeau::Engine engine;
+         engine.prepare(sr, 512);
+         engine.setParams(p);
+         engine.publishCurves(curves);
+         if (scope)
+            engine.setScopeTarget(shapeau::kModuleVolume, shapeau::kBandMid, true, true);
+         Trig t;
+         t.out.l = in;
+         t.out.r = in;
+         constexpr uint32_t kBlock = 256;
+         double beats = 0.0;
+         for (size_t pos = 0; pos < len; pos += kBlock) {
+            const uint32_t n = static_cast<uint32_t>(std::min<size_t>(kBlock, len - pos));
+            uint32_t frames[8];
+            uint32_t count = 0;
+            for (size_t at : notes)
+               if (at >= pos && at < pos + n && count < 8)
+                  frames[count++] = static_cast<uint32_t>(at - pos);
+            const float *sl = side ? side->data() + pos : nullptr;
+            engine.process(t.out.l.data() + pos, t.out.r.data() + pos, n, beats, 120.0, sl, sl,
+                           frames, count);
+            beats += n * 2.0 / sr;
+         }
+         t.fired = engine.scope().triggers.load();
+         if (scope) {
+            const shapeau::Scope &sc = engine.scope();
+            float early = 0.0f, middle = 0.0f;
+            for (int i = 0; i < shapeau::Scope::kBins / 40; ++i)
+               early = std::max(early, sc.sideHi[i].load());
+            for (int i = shapeau::Scope::kBins / 2 + 2; i < shapeau::Scope::kBins; ++i)
+               middle = std::max(middle, sc.sideHi[i].load());
+            t.fired = early > 0.4f && middle < 0.01f ? 1u : 0u;
+         }
+         return t;
+      };
+      auto level = [&](const Run &r, size_t from, size_t to) {
+         float peak = 0.0f;
+         for (size_t i = from; i < to && i < r.l.size(); ++i)
+            peak = std::max(peak, std::fabs(r.l[i]));
+         return peak;
+      };
+
+      shapeau::EngineParams p = base;
+      p.trigMode[shapeau::kModuleVolume] = shapeau::kTrigMidi;
+      const auto idle = run(p, tone, nullptr, {});
+      check(level(idle.out, 2000, len) > 0.45f,
+            "a triggered shape rests at its End and ducks nothing before a trigger");
+
+      const size_t note = 2 * cycle + 1000;
+      const auto once = run(p, tone, nullptr, {note});
+      check(level(once.out, 2000, note) > 0.45f && level(once.out, note + 64, note + cycle / 2 - 64) < 0.005f &&
+               level(once.out, note + cycle / 2 + 300, note + cycle) > 0.45f &&
+               level(once.out, note + cycle + 300, len) > 0.45f,
+            "a MIDI note starts the shape once: silent half a cycle, then open and held");
+
+      p.trigLoop[shapeau::kModuleVolume] = true;
+      const auto loop = run(p, tone, nullptr, {note});
+      check(level(loop.out, note + cycle + 64, note + cycle + cycle / 2 - 64) < 0.005f &&
+               level(loop.out, note + 2 * cycle + 64, note + 2 * cycle + cycle / 2 - 64) < 0.005f,
+            "with Loop on, a triggered shape keeps cycling from the note");
+
+      p.trigLoop[shapeau::kModuleVolume] = false;
+      p.trigEnd[shapeau::kModuleVolume] = 0.25f;
+      const auto held = run(p, tone, nullptr, {note});
+      check(level(held.out, note + 64, len) < 0.005f,
+            "a shape run once holds at its End marker until the next trigger");
+      p.trigEnd[shapeau::kModuleVolume] = 1.0f;
+
+      // Audio: two kicks in the sidechain, one cycle and a half apart.
+      std::vector<float> side(len, 0.0f);
+      const size_t kick1 = cycle, kick2 = cycle + cycle * 3 / 2;
+      kickAt(side, kick1, 0.8f);
+      kickAt(side, kick2, 0.8f);
+      p.trigMode[shapeau::kModuleVolume] = shapeau::kTrigAudio;
+      const auto audio = run(p, tone, &side, {});
+      check(audio.fired == 2, "the detector finds both kicks in the sidechain, once each");
+      // A few samples to cross the threshold, one 16-sample control block, and
+      // the volume stage's shortest smoothing (0.3 ms) falling to 1 %.
+      check(level(audio.out, 2000, kick1) > 0.45f &&
+               level(audio.out, kick1 + 128, kick1 + cycle / 2 - 64) < 0.005f &&
+               level(audio.out, kick1 + cycle / 2 + 300, kick2) > 0.45f &&
+               level(audio.out, kick2 + 128, kick2 + cycle / 2 - 64) < 0.005f,
+            "a kick in the sidechain has the duck down within 3 ms of its onset");
+      std::printf("      %u triggers from two kicks\n", audio.fired);
+
+      std::vector<float> quiet(len, 0.0f);
+      kickAt(quiet, kick1, 0.03f); // -30 dB, under the -24 dB threshold
+      p.trigThreshold = std::pow(10.0f, -24.0f / 20.0f);
+      const auto under = run(p, tone, &quiet, {});
+      check(under.fired == 0 && level(under.out, 2000, len) > 0.45f,
+            "a hit under the threshold triggers nothing");
+
+      // Two short hits 60 ms apart: Hold decides whether that is one trigger
+      // or two.
+      std::vector<float> pair(len, 0.0f);
+      for (size_t k = 0; k < 2; ++k)
+         for (size_t i = 0; i < static_cast<size_t>(sr * 0.004); ++i)
+            pair[kick1 + k * static_cast<size_t>(sr * 0.06) + i] =
+               static_cast<float>(0.1 * std::sin(2.0 * kPi * 100.0 * i / sr));
+      p.trigHoldSec = 0.1f;
+      const auto longHold = run(p, tone, &pair, {});
+      p.trigHoldSec = 0.02f;
+      const auto shortHold = run(p, tone, &pair, {});
+      check(longHold.fired == 1 && shortHold.fired == 2,
+            "Hold merges hits closer than it into one trigger");
+      p.trigHoldSec = 0.05f;
+
+      // The detector's source: the input instead of the sidechain. The 440 Hz
+      // tone under the kick is louder than the threshold on its own; Focus at
+      // 150 Hz takes it below, which is what Focus is for.
+      std::vector<float> withKick = tone;
+      kickAt(withKick, kick1, 0.8f);
+      p.trigFromInput = true;
+      p.trigThreshold = std::pow(10.0f, -12.0f / 20.0f);
+      const auto unfocused = run(p, withKick, nullptr, {});
+      p.trigFilterHz = 150.0f;
+      const auto fromInput = run(p, withKick, nullptr, {});
+      // The lowpass delays the detector a little: 256 samples is about 5 ms.
+      check(fromInput.fired == 1 &&
+               level(fromInput.out, 2000, kick1) > 0.45f &&
+               level(fromInput.out, kick1 + 256, kick1 + cycle / 2 - 64) < 0.005f,
+            "with Source at Input and Focus at 150 Hz, the kick in the signal starts the duck");
+      check(unfocused.fired == 1 && level(unfocused.out, 2000, cycle / 2 - 64) < 0.005f,
+            "and without Focus, the tone under it fires first, at the start");
+      p.trigFromInput = false;
+      p.trigFilterHz = 20000.0f;
+      p.trigThreshold = std::pow(10.0f, -24.0f / 20.0f);
+
+      // The sidechain is listened to, never heard: in Sync mode the output is
+      // the same with and without it.
+      const auto plain = runEngine(base, curves, tone, tone, sr, 120.0);
+      const auto withSide = run(base, tone, &side, {});
+      check(differenceDb(plain.l, withSide.out.l) < -120.0,
+            "the sidechain is never heard");
+
+      // With the scope open on a triggered effect, the kick that started the
+      // cycle is drawn at its start: that is what lines a duck up with a kick.
+      const auto drawn = run(p, tone, &side, {}, true);
+      check(drawn.fired == 1, "the scope draws the sidechain's kick at the start of its cycle");
+
+      // Kicks every 0.78 of a cycle restart it before it ends, so the last
+      // fifth of the picture is never reached and must stay empty -- not be
+      // filled with the sample at each restart, as if the jump back to the
+      // start were a short wrap forwards.
+      {
+         std::vector<float> early(len, 0.0f);
+         for (size_t at = cycle; at < len; at += cycle * 78 / 100)
+            kickAt(early, at, 0.8f);
+         shapeau::Engine engine;
+         engine.prepare(sr, 512);
+         engine.setParams(p);
+         engine.publishCurves(curves);
+         engine.setScopeTarget(shapeau::kModuleVolume, shapeau::kBandMid, true, true);
+         std::vector<float> l = tone, r = tone;
+         double beats = 0.0;
+         for (size_t pos = 0; pos + 256 <= len; pos += 256) {
+            engine.process(l.data() + pos, r.data() + pos, 256, beats, 120.0,
+                           early.data() + pos, early.data() + pos);
+            beats += 256 * 2.0 / sr;
+         }
+         float tail = 0.0f;
+         for (int i = shapeau::Scope::kBins * 82 / 100; i < shapeau::Scope::kBins; ++i)
+            tail = std::max({tail, std::fabs(engine.scope().inHi[i].load()),
+                             std::fabs(engine.scope().inLo[i].load())});
+         check(tail == 0.0f, "a trigger before the end of the cycle leaves the scope's end unwritten");
+      }
+   }
 }
 
 // ---------------------------------------------------------------- the CLAP host
@@ -791,15 +1029,33 @@ bool loadPlugin(Plugin &out, const std::string &path) {
    return true;
 }
 
+// Deques, not vectors: the headers point into the stored events, and a vector
+// that grows moves them.
 struct EventList {
-   std::vector<clap_event_param_value_t> values;
+   std::deque<clap_event_param_value_t> values;
+   std::deque<clap_event_note_t> notes;
    std::vector<const clap_event_header_t *> headers;
    void add(clap_event_param_value_t v) {
       values.push_back(v);
       headers.push_back(&values.back().header);
    }
+   void addNote(uint32_t time, int16_t key) {
+      clap_event_note_t n{};
+      n.header.size = sizeof(n);
+      n.header.type = CLAP_EVENT_NOTE_ON;
+      n.header.time = time;
+      n.header.space_id = CLAP_CORE_EVENT_SPACE_ID;
+      n.note_id = -1;
+      n.port_index = 0;
+      n.channel = 0;
+      n.key = key;
+      n.velocity = 1.0;
+      notes.push_back(n);
+      headers.push_back(&notes.back().header);
+   }
    void clear() {
       values.clear();
+      notes.clear();
       headers.clear();
    }
    static uint32_t size(const clap_input_events_t *list) {
@@ -842,8 +1098,20 @@ bool exercisePlugin(const std::string &path) {
 
    const auto *ports = static_cast<const clap_plugin_audio_ports_t *>(
       p.plugin->get_extension(p.plugin, CLAP_EXT_AUDIO_PORTS));
-   check(ports && ports->count(p.plugin, true) == 1 && ports->count(p.plugin, false) == 1,
-         "the plugin has one stereo input and one stereo output");
+   check(ports && ports->count(p.plugin, true) == 2 && ports->count(p.plugin, false) == 1,
+         "the plugin has a stereo input, a sidechain input and a stereo output");
+   {
+      clap_audio_port_info_t side{};
+      const bool ok = ports && ports->get(p.plugin, 1, true, &side);
+      check(ok && side.channel_count == 2 && !(side.flags & CLAP_AUDIO_PORT_IS_MAIN) &&
+               std::strcmp(side.name, "Sidechain") == 0,
+            "the second input is a stereo sidechain that is not main");
+   }
+   const auto *notePorts = static_cast<const clap_plugin_note_ports_t *>(
+      p.plugin->get_extension(p.plugin, CLAP_EXT_NOTE_PORTS));
+   check(notePorts && notePorts->count(p.plugin, true) == 1 &&
+            notePorts->count(p.plugin, false) == 0,
+         "the plugin takes notes in, for the MIDI trigger");
 
    p.plugin->activate(p.plugin, 48000.0, 1, 512);
    p.plugin->start_processing(p.plugin);
@@ -913,6 +1181,87 @@ bool exercisePlugin(const std::string &path) {
       check(ok, "a factory preset loads through the preset-load extension");
    } else {
       check(false, "a factory preset loads through the preset-load extension");
+   }
+
+   // Kick Duck with its volume set to MIDI and then to Audio: a note event, and
+   // then a kick in the sidechain buffer, each duck a 60 Hz tone that nothing
+   // ducks while the volume waits for a trigger.
+   std::string duck = std::string(SHAPEAU_PRESET_DIR) + "/kick_duck.shapeau";
+   if (presetLoad &&
+       presetLoad->from_location(p.plugin, CLAP_PRESET_DISCOVERY_LOCATION_FILE, duck.c_str(),
+                                 nullptr)) {
+      float sideL[256] = {0}, sideR[256] = {0};
+      float *sidePtrs[2] = {sideL, sideR};
+      clap_audio_buffer_t ins[2] = {inBuf, {}};
+      ins[1].data32 = sidePtrs;
+      ins[1].channel_count = 2;
+      proc.audio_inputs = ins;
+      proc.audio_inputs_count = 2;
+      int64_t frame = 16 * 256;
+      // Peak of the left output per block, `blocks` blocks long; a note or a
+      // kick is put at the top of block `at`.
+      auto play = [&](int blocks, int at, bool note, bool kick) {
+         std::vector<float> peaks;
+         for (int block = 0; block < blocks; ++block) {
+            events.clear();
+            if (note && block == at)
+               events.addNote(0, 36);
+            for (int i = 0; i < 256; ++i, ++frame) {
+               left[i] = static_cast<float>(0.5 * std::sin(2.0 * kPi * 60.0 * frame / 48000.0));
+               right[i] = left[i];
+               const int k = (block - at) * 256 + i;
+               sideL[i] = sideR[i] =
+                  kick && k >= 0 && k < 4800
+                     ? static_cast<float>(0.8 * std::exp(-k / 1200.0) *
+                                          std::sin(2.0 * kPi * 60.0 * k / 48000.0))
+                     : 0.0f;
+            }
+            transport.song_pos_beats =
+               static_cast<int64_t>(static_cast<double>(frame) * CLAP_BEATTIME_FACTOR * 130.0 /
+                                    (60.0 * 48000.0));
+            p.plugin->process(p.plugin, &proc);
+            float peak = 0.0f;
+            for (int i = 0; i < 256; ++i)
+               peak = std::max(peak, std::fabs(left[i]));
+            peaks.push_back(peak);
+         }
+         events.clear();
+         return peaks;
+      };
+      auto setParam = [&](uint32_t id, double value) {
+         clap_event_param_value_t v{};
+         v.header.size = sizeof(v);
+         v.header.type = CLAP_EVENT_PARAM_VALUE;
+         v.header.space_id = CLAP_CORE_EVENT_SPACE_ID;
+         v.param_id = id;
+         v.note_id = -1;
+         v.port_index = -1;
+         v.channel = -1;
+         v.key = -1;
+         v.value = value;
+         events.add(v);
+         params->flush(p.plugin, &inEvents, &outEvents);
+         events.clear();
+      };
+      setParam(shapeau::kParamVolTrigger, shapeau::kTrigMidi);
+      auto midi = play(40, 20, true, false);
+      const float before = *std::min_element(midi.begin() + 8, midi.begin() + 20);
+      const float after = *std::min_element(midi.begin() + 21, midi.begin() + 24);
+      check(before > 0.4f && after < 0.25f * before,
+            "through the CLAP API, a note-on ducks Kick Duck set to MIDI");
+      std::printf("      before the note %.3f, after it %.3f\n", before, after);
+
+      setParam(shapeau::kParamVolTrigger, shapeau::kTrigAudio);
+      auto audio = play(80, 60, false, true);
+      const float waiting = *std::min_element(audio.begin() + 40, audio.begin() + 60);
+      const float ducked = *std::min_element(audio.begin() + 61, audio.begin() + 64);
+      check(waiting > 0.4f && ducked < 0.25f * waiting,
+            "and a kick in the sidechain buffer ducks it set to Audio");
+      std::printf("      before the kick %.3f, after it %.3f\n", waiting, ducked);
+      proc.audio_inputs = &inBuf;
+      proc.audio_inputs_count = 1;
+   } else {
+      check(false, "Kick Duck loads for the trigger test");
    }
 
    p.plugin->stop_processing(p.plugin);

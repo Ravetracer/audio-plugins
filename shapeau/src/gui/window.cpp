@@ -576,9 +576,11 @@ private:
       drawBackground(cr);
       drawHeader(cr);
       {
+         // The sidechain is amber: the one colour on the wheel furthest from
+         // the ice-cyan accent, so a kick behind a bass cannot be taken for it.
          CurvePalette palette{mSpec.theme.accent, mSpec.theme.panelFill, mSpec.theme.panelEdge,
                               mSpec.theme.track,  mSpec.theme.text,      mSpec.theme.textDim,
-                              mSpec.theme.textMute};
+                              mSpec.theme.textMute, {1.000, 0.718, 0.239}};
          mCurvePanel.draw(cr, palette, mCurves);
       }
       for (const Panel &p : mPanels)

@@ -44,12 +44,20 @@ Selection box with move, scale and skew; line, arc and S-curve pens; undo and
 redo per effect and band; flip, double, nudge left/right, randomise; copy and
 paste; a triplet grid; wave presets per effect with a favourites shelf.
 
+### Triggers and the sidechain (0.4.0, pulled forward from phase 3)
+
+A sidechain input, drawn behind the shape; per effect a trigger (the beat, a
+MIDI note or a hit in the sidechain or the input), loop or one-shot, and an
+End marker dragged in the editor; one shared detector setup. Done -- see
+`STATUS.md`.
+
 ### Phase 3 -- timing and triggers
 
-Per-band rate (linked by default); a free rate in Hz; MIDI trigger and audio
-trigger (transient detection, optional sidechain); one-shot with an end
-marker; an envelope follower per effect, with sidechain; per-effect mix and
-band solo.
+Per-band rate (linked by default); a free rate in Hz; an envelope follower per
+effect, with sidechain; per-effect mix and band solo. Possibly a lookahead for
+the audio trigger (latency in exchange for a duck that starts before the hit).
+The MIDI and audio triggers, the one-shot with its end marker and the
+sidechain input were done in 0.4.0.
 
 ### Phase 4 -- more effects
 

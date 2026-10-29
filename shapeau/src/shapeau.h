@@ -21,7 +21,7 @@ constexpr char kPluginName[] = "Shapeau";
 // a path, even when the two happen to agree today.
 constexpr char kPluginDirName[] = "Shapeau";
 constexpr char kPluginVendor[] = "Ravetracer";
-constexpr char kPluginVersion[] = "0.3.0";
+constexpr char kPluginVersion[] = "0.4.0";
 
 // Nothing else keeps the two version sites in step, and drift here is quiet.
 // The build fails if the version here and the one in CMakeLists.txt disagree.
@@ -39,7 +39,8 @@ constexpr char kPluginDescription[] =
    "crush, time, width and pan -- each with its own drawable curve for every one of "
    "three frequency bands. Draw a ducking shape, a filter sweep, a distortion envelope, "
    "a stepped crush pattern, a stutter or a stereo move into the curve editor and it "
-   "runs locked to the host's beat.";
+   "runs locked to the host's beat -- or restarts on a MIDI note or a hit in the "
+   "sidechain, which is drawn behind the shape so a duck can be fitted to the kick.";
 
 constexpr char kPresetExtension[] = "shapeau";
 constexpr char kProviderId[] = "de.ravetracer.shapeau.preset-provider";

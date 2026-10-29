@@ -5,7 +5,7 @@ author = Shapeau
 description = The read head falls across one bar, so the whole signal drags into half speed and then holds on the same moment until the next bar. Mixed back against the dry signal so the groove survives the stop.
 
 # Global
-mix = 65
+mix = 0.65
 split_low = 200
 split_high = 2000
 band_low = On
@@ -17,12 +17,12 @@ vol_on = Off
 vol_trim = 0
 vol_rate = 1/4
 vol_phase = 0
-vol_smooth = 15
+vol_smooth = 0.15
 
 # Filter
 flt_on = Off
 flt_cutoff = 1000
-flt_res = 25
+flt_res = 0.25
 flt_depth = 5
 flt_drive = 0
 flt_type_low = Lowpass
@@ -30,27 +30,27 @@ flt_type_mid = Lowpass
 flt_type_high = Lowpass
 flt_rate = 1/4
 flt_phase = 0
-flt_smooth = 25
+flt_smooth = 0.25
 
 # Drive
 drv_on = Off
 drv_style = Soft Clip
-drv_drive = 40
+drv_drive = 0.4
 drv_input = 0
 drv_output = 0
 drv_tone = 0
-drv_mix = 100
+drv_mix = 1
 drv_rate = 1/4
 drv_phase = 0
-drv_smooth = 20
+drv_smooth = 0.2
 
 # Time
 tim_on = On
 tim_range = 500
-tim_step = 22
+tim_step = 0.22
 tim_rate = 1/1
 tim_phase = 0
-tim_smooth = 15
+tim_smooth = 0.15
 
 # Shape curves. One line per module and band, in normalised time
 # and value, with each point's weight: 0 hard, 1 medium, 2 soft.

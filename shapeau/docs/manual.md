@@ -34,12 +34,17 @@ A stepped crush shape puts rhythm into the grit, and a width or pan shape walks
 a band across the stereo field. Each of these is a line drawn in the same
 editor, and the band tabs decide who hears it.
 
+A shape does not have to follow the beat. Any effect can be restarted by a MIDI
+note or by a hit -- in the signal itself, or in a sidechain input, which is
+where a kick from another track is routed to duck a bass to it. The sidechain
+is drawn behind the shape too, so the duck can be fitted to the kick by eye.
+
 The effects run in the order the chain lists them, the same order in every
 band, and the three bands are summed back together and mixed against the dry
 input. A filter before a stutter and a stutter before a filter are two
 different sounds, and moving an effect is one drag.
 
-Fifty-six parameters, nine presets.
+Eighty-three parameters, ten presets.
 
 ## 2. The shape editor
 
@@ -88,6 +93,10 @@ bottom up; pan and width, which move the sound between the speakers rather than
 change its level, as a waveform around the middle. With **ALL** selected the
 picture is the whole effect's input and output; with one band selected it is
 that band alone.
+
+A **sidechain**, when one is routed in, is drawn in **amber** over both, so the
+kick a bass is being ducked for sits right under the dip that ducks it. It is
+only ever drawn and listened to, never heard. See section 5.
 
 A thin pale line is the **modulation trace**: what the effect actually did after
 its **Smooth**. With no smoothing it lies under the shape and cannot be seen;
@@ -335,7 +344,91 @@ and survive a tempo change. With the transport stopped the shapes free-run at
 the host's tempo, or at 120 BPM if the host offers none, so the editor and the
 sound keep moving while a part is being played by hand.
 
-## 5. Presets
+Every stage also ends with **Trigger**, **Loop** and **End**, which decide
+whether its cycle follows the beat at all; they are section 5.
+
+## 5. Triggers and the sidechain
+
+![Volume set to Audio: the kick in the sidechain, in amber, starts the duck and sits at the left edge of the cycle; the END marker is where the shape stops until the next kick.](images/sidechain.png)
+
+Every effect follows the host's beat until it is told otherwise. That is right
+for a kick on every quarter note and wrong for anything else -- a broken beat, a
+fill, a break with no kick in it at all. Each effect can instead be started by
+something that happens.
+
+### Trigger, Loop and End
+
+The last three controls on every effect's panel.
+
+- **Trigger** -- what starts the effect's cycle.
+  - **Sync** follows the host's beat, as described under *Rate and Phase*. This
+    is the default.
+  - **MIDI** restarts the shape on every note that reaches Shapeau's note input.
+  - **Audio** restarts it on every hit the detector finds -- in the sidechain,
+    or in the signal itself (see *The TRIGGER panel* below).
+- **Loop** -- **Off** runs the shape once from the trigger and stops at its End,
+  where it holds until the next trigger. **On** keeps cycling until the next
+  trigger starts it again.
+- **End** -- where a shape run once stops. Turn the knob, or drag the dashed
+  **END** marker in the editor; the part of the shape after it is dimmed,
+  because it is never played. Sync and Loop ignore it.
+
+A triggered shape still runs at its **Rate**, counted from the trigger instead
+of from the start of the song, and **Phase** still shifts it. Until its first
+trigger it rests at its End -- or, with Loop on, at the end of the shape -- so
+a duck drawn back up to the top lets the sound through untouched until the
+first kick arrives.
+
+With an effect set to MIDI or Audio, the editor's picture starts at the trigger:
+the hit that started the cycle is at its left edge. A lamp in the top left
+corner of the editor, beside the trigger mode, lights on every trigger.
+
+### Ducking a bass from the kick
+
+1. Put Shapeau on the bass track.
+2. Route the kick track into Shapeau's **sidechain input**. Every DAW does this
+   its own way; it is the same routing a compressor's sidechain uses.
+3. Add **Volume**, pick **DUCK** from the SHAPE menu, and set **Trigger** to
+   **Audio**. The factory preset *Sidechain Duck* is this, ready made.
+4. Play. The kick appears in amber behind the shape. Drag the points until the
+   dip covers the part of the kick that needs the room, and set **Rate** so one
+   cycle is about as long as the duck should last.
+
+To duck only the bottom of the bass, draw the dip in the **LOW** band and leave
+the other two flat.
+
+The sidechain is drawn in every Trigger mode, Sync included: a duck that follows
+the beat can be lined up with a kick on another track the same way.
+
+### The TRIGGER panel
+
+One setup, shared by every effect set to Audio or MIDI.
+
+- **Source** -- what the Audio trigger listens to: the **Sidechain** input, or
+  the **Input**, the signal Shapeau is processing.
+- **Threshold** -- how loud a hit has to be. Once it has fired, the detector
+  waits for the level to fall 6 dB below this before it can fire again.
+- **Focus** -- a lowpass in front of the detector, never in the sound. At the
+  top it hears everything; around 150 Hz it finds the kick in a full drum loop
+  and ignores the hats and the snare's top. A low Focus finds the hit a few
+  milliseconds later.
+- **Hold** -- the shortest time between two audio triggers, so a kick with a
+  doubled attack, or a flam, starts the effect once.
+- **Note** and **Octave** -- which notes start an effect set to MIDI. **Any** in
+  both answers to every note. C3 is MIDI note 48.
+
+The quickest way to set Threshold is by the lamp: it should light once for
+every kick and not for anything else.
+
+### Timing
+
+Triggers add no latency. A MIDI note restarts the shape where it falls, to
+within a third of a millisecond. An audio trigger fires as the hit crosses the
+threshold -- a fraction of a millisecond after it starts, a few with a low
+Focus -- and the effect's **Smooth** rounds off the restart, so a duck drops in
+without a click.
+
+## 6. Presets
 
 The preset bar at the bottom of the window holds the factory presets. The
 arrows step through them, the field opens the browser, and **SAVE** writes the
@@ -352,22 +445,25 @@ A preset stores each shape as one line per stage and band, in normalised time
 and value with the point's corner weight and its segment bend, which is why a
 curve drawn by hand survives a save, a reload and a different install.
 
-## 6. Parameter reference
+## 7. Parameter reference
 
 {{PARAMETER_REFERENCE}}
 
-## 7. Preset library
+## 8. Preset library
 
 {{PRESET_LIBRARY}}
 
-## 8. Notes
+## 9. Notes
 
 - **Formats.** CLAP (1.2) and VST3, 64-bit, for Linux and Windows.
-- **Channels.** Stereo in, stereo out. The band split, every stage except pan
-  and width, and the drive are applied to both channels identically. Pan and
-  width are the two stages that deliberately treat the channels differently.
+- **Channels.** Stereo in, stereo out, plus a stereo sidechain input that is
+  listened to and drawn but never heard, and a note input for the MIDI trigger.
+  The band split, every stage except pan and width, and the drive are applied
+  to both channels identically. Pan and width are the two stages that
+  deliberately treat the channels differently.
 - **Latency.** None. The time stage reads backwards from the present rather
-  than delaying the output, and the filters are minimum-phase.
+  than delaying the output, the filters are minimum-phase, and the triggers
+  react to a hit as it happens rather than looking ahead for it.
 - **Tail.** The time stage's look-back plus the release of the filters behind
   it, reported to the host so a bounce does not cut a stutter short.
 - **CPU.** Three bands, two channels, one filter, one shaper, one crusher and

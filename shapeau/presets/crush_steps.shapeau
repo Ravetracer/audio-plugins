@@ -5,7 +5,7 @@ author = Shapeau
 description = A sixteenth-note bit and sample-rate crush drawn as sixteen steps, so the grit moves in rhythm instead of sitting still. The pattern is the same in all three bands, with a mixer at 75 % so the low end keeps some weight.
 
 # Global
-mix = 100
+mix = 1
 split_low = 180
 split_high = 2600
 band_low = On
@@ -23,13 +23,13 @@ drv_on = Off
 
 # Crush
 crs_on = On
-crs_amount = 80
+crs_amount = 0.8
 crs_bits = 4
 crs_down = 12
-crs_mix = 75
+crs_mix = 0.75
 crs_rate = 1/1
 crs_phase = 0
-crs_smooth = 5
+crs_smooth = 0.05
 
 # Time
 tim_on = Off

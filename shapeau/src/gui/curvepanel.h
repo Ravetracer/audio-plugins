@@ -26,6 +26,7 @@ struct CurvePalette {
    plugincore::Rgb text;
    plugincore::Rgb textDim;
    plugincore::Rgb textMute;
+   plugincore::Rgb sidechain; // the sidechain input behind the shape, and the End marker
 };
 
 class CurvePanel {
@@ -46,7 +47,7 @@ public:
    // dragged along the bar, so the window keeps forwarding motion even once the
    // pointer has left the widget. Capture is the mouse's job.
    bool dragging() const {
-      return mDragPoint >= 0 || mDragSegment >= 0 || mPaintStep || mTabDrag >= 0;
+      return mDragPoint >= 0 || mDragSegment >= 0 || mPaintStep || mTabDrag >= 0 || mDragEnd >= 0;
    }
 
    // The shape list and the list of effects to add are drawn over the graph. A
@@ -69,6 +70,11 @@ private:
    plugincore::Rect pickerRect(int index) const;
    void drawScope(cairo_t *cr, const CurvePalette &pal, const CurveAccess &access) const;
    void drawPicker(cairo_t *cr, const CurvePalette &pal) const;
+   void drawTrigger(cairo_t *cr, const CurvePalette &pal, const CurveAccess &access) const;
+   // Whether the effect on screen runs once per trigger, which is when its End
+   // marker means something and is drawn; and whether `x` is on that marker.
+   bool showsEnd(const CurveAccess &access) const;
+   bool endAt(double x, double y, const CurveAccess &access) const;
    plugincore::Rect bandTab(int slot) const;
    plugincore::Rect snapRect() const;
    plugincore::Rect stepRect() const;
@@ -111,6 +117,16 @@ private:
    bool mAddMenuOpen = false;
    int mAddHover = -1;
    int mPickerHover = -1;
+
+   // The End marker being dragged (the module whose End it is), and whether
+   // the pointer is over it.
+   int mDragEnd = -1;
+   bool mEndHover = false;
+
+   // The trigger lamp: the trigger count it last saw, and how many more paints
+   // it stays lit for. Paint state, so mutable.
+   mutable uint32_t mSeenTriggers = 0;
+   mutable int mLampPaints = 0;
 };
 
 } // namespace shapeau
