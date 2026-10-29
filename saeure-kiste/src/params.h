@@ -2,6 +2,7 @@
 
 #include <cstdint>
 
+#include "dsp/chain.h"
 #include "plugincore/params.h"
 
 namespace saeurekiste {
@@ -12,6 +13,18 @@ namespace saeurekiste {
 // directive is scoped to this namespace, so nothing escapes into the global
 // one.
 using namespace plugincore;
+
+// ------------------------------------------------------------------ the FX
+//
+// The effect chain's parameters are arithmetic rather than a hundred and
+// seventy-six names: a slot is eleven parameters (type, position, band, mix,
+// bypass and six letters A-F), the slots follow each other in one block, and
+// the two band crossovers come after the last of them. "FX" rather than
+// "chain" everywhere a user or a host can see it, because the sequencer's
+// pattern chain had the word first; the DSP in dsp/chain.* keeps it.
+constexpr int kNumFxSlots = kNumChainSlots;
+constexpr int kFxParamsPerSlot = 11;
+constexpr int kFxLetters = 6;
 
 // Parameter identifiers. These are persisted in preset files and plugin state,
 // so the numeric values must never change: append new parameters at the end
@@ -196,8 +209,103 @@ enum ParamId : uint32_t {
    kParamUnisonDetune,
    kParamUnisonSpread,
 
+   // The FX. Eleven parameters per slot, in the order the fields below are
+   // declared: type, position, band, mix, bypass, then the six letters A-F.
+   // The crossovers the band select splits at are two more, after the slots.
+   //
+   // The letters are generic ids whose names, ranges and defaults come from
+   // the slot's *type*. A host has to be shown one fixed range per parameter,
+   // so a letter is 0..1 to the host and in mValues, and fxLetterDesc() says
+   // what that position means under the slot's type -- Hz, dB, a model -- for
+   // the window, the text the host shows and the engine. The ids never move,
+   // so an automation lane keeps its identity when the type changes; only what
+   // it means moves, which is the same bargain Substrike's slots make.
+   //
+   // Nothing here is a new kind of state: the values ride in the existing
+   // (id, value) block, so a project saved before the FX existed loads with
+   // every slot Off and renders exactly as it did.
+   kParamFxFirst,
+   kParamFxXoverLow = kParamFxFirst + kNumFxSlots * kFxParamsPerSlot,
+   kParamFxXoverHigh,
+
    kNumParams
 };
+
+enum FxField : int {
+   kFxFieldType = 0,
+   kFxFieldPosition,
+   kFxFieldBand,
+   kFxFieldMix,
+   kFxFieldBypass,
+   kFxFieldA,
+   kFxFieldB,
+   kFxFieldC,
+   kFxFieldD,
+   kFxFieldE,
+   kFxFieldF,
+   kNumFxFields
+};
+
+// The id of `field` in `slot`.
+constexpr uint32_t fxParamId(int slot, int field) {
+   return static_cast<uint32_t>(kParamFxFirst) +
+          static_cast<uint32_t>(slot) * static_cast<uint32_t>(kFxParamsPerSlot) +
+          static_cast<uint32_t>(field);
+}
+
+// Which slot `id` belongs to, or -1 when it is not a slot parameter at all (a
+// crossover, or nothing to do with the FX).
+constexpr int fxSlotOfParam(uint32_t id) {
+   return id >= static_cast<uint32_t>(kParamFxFirst) &&
+                id < static_cast<uint32_t>(kParamFxXoverLow)
+             ? static_cast<int>((id - kParamFxFirst) / kFxParamsPerSlot)
+             : -1;
+}
+
+// Which of the eleven fields of its slot `id` is. Only meaningful when
+// fxSlotOfParam() is not -1.
+constexpr int fxFieldOfParam(uint32_t id) {
+   const int slot = fxSlotOfParam(id);
+   if (slot < 0)
+      return -1;
+   return static_cast<int>(id - fxParamId(slot, 0));
+}
+
+// Whether `id` is one of the six letters rather than the type, position, band,
+// mix or bypass.
+bool isFxLetterParam(uint32_t id);
+// Whether `id` belongs to the FX at all -- a slot parameter or one of the two
+// crossovers.
+bool isFxParam(uint32_t id);
+// Whether the slot's type uses this letter. A Filter has six, a Guard three;
+// the rest are present so their ids keep their identity, and do nothing.
+bool fxLetterInUse(uint32_t id, int type);
+// The slot's Type parameter, which is what says what its letters mean.
+// kNumParams when `id` is not a slot parameter at all.
+uint32_t fxTypeParamOf(uint32_t id);
+
+// The descriptor of a slot letter under a given type, in the units that type
+// gives it: Cutoff in Hz, Drive in %, Output in dB. `type` is a SlotType as an
+// int; an Off slot, or a letter the type does not use, gets a plain 0..1.
+// Built by value rather than kept in a table: there is no shared mutable state
+// for the audio thread and the window to race over.
+ParamDesc fxLetterDesc(uint32_t id, int type);
+
+// A letter's stored value is a position, 0..1, along whatever the type makes
+// of it. These two convert between that position and a raw value in the
+// type's descriptor -- the space paramToReal(), paramValueToText() and the
+// window's knobs work in. An enum letter's positions are its choices spread
+// evenly over 0..1, so the host still sees one continuous range.
+double fxLetterFromPosition(const ParamDesc &typed, double position);
+double fxLetterToPosition(const ParamDesc &typed, double raw);
+
+// Read by shared/tools/docgen.cpp. A letter's range is its slot type's, so the
+// parameter reference says so rather than printing the carrier range the
+// preset parser reads real units through -- deliberately enormous, because the
+// parser cannot know the slot's type. And slots 2 to 16 are slot 1 again under
+// other keys, so the reference prints the first and says the rest repeat it.
+bool docParamIsDynamic(uint32_t id);
+bool docParamIsHidden(uint32_t id);
 
 // The waveform switch, S1 on the main board. Two positions, no blend: the
 // hardware routes one or the other into the filter.
@@ -234,6 +342,10 @@ enum MufflerKind { kMufflerOff = 0, kMufflerSoft, kMufflerHard, kNumMufflerKinds
 // The drive stage's models live in dsp/drive.h, as DriveModel, because each of
 // them is an equation out of a named source rather than a name on a switch.
 // The parameter table's enum is that list.
+//
+// The chain's slot types and where a slot sits live in dsp/chain.h, for the
+// same reason: the list is the engine's, and the parameter table's enum names
+// it in that order. The table checks the two agree with a static_assert.
 
 // How the accent sweep responds to accents in quick succession. Normal is the
 // machine: charge left over from one accent makes the next one bigger. See

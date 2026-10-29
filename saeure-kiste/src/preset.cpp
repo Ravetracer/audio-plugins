@@ -6,6 +6,7 @@
 #include <cctype>
 #include <cstdlib>
 #include <filesystem>
+#include <strings.h>
 #include <fstream>
 #include <sstream>
 
@@ -73,8 +74,20 @@ void trimEnds(std::string &s) {
 // that many frames is dropped rather than half-loaded.
 constexpr const char *kTableNameKey = "user_table_name";
 constexpr const char *kTableKey = "user_table";
+// What kind of preset the file is; see PresetKind. A Scene writes no line, so
+// a Scene file is exactly what a preset was before kinds existed. The shared
+// parser ignores the key, so an older plugin reads any of them as a Scene --
+// which for a Patch or an FX chain is everything else at its default.
+constexpr const char *kKindKey = "preset_kind";
+const char *const kKindNames[kNumPresetKinds] = {"Scene", "Patch", "FX Chain", "Effect"};
 
 bool parseTableLine(const std::string &key, const std::string &value, PatternData &out) {
+   if (key == kKindKey) {
+      for (int k = 0; k < kNumPresetKinds; ++k)
+         if (strcasecmp(value.c_str(), kKindNames[k]) == 0)
+            out.kind = static_cast<PresetKind>(k);
+      return true;
+   }
    if (key == kTableNameKey) {
       out.tableName = value;
       return true;
@@ -151,6 +164,8 @@ bool parsePresetFile(const std::string &path, PresetData &out, PatternData *patt
 std::string formatPreset(const PresetData &preset, const PatternData *pattern) {
    std::string out = plugincore::formatPreset(presetContext(), preset);
    if (pattern) {
+      if (pattern->kind != PresetKind::Scene)
+         out += std::string(kKindKey) + " = " + kKindNames[static_cast<int>(pattern->kind)] + "\n";
       out += formatPattern(*pattern);
       if (pattern->tablePresent && !pattern->table.empty()) {
          std::string name = pattern->tableName;

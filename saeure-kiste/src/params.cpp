@@ -1,5 +1,6 @@
 #include "params.h"
 
+#include "dsp/chain.h"
 #include "plugincore/param_macros.h"
 
 #include <cmath>
@@ -40,6 +41,70 @@ const char *const kDelaySyncNames[] = {"Free", "Synced"};
 const char *const kDelayDivNames[] = {"1/32", "1/16T", "1/16", "1/8T", "1/8",
                                       "1/8.", "1/4T", "1/4",  "1/2"};
 const char *const kDelayModeNames[] = {"Mono", "Stereo", "Ping-Pong"};
+
+// The chain's own lists. Type's order is dsp/chain.h's SlotType, and a preset
+// stores the *name*, so the two may grow at the end and may not be reordered.
+const char *const kSlotTypeNames[] = {"Off",       "Saturator", "Clipper", "Wavefolder",
+                                      "Bitcrush", "Filter",    "EQ",      "Compressor",
+                                      "Transient", "Gate",      "Reverb",  "Delay",
+                                      "Warp",      "Smear",     "Ring Mod", "Stereo",
+                                      "Utility",   "Limiter",   "Comb",    "Guard"};
+static_assert(sizeof(kSlotTypeNames) / sizeof(kSlotTypeNames[0]) == kNumSlotTypes,
+              "the Type list and SlotType have to agree");
+const char *const kFxPositionNames[] = {"Pre", "Post", "Master"};
+static_assert(sizeof(kFxPositionNames) / sizeof(kFxPositionNames[0]) ==
+                 kNumChainPositions,
+              "the Position list and ChainPosition have to agree");
+const char *const kFxBandNames[] = {"Full", "Low", "Mid", "High", "Low+Mid", "Mid+High"};
+static_assert(sizeof(kFxBandNames) / sizeof(kFxBandNames[0]) == kNumSlotBands,
+              "the Band list and SlotBand have to agree");
+
+// The FX's eleven entries per slot. Written as a macro because a slot is one
+// strip repeated sixteen times: what differs between them is the key, the
+// label and the id.
+//
+// A letter's carrier range is deliberately enormous. A preset stores real
+// units, and the shared parser converts through *this* descriptor, which knows
+// nothing about the slot's type; with a wide linear range the real value
+// arrives intact and the plugin converts it again with the typed one. Neither
+// the host nor the window ever sees this range: to them a letter is a
+// position, 0..1, and fxLetterDesc() says what it means.
+#define FX_LETTER(slot, num, field, letter, tip)                                                    \
+   {                                                                                                \
+      fxParamId(slot, field), "fx" num "_" letter, "Slot " num " " letter, "FX", -1000000000.0,     \
+         1000000000.0, 0.0, ParamKind::Linear, 0, 0, "", nullptr, 0, tip                            \
+   }
+
+#define FX_SLOT(slot, num)                                                                          \
+   ENUM(fxParamId(slot, kFxFieldType), "fx" num "_type", "Slot " num " Type", "FX", 0.0,           \
+        kSlotTypeNames,                                                                             \
+        "Which effect this slot runs. Picking one rewrites what its letters A to F mean and "      \
+        "puts them at that effect's defaults."),                                                    \
+      ENUM(fxParamId(slot, kFxFieldPosition), "fx" num "_pos", "Slot " num " Position", "FX", 0.0, \
+           kFxPositionNames,                                                                        \
+           "Where in the instrument the slot sits. Pre is between the oscillator and the "         \
+           "ladder, Post is after the amplifier's drive stage, and Master is after the delay, "    \
+           "at the very end. Slots on the same bus run in the order the FX page shows, top to "   \
+           "bottom."),                                                                              \
+      ENUM(fxParamId(slot, kFxFieldBand), "fx" num "_band", "Slot " num " Band", "FX", 0.0,        \
+           kFxBandNames,                                                                            \
+           "Which part of the spectrum the slot processes. The rest passes by it untouched, and "  \
+           "the split is flat because the three bands sum back to what went in."),                  \
+      PCT(fxParamId(slot, kFxFieldMix), "fx" num "_mix", "Slot " num " Mix", "FX", 1.0,            \
+          "How much of the slot's output is heard against the signal that went in. A delay "       \
+          "slot adds its echoes to the input, so this is the level of the echoes rather than a "   \
+          "dry/wet."),                                                                              \
+      ENUM(fxParamId(slot, kFxFieldBypass), "fx" num "_bypass", "Slot " num " Bypass", "FX", 0.0,  \
+           kOnOffNames,                                                                             \
+           "Takes the slot out without losing its settings, so it can be A/B'd. It fades rather "  \
+           "than cuts."),                                                                           \
+      FX_LETTER(slot, num, kFxFieldA, "A", "The first of the slot's six letters; the type gives " \
+                "it a name, a range and a default."),                                               \
+      FX_LETTER(slot, num, kFxFieldB, "B", "The second of the slot's six letters."),               \
+      FX_LETTER(slot, num, kFxFieldC, "C", "The third of the slot's six letters."),                \
+      FX_LETTER(slot, num, kFxFieldD, "D", "The fourth of the slot's six letters."),               \
+      FX_LETTER(slot, num, kFxFieldE, "E", "The fifth of the slot's six letters."),                \
+      FX_LETTER(slot, num, kFxFieldF, "F", "The sixth of the slot's six letters.")
 
 // Where the numbers come from.
 //
@@ -575,6 +640,42 @@ const ParamDesc kParams[kNumParams] = {
        "the widest. Above zero each side gets its own filter and drive, so the two "
        "channels decorrelate all the way through the instrument. At zero, and with "
        "one voice, the instrument is mono, as the machine is."),
+
+   // ------------------------------------------------------------------ the FX
+   //
+   // Eleven per slot, sixteen slots, then the two crossovers. The letters'
+   // own names, ranges and defaults are not here: they depend on the slot's
+   // type, and fxLetterDesc() supplies them at runtime.
+   FX_SLOT(0, "1"),
+   FX_SLOT(1, "2"),
+   FX_SLOT(2, "3"),
+   FX_SLOT(3, "4"),
+   FX_SLOT(4, "5"),
+   FX_SLOT(5, "6"),
+   FX_SLOT(6, "7"),
+   FX_SLOT(7, "8"),
+   FX_SLOT(8, "9"),
+   FX_SLOT(9, "10"),
+   FX_SLOT(10, "11"),
+   FX_SLOT(11, "12"),
+   FX_SLOT(12, "13"),
+   FX_SLOT(13, "14"),
+   FX_SLOT(14, "15"),
+   FX_SLOT(15, "16"),
+
+   // Where a band-select slot splits the spectrum. Two controls rather than one
+   // per slot: there is one chain, and two crossovers on the same instrument
+   // with no way to see which slot owns which would be a trap.
+   LOG(kParamFxXoverLow, "fx_xover_low", "Crossover Low", "FX", 0.5, 40.0, 1000.0, "Hz",
+       "Where the band select splits the low band from the middle. A slot set to "
+       "Low, Mid, High, Low+Mid or Mid+High processes that part of the spectrum "
+       "and passes the rest by it untouched; the three-way split sums back flat "
+       "because each crossover is Linkwitz-Riley and the low band runs through the "
+       "upper one's allpass."),
+   LOG(kParamFxXoverHigh, "fx_xover_high", "Crossover High", "FX", 0.51, 500.0, 12000.0, "Hz",
+       "Where the band select splits the middle band from the high one. It is "
+       "kept at least half an octave above the low crossover, so the middle band "
+       "cannot be squeezed to nothing."),
 };
 
 #undef LIN
@@ -583,12 +684,455 @@ const ParamDesc kParams[kNumParams] = {
 #undef LOG
 #undef STEP
 #undef ENUM
+#undef FX_SLOT
+#undef FX_LETTER
 
 // The table is indexed by id everywhere -- paramByIdIn() returns the entry only
 // when table[id].id == id -- so a row out of order shows up as a parameter the
 // host cannot read rather than as a wrong one.
 
+// ---------------------------------------------------------- the FX letters
+//
+// What A-F mean, per slot type. This is the table the host's text, the
+// window's labels and the preset code all convert through -- one source, so
+// they cannot describe different controls. The ranges and defaults are the
+// ones the effects were written and measured against.
+//
+// It lives here rather than in chain.h because it is a description of the
+// controls rather than part of the DSP: an effect does not know what its
+// letters are called.
+
+// The ten models of dsp/drive.h, in DriveModel's order.
+const char *const kSatModelNames[] = {"Soft Clip", "Overdrive", "Tube",      "Valve Stack",
+                                      "Fuzz",      "Rectifier", "Crush",     "Germanium",
+                                      "Crunch",    "Lead"};
+const char *const kFilterModeNames[] = {"LP 12", "LP 24", "HP 12", "HP 24",
+                                        "Band Pass", "Notch", "Peak"};
+const char *const kGateModeNames[] = {"Gate", "Hit"};
+const char *const kWarpModeNames[] = {"Forward", "Reverse", "Taps"};
+const char *const kSmearStageNames[] = {"4", "8", "12", "16"};
+const char *const kRingModeNames[] = {"Ring", "Shift Up", "Shift Down"};
+const char *const kPolarityNames[] = {"Normal", "Invert"};
+const char *const kChannelNames[] = {"Stereo", "Mono", "Swap", "Left", "Right"};
+const char *const kSyncNames[] = {"Free", "1/64", "1/32T", "1/32", "1/16T", "1/16",
+                                  "1/16D", "1/8T", "1/8",  "1/8D", "1/4T", "1/4",
+                                  "1/4D", "1/2",  "1/2D", "1/1"};
+
+// `lo`/`hi`/`def` are in the units the effect receives. A Percent shape is
+// written in whole percent even though the parameter it becomes is 0..1, which
+// is what lets one build a 0-200 % Width and a 0-100 % Drive with the same
+// row.
+struct FxShape {
+   const char *name;
+   ParamKind kind;
+   double lo, hi, def;
+   const char *unit;
+   const char *const *choices;
+   uint32_t choiceCount;
+   const char *tip;
+};
+
+struct ShapeList {
+   const FxShape *shapes;
+   int count;
+};
+
+const FxShape kSaturatorShapes[] = {
+   {"Model", ParamKind::Enum, 0, 9, 0, "", kSatModelNames, 10,
+    "Which drive model the stage runs. Each is an equation or a circuit out of a named "
+    "source, and they are matched in loudness so a comparison between two of them is a "
+    "comparison of character."},
+   {"Drive", ParamKind::Percent, 0, 100, 40, "%", nullptr, 0,
+    "How hard the model is pushed. Every model has its own gain staging, so this is not a "
+    "shared amount of distortion: it is where that model sits on its own curve."},
+   {"Bias", ParamKind::Percent, -100, 100, 0, "%", nullptr, 0,
+    "The model's operating point, away from the one its source specifies. Even harmonics come "
+    "from here; centred is the circuit as drawn."},
+   {"Tone", ParamKind::Log, 200, 20000, 20000, "Hz", nullptr, 0,
+    "A lowpass after the stage. Wide open is the model alone; closing it takes the top off a "
+    "fuzz without undoing its distortion."},
+   {"Output", ParamKind::Linear, -24, 12, 0, "dB", nullptr, 0,
+    "Level after the stage, so a slot can be made louder or quieter without moving Drive."},
+};
+
+const FxShape kClipperShapes[] = {
+   {"Drive", ParamKind::Linear, 0, 36, 6, "dB", nullptr, 0,
+    "Gain into the clipper. Past the ceiling it clips; below it, nothing."},
+   {"Knee", ParamKind::Percent, 0, 100, 30, "%", nullptr, 0,
+    "How softly the clipper rounds into its ceiling. 0 % is a hard clip, which is a square "
+    "wave at any real drive; 100 % is a curve that bends the whole way."},
+   {"Ceiling", ParamKind::Linear, -24, 0, 0, "dB", nullptr, 0,
+    "Where it stops. Below full scale leaves headroom for what follows."},
+};
+
+const FxShape kWavefolderShapes[] = {
+   {"Drive", ParamKind::Linear, 0, 36, 6, "dB", nullptr, 0,
+    "Gain into the folder. Folding is not clipping: past the first turn the wave is inverted "
+    "rather than flattened, so more drive adds harmonics instead of removing them."},
+   {"Bias", ParamKind::Percent, -100, 100, 0, "%", nullptr, 0,
+    "Offsets the wave before it is folded, so the two half-cycles fold at different points "
+    "and the result gains even harmonics."},
+   {"Shape", ParamKind::Percent, 0, 100, 0, "%", nullptr, 0,
+    "From a sine folder to a triangle folder. The triangle folds with corners; the sine "
+    "rounds them."},
+   {"Output", ParamKind::Linear, -24, 12, 0, "dB", nullptr, 0, "Level after the folder."},
+};
+
+const FxShape kBitcrushShapes[] = {
+   {"Bits", ParamKind::Linear, 1, 16, 8, "bit", nullptr, 0,
+    "How many bits the signal is rounded to. Fractional settings are allowed: the step is "
+    "continuous, not a switch."},
+   {"Rate", ParamKind::Log, 100, 48000, 48000, "Hz", nullptr, 0,
+    "The sample-and-hold rate. At the top of its range it is off; below, the signal is held "
+    "between updates and the aliasing that makes is the effect."},
+   {"Output", ParamKind::Linear, -24, 12, 0, "dB", nullptr, 0, "Level after the crush."},
+};
+
+const FxShape kFilterShapes[] = {
+   {"Mode", ParamKind::Enum, 0, 6, 1, "", kFilterModeNames, 7,
+    "The response. The 12 and 24 dB versions are one or two cascaded state-variable stages; "
+    "Peak is a bell whose gain is the last letter."},
+   {"Cutoff", ParamKind::Log, 20, 20000, 2000, "Hz", nullptr, 0,
+    "The corner or centre frequency. It moves at audio rate, so a swept cutoff stays clean."},
+   {"Reso", ParamKind::Percent, 0, 100, 10, "%", nullptr, 0,
+    "Feedback around the filter, from flat to a narrow resonant peak."},
+   {"Env", ParamKind::Linear, -8, 8, 0, "oct", nullptr, 0,
+    "How far the envelope moves the cutoff when a note starts, either way. Zero leaves the "
+    "filter still."},
+   {"Env Decay", ParamKind::Log, 5, 5000, 100, "ms", nullptr, 0,
+    "How long that envelope takes to fall to -60 dB. Short values give a click of brightness; "
+    "long ones a sweep."},
+   {"Gain", ParamKind::Linear, -24, 24, 0, "dB", nullptr, 0,
+    "Level after the filter. In Peak mode it is the gain of the bell instead -- the same knob "
+    "doing the same job, which is what makes a swept peak a sweep rather than a phase shift."},
+};
+
+const FxShape kEqShapes[] = {
+   {"Low", ParamKind::Linear, -18, 18, 0, "dB", nullptr, 0, "Low shelf at 100 Hz."},
+   {"Mid", ParamKind::Linear, -18, 18, 0, "dB", nullptr, 0, "The bell's gain."},
+   {"Mid Freq", ParamKind::Log, 30, 15000, 1000, "Hz", nullptr, 0, "Where the bell sits."},
+   {"Mid Q", ParamKind::Log, 0.2, 10, 1, "", nullptr, 0,
+    "How wide the bell is: low Q takes in most of the spectrum, high Q a single harmonic."},
+   {"High", ParamKind::Linear, -18, 18, 0, "dB", nullptr, 0, "High shelf at 6 kHz."},
+   {"Tilt", ParamKind::Linear, -12, 12, 0, "dB", nullptr, 0,
+    "Leans the whole spectrum around 1 kHz: the high side up by half of it and the low side "
+    "down by half."},
+};
+
+const FxShape kCombShapes[] = {
+   {"Start", ParamKind::Log, 20, 10000, 100, "Hz", nullptr, 0, "Where the first band sits."},
+   {"Spacing", ParamKind::Log, 5, 5000, 100, "Hz", nullptr, 0,
+    "From one band to the next. On a note's pitch the bands land on its harmonics."},
+   {"Bands", ParamKind::Linear, 1, 32, 8, "", nullptr, 0, "How far up the comb reaches."},
+   {"Gain", ParamKind::Linear, -30, 18, -12, "dB", nullptr, 0,
+    "Below zero the bands are notches, above it peaks."},
+   {"Width", ParamKind::Percent, 1, 100, 10, "%", nullptr, 0,
+    "Every band's share of the spacing, so they stay apart all the way up."},
+   {"Taper", ParamKind::Percent, -100, 100, 0, "%", nullptr, 0,
+    "Fades the gain out towards the last band, or in from the first."},
+};
+
+const FxShape kCompressorShapes[] = {
+   {"Threshold", ParamKind::Linear, -60, 0, -18, "dB", nullptr, 0,
+    "Where compression starts."},
+   {"Ratio", ParamKind::Log, 1, 20, 4, ":1", nullptr, 0,
+    "How much the signal above the threshold is turned down."},
+   {"Attack", ParamKind::Log, 0.05, 200, 3, "ms", nullptr, 0,
+    "How quickly it clamps down. Slow enough and the first transient gets through."},
+   {"Release", ParamKind::Log, 5, 2000, 80, "ms", nullptr, 0,
+    "How quickly it lets go. A release longer than the note's own decay pumps."},
+   {"Knee", ParamKind::Linear, 0, 24, 6, "dB", nullptr, 0,
+    "How softly the ratio is approached around the threshold."},
+   {"Makeup", ParamKind::Linear, 0, 24, 0, "dB", nullptr, 0,
+    "Level added after compression, so the slot does not simply make things quieter."},
+};
+
+const FxShape kTransientShapes[] = {
+   {"Attack", ParamKind::Percent, -100, 100, 0, "%", nullptr, 0,
+    "Lifts or cuts the first milliseconds: an onset is worth up to 12 dB."},
+   {"Sustain", ParamKind::Percent, -100, 100, 0, "%", nullptr, 0,
+    "Lifts or cuts the tail, up to 12 dB. On a 303 line it is a way to even out accents "
+    "without touching the accent itself."},
+   {"Speed", ParamKind::Log, 1, 100, 20, "ms", nullptr, 0,
+    "The time over which an onset and a tail are told apart."},
+   {"Output", ParamKind::Linear, -24, 12, 0, "dB", nullptr, 0, "Level after the stage."},
+};
+
+const FxShape kGateShapes[] = {
+   {"Mode", ParamKind::Enum, 0, 1, 0, "", kGateModeNames, 2,
+    "Gate follows the signal's level; Hit ignores it and runs from every note, which shortens "
+    "a tail that would not stop."},
+   {"Threshold", ParamKind::Linear, -80, 0, -40, "dB", nullptr, 0,
+    "The level that opens it in Gate mode."},
+   {"Attack", ParamKind::Linear, 0, 50, 0.5, "ms", nullptr, 0, "How fast it opens."},
+   {"Hold", ParamKind::Linear, 0, 2000, 50, "ms", nullptr, 0,
+    "How long it stays open after the level falls, so it does not chatter on a low note."},
+   {"Release", ParamKind::Log, 1, 5000, 100, "ms", nullptr, 0, "How fast it closes."},
+   {"Range", ParamKind::Linear, -80, 0, -80, "dB", nullptr, 0,
+    "How far down it closes. The bottom of the range is silence."},
+};
+
+const FxShape kReverbShapes[] = {
+   {"Size", ParamKind::Percent, 0, 100, 40, "%", nullptr, 0,
+    "The room's dimensions, which is what sets the spacing of the early reflections."},
+   {"Decay", ParamKind::Log, 50, 10000, 800, "ms", nullptr, 0,
+    "How long the tail takes to fall to -60 dB."},
+   {"Damping", ParamKind::Log, 500, 20000, 6000, "Hz", nullptr, 0,
+    "A lowpass in the loop, so the top dies away before the bottom does."},
+   {"Pre-Delay", ParamKind::Linear, 0, 250, 0, "ms", nullptr, 0,
+    "The gap before the reverb starts, which is what keeps a note's attack dry."},
+   {"Low Cut", ParamKind::Log, 20, 1000, 20, "Hz", nullptr, 0,
+    "A highpass before the reverb, so the bass does not muddy it."},
+   {"Width", ParamKind::Percent, 0, 100, 100, "%", nullptr, 0, "The stereo spread of the tail."},
+};
+
+const FxShape kDelayShapes[] = {
+   {"Time", ParamKind::Log, 1, 2000, 250, "ms", nullptr, 0, "How far apart the echoes are."},
+   {"Sync", ParamKind::Enum, 0, 15, 0, "", kSyncNames, 16,
+    "A note value instead of a time, taken from the host's tempo. Free leaves Time in charge."},
+   {"Feedback", ParamKind::Percent, 0, 95, 35, "%", nullptr, 0,
+    "How much of each echo goes back in. The top of the range stops short of running away."},
+   {"Color", ParamKind::Percent, -100, 100, -30, "%", nullptr, 0,
+    "A filter in the loop: below zero the repeats lose their top, above it their bottom."},
+   {"Drive", ParamKind::Percent, 0, 100, 0, "%", nullptr, 0,
+    "A soft clip in the loop, so long tails saturate instead of stacking up clean."},
+   {"Ping-Pong", ParamKind::Percent, 0, 100, 0, "%", nullptr, 0,
+    "Crosses the repeats between the channels. At 100 % the first echo is on one side and the "
+    "next on the other."},
+};
+
+const FxShape kWarpShapes[] = {
+   {"Time", ParamKind::Log, 1, 2000, 300, "ms", nullptr, 0, "The length of the delay window."},
+   {"Sync", ParamKind::Enum, 0, 15, 0, "", kSyncNames, 16, "A note value instead of a time."},
+   {"Feedback", ParamKind::Percent, 0, 95, 40, "%", nullptr, 0, "How much goes back in."},
+   {"Pitch", ParamKind::Linear, -12, 12, -5, "st", nullptr, 0,
+    "Each pass through the loop is shifted by this, so the echoes climb or fall."},
+   {"Mode", ParamKind::Enum, 0, 2, 0, "", kWarpModeNames, 3,
+    "Forward pitches the repeats; Reverse plays every window backwards; Taps reads four taps "
+    "across the window, alternating sides."},
+   {"Diffusion", ParamKind::Percent, 0, 100, 30, "%", nullptr, 0,
+    "Smears each repeat through four allpasses, so it blurs rather than repeats."},
+};
+
+const FxShape kSmearShapes[] = {
+   {"Time", ParamKind::Log, 0.5, 80, 12, "ms", nullptr, 0,
+    "How far the stages spread a note out. More stages smear more finely rather than longer."},
+   {"Diffusion", ParamKind::Percent, 0, 100, 70, "%", nullptr, 0,
+    "How much each allpass recirculates. Past about 70 % it starts to ring."},
+   {"Stages", ParamKind::Enum, 0, 3, 1, "", kSmearStageNames, 4,
+    "How many allpasses in the chain."},
+   {"Width", ParamKind::Percent, 0, 100, 0, "%", nullptr, 0,
+    "Moves the right channel's stage lengths away from the left's, so the smear decorrelates."},
+};
+
+const FxShape kRingShapes[] = {
+   {"Mode", ParamKind::Enum, 0, 2, 0, "", kRingModeNames, 3,
+    "Ring multiplies by a cosine; the shifts move every partial by the frequency, through a "
+    "Hilbert pair."},
+   {"Frequency", ParamKind::Log, 1, 5000, 100, "Hz", nullptr, 0,
+    "The ring frequency or the shift."},
+   {"Env", ParamKind::Linear, -8, 8, 0, "oct", nullptr, 0,
+    "How far the frequency moves when a note starts."},
+   {"Env Decay", ParamKind::Log, 5, 5000, 100, "ms", nullptr, 0,
+    "How long that movement takes to fall to -60 dB."},
+};
+
+const FxShape kStereoShapes[] = {
+   {"Width", ParamKind::Percent, 0, 200, 100, "%", nullptr, 0,
+    "0 is mono, 100 leaves the image as it is, 200 doubles the sides."},
+   {"Haas", ParamKind::Linear, -30, 30, 0, "ms", nullptr, 0,
+    "Delays one side: positive the right, negative the left. A few milliseconds widens "
+    "without sounding like an echo."},
+};
+
+const FxShape kUtilityShapes[] = {
+   {"Gain", ParamKind::Linear, -48, 24, 0, "dB", nullptr, 0,
+    "Level, with the bottom of its range as silence."},
+   {"Polarity", ParamKind::Enum, 0, 1, 0, "", kPolarityNames, 2, "Inverts the signal."},
+   {"Channels", ParamKind::Enum, 0, 4, 0, "", kChannelNames, 5,
+    "Stereo passes it through, Mono sums it, Swap exchanges the sides, and Left or Right "
+    "puts one side on both."},
+};
+
+const FxShape kLimiterShapes[] = {
+   {"Gain", ParamKind::Linear, 0, 24, 0, "dB", nullptr, 0, "Gain into the limiter."},
+   {"Ceiling", ParamKind::Linear, -24, 0, -0.3, "dB", nullptr, 0,
+    "Where the output stops. No lookahead, so it adds no latency."},
+   {"Release", ParamKind::Log, 5, 1000, 80, "ms", nullptr, 0,
+    "How fast the gain comes back after a peak."},
+};
+
+const FxShape kGuardShapes[] = {
+   {"Window", ParamKind::Linear, 0, 500, 0, "ms", nullptr, 0,
+    "How long after each note the slot holds its output down. At zero there is no window."},
+   {"Fade", ParamKind::Linear, 0, 500, 0, "ms", nullptr, 0,
+    "How long it takes to open afterwards, as a raised cosine so it does not click."},
+   {"Depth", ParamKind::Percent, 0, 100, 100, "%", nullptr, 0,
+    "How far down the window holds it. 100 % is silence, which is what keeps a saturator "
+    "from flattening the first millisecond of the attack."},
+};
+
+ShapeList shapesFor(int type) {
+   switch (static_cast<SlotType>(type)) {
+   case SlotType::Saturator: return {kSaturatorShapes, 5};
+   case SlotType::Clipper: return {kClipperShapes, 3};
+   case SlotType::Wavefolder: return {kWavefolderShapes, 4};
+   case SlotType::Bitcrush: return {kBitcrushShapes, 3};
+   case SlotType::Filter: return {kFilterShapes, 6};
+   case SlotType::Eq: return {kEqShapes, 6};
+   case SlotType::Comb: return {kCombShapes, 6};
+   case SlotType::Compressor: return {kCompressorShapes, 6};
+   case SlotType::Transient: return {kTransientShapes, 4};
+   case SlotType::Gate: return {kGateShapes, 6};
+   case SlotType::Reverb: return {kReverbShapes, 6};
+   case SlotType::Delay: return {kDelayShapes, 6};
+   case SlotType::Warp: return {kWarpShapes, 6};
+   case SlotType::Smear: return {kSmearShapes, 4};
+   case SlotType::Ring: return {kRingShapes, 4};
+   case SlotType::Stereo: return {kStereoShapes, 2};
+   case SlotType::Utility: return {kUtilityShapes, 3};
+   case SlotType::Limiter: return {kLimiterShapes, 3};
+   case SlotType::Guard: return {kGuardShapes, 3};
+   default: return {nullptr, 0};
+   }
+}
+
+// "Slot 3 Env Decay" needs a stable string to point ParamDesc.name at, and
+// there is no shared mutable table to race over because this is built once.
+struct FxNameTable {
+   char text[kNumFxSlots][kNumSlotTypes][kFxLetters][48];
+   FxNameTable() {
+      for (int slot = 0; slot < kNumFxSlots; ++slot)
+         for (int type = 0; type < kNumSlotTypes; ++type) {
+            const ShapeList list = shapesFor(type);
+            for (int letter = 0; letter < kFxLetters; ++letter) {
+               if (letter < list.count)
+                  std::snprintf(text[slot][type][letter], sizeof(text[0][0][0]), "Slot %d %s",
+                                slot + 1, list.shapes[letter].name);
+               else
+                  std::snprintf(text[slot][type][letter], sizeof(text[0][0][0]), "Slot %d %c",
+                                slot + 1, static_cast<char>('A' + letter));
+            }
+         }
+   }
+};
+
+const FxNameTable &fxNames() {
+   static const FxNameTable table;
+   return table;
+}
+
 } // namespace
+
+bool isFxLetterParam(uint32_t id) {
+   return fxFieldOfParam(id) >= kFxFieldA;
+}
+
+bool docParamIsDynamic(uint32_t id) { return isFxLetterParam(id); }
+
+bool docParamIsHidden(uint32_t id) { return fxSlotOfParam(id) > 0; }
+
+bool isFxParam(uint32_t id) {
+   return fxSlotOfParam(id) >= 0 || id == kParamFxXoverLow || id == kParamFxXoverHigh;
+}
+
+bool fxLetterInUse(uint32_t id, int type) {
+   const int letter = fxFieldOfParam(id) - kFxFieldA;
+   if (letter < 0 || type <= 0 || type >= kNumSlotTypes)
+      return false;
+   return letter < shapesFor(type).count;
+}
+
+uint32_t fxTypeParamOf(uint32_t id) {
+   const int slot = fxSlotOfParam(id);
+   if (slot < 0)
+      return kNumParams;
+   return fxParamId(slot, kFxFieldType);
+}
+
+ParamDesc fxLetterDesc(uint32_t id, int type) {
+   const ParamDesc &base = kParams[id];
+   const int slot = fxSlotOfParam(id);
+   const int letter = fxFieldOfParam(id) - kFxFieldA;
+   if (slot < 0 || letter < 0)
+      return base;
+   if (type < 0 || type >= kNumSlotTypes)
+      type = 0;
+   const ShapeList list = shapesFor(type);
+
+   ParamDesc d = base;
+   d.name = fxNames().text[slot][type][letter];
+   d.tip = "The slot's type gives this letter its name, its range and its default.";
+   d.unit = "";
+   d.enumNames = nullptr;
+   d.enumCount = 0;
+   d.dispMin = 0;
+   d.dispMax = 0;
+
+   if (letter >= list.count) {
+      // An empty slot, or a type that uses fewer letters than this one: the
+      // letter stays present so its id keeps its meaning, and does nothing.
+      d.kind = ParamKind::Linear;
+      d.min = 0.0;
+      d.max = 1.0;
+      d.def = 0.0;
+      return d;
+   }
+
+   const FxShape &s = list.shapes[letter];
+   d.tip = s.tip;
+   switch (s.kind) {
+   case ParamKind::Percent:
+      // Written in whole percent, stored and displayed as 0..1 like every other
+      // percent on this panel; 0-200 % Width is why the max is not always one.
+      d.kind = ParamKind::Percent;
+      d.min = s.lo / 100.0;
+      d.max = s.hi / 100.0;
+      d.def = s.def / 100.0;
+      d.unit = "%";
+      break;
+   case ParamKind::Log:
+      d.kind = ParamKind::Log;
+      d.min = 0.0;
+      d.max = 1.0;
+      d.dispMin = s.lo;
+      d.dispMax = s.hi;
+      d.def = std::log(s.def / s.lo) / std::log(s.hi / s.lo);
+      d.unit = s.unit;
+      break;
+   case ParamKind::Enum:
+      d.kind = ParamKind::Enum;
+      d.min = 0.0;
+      d.max = static_cast<double>(s.choiceCount - 1);
+      d.def = s.def;
+      d.enumNames = s.choices;
+      d.enumCount = s.choiceCount;
+      break;
+   case ParamKind::Linear:
+   default:
+      d.kind = ParamKind::Linear;
+      d.min = s.lo;
+      d.max = s.hi;
+      d.def = s.def;
+      d.unit = s.unit;
+      break;
+   }
+   return d;
+}
+
+double fxLetterFromPosition(const ParamDesc &typed, double position) {
+   const double u = position < 0.0 ? 0.0 : (position > 1.0 ? 1.0 : position);
+   const double raw = typed.min + u * (typed.max - typed.min);
+   return typed.kind == ParamKind::Enum ? std::floor(raw + 0.5) : raw;
+}
+
+double fxLetterToPosition(const ParamDesc &typed, double raw) {
+   const double span = typed.max - typed.min;
+   if (span <= 0.0)
+      return 0.0;
+   const double u = (raw - typed.min) / span;
+   return u < 0.0 ? 0.0 : (u > 1.0 ? 1.0 : u);
+}
 
 // How many beats each delay Division is. A quarter note is one beat, a triplet
 // is two thirds of the straight value it is named after, and a dotted one is

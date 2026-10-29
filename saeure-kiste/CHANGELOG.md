@@ -3,6 +3,42 @@
 Versions follow `X.Y.Z`: major / new features / bug fixes. Dates are the day
 the version was committed.
 
+## 0.17.0 -- 2026-10-29
+
+- **FX**: an effect chain of up to sixteen inserts, on a page of its own behind
+  the new **FX** button on the preset bar. ADD EFFECT appends a strip, the cross
+  removes it, the arrows move it one place with all of its settings, and past
+  five strips the list scrolls. The two band crossovers sit under the strips.
+- **Nineteen effect types**: Saturator (the drive stage's ten models with a tone
+  control), Clipper, Wavefolder, Bitcrush, Filter, EQ, Compressor, Transient,
+  Gate, Reverb, Delay, Warp, Smear, Ring Mod, Stereo, Utility, Limiter, Comb and
+  Guard.
+- **Three places to put one**: Pre (between the oscillator and the ladder),
+  Post (after the amplifier's drive stage) and Master (after the built-in
+  delay). Each slot can process the whole signal or one band of it, split at
+  two crossovers; the bands sum back flat.
+- **Six letters per slot** whose name, range and unit come from the slot's
+  type. The host sees the type's names and a fixed 0..1 range, so automation
+  lanes survive a type change.
+- **Four kinds of preset**, each with its own field, arrows, browser and SAVE:
+  **Scene** (everything -- today's presets, and every factory preset), **Patch**
+  (the sound and the pattern bank without the effects), **FX chain** (the
+  effects alone) and **Effect** (one strip). SCENE and PATCH are on the main
+  bar, FX CHAIN on the FX page's, and every strip has a PRESET field. Any Scene
+  can be loaded as a Patch. Patches, FX chains and Effects are saved to shelves
+  of their own (Patches, FX Chains, and one per effect type).
+- Effects started by a note -- the Filter's envelope, a Gate in Hit mode, a
+  Guard's window, Ring Mod's oscillator -- are not restarted by a slide.
+- The tail the host is given includes the FX, and the plugin lets the host
+  sleep once an FX tail has rung out.
+- RESET empties the FX along with putting the machine back to stock.
+- Folder names in the preset browser show spaces where the file system has
+  underscores.
+- 178 new parameters (252 in all). Every factory preset and every project saved
+  with an earlier version renders exactly as before.
+- **Fixed:** the built-in delay's Sync ran at 120 bpm in MIDI mode, whatever
+  the host's tempo.
+
 ## 0.16.0 -- 2026-10-25
 
 - **Five new waveforms**: Sine, Triangle, Pulse, Wavetable and Noise, after

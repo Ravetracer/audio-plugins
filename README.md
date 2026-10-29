@@ -13,7 +13,7 @@ Vibe coded with Claude.
 
 | Plugin | Version | Platforms | Formats | What it is |
 |--------|---------|-----------|---------|------------|
-| **[SäureKiste](saeure-kiste/)** | 0.16.0 | Linux, Windows | CLAP, VST3 | a monophonic acid bass synthesiser modelled on the Roland TB-303's main board, from the February 1982 service notes, with Robin Whittle's Devil Fish modification |
+| **[SäureKiste](saeure-kiste/)** | 0.17.0 | Linux, Windows | CLAP, VST3 | a monophonic acid bass synthesiser modelled on the Roland TB-303's main board, from the February 1982 service notes, with Robin Whittle's Devil Fish modification |
 | **[RumpelKiste](rumpel-kiste/)** | 0.2.1 | Linux, Windows | CLAP, VST3 | a rhythm composer modelled on the Roland TR-909's voicing board, from the June 1984 service notes, with a 64-pattern step sequencer and a drive bus |
 | **[Aurum](aurum/)** | 0.3.1 | Linux, Windows | CLAP, VST3 | an algorithmic reverb with three engines (feedback delay network, allpass ring, plate), a per-frequency decay contour and a tone EQ; built on its own DSP and window rather than `shared/` |
 | **[Substrike](substrike/)** | 1.0.0 | Linux, Windows | CLAP, VST3 | a layered kick drum designer for every style, from ambient to hardcore: eight synthesised layers (body, click, noise, resonator, and bus lanes for rumble) with per-lane outputs, effect chains with reverb, delays and drive, a transient guard, a modulation matrix with LFOs, envelopes and macros, 117 factory presets with a browser, breakpoint curves and an editor with hit export by drag and drop; built on its own code rather than `shared/` |
@@ -40,6 +40,22 @@ The plugin window needs X11 and Cairo. On Debian or Ubuntu:
 sudo apt install build-essential cmake ninja-build libx11-dev libcairo2-dev
 ```
 
+### Or in a container
+
+`devbox.sh` runs any command inside a Docker image that holds the whole
+toolchain -- the Linux and Windows compilers, wine for the Windows self-tests,
+Xvfb for the GUI tools, wkhtmltopdf for the manuals -- so a machine needs
+nothing but Docker:
+
+```sh
+./devbox.sh                          # a shell in the container
+./devbox.sh ./release.sh 0.19.0      # any command, from the current folder
+```
+
+The repository is mounted at its own path and the command runs as you, so
+build trees work from both sides. The container's home is thrown away on exit,
+which keeps wine prefixes and plugin settings out of your real one.
+
 ## Layout
 
 ```
@@ -51,16 +67,17 @@ audio-plugins/
 ├── substrike/        Substrike
 ├── release.sh         builds every plugin and packs the archives
 ├── setup-winbuild.sh  one-time Windows cross-build setup
+├── devbox.sh          the build container; devbox/Dockerfile is its image
 └── CLAP/              CLAP SDK checkouts — gitignored, fetched locally
 ```
 
 ## Windows and VST3
 
-Not yet. Everything needed is in the repository — the Cairo cross-build, the
-mingw toolchain file, the clap-wrapper patch, and a complete win32 window in
-`shared/src/gui/window.cpp` — but no plugin here has been built or tested on
-Windows, and a plugin nobody has run is worse than one that refuses to
-configure. It is planned.
+Every plugin builds for Linux and Windows, as CLAP and as VST3, and
+`./release.sh <version>` packs all four. Windows is cross-compiled with
+mingw-w64 against a Cairo built once by `./setup-winbuild.sh`, and the Windows
+self-tests run under wine -- both work inside `devbox.sh`. The Windows builds
+have been tested under wine only.
 
 ## Relationship to Verdalis
 

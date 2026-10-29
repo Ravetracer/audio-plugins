@@ -1,11 +1,141 @@
 # SäureKiste -- status
 
-Version 0.16.0. Linux and Windows, CLAP and VST3. 74 parameters, 30 presets,
-builds clean, self-test passes with no failures across 344 checks on Linux and
-under wine, and `tools/check-instances.sh` passes with two editors open at once.
+Version 0.17.0. Linux and Windows, CLAP and VST3. 252 parameters, 30 presets,
+builds clean, self-test passes with no failures on Linux and under wine, and
+every factory preset renders bit for bit what 0.16.0 rendered at 44.1, 48 and
+96 kHz.
 
 Six of seven fixes were confirmed by backing the bug out and watching the suite
 fail; the seventh has no contract to assert. See `TODO.md` §3.
+
+0.17.0 adds **the FX**: an effect chain of up to sixteen inserts, each of which
+sits in front of the ladder (Pre), after the amplifier (Post) or after the
+built-in delay (Master), on the whole signal or on one band of it, running one
+of nineteen types. It is the first stage of this plugin that is not the
+machine's, not a model of it, and not trying to be. An empty slot is not in the
+signal path at all, which is what keeps the library bit-identical.
+
+It is called **FX** everywhere a user or a host can see it -- the button, the
+host module, the preset keys (`fx1_type` ... `fx16_F`, `fx_xover_low/high`),
+the `FX Chains` shelf -- because the sequencer's pattern chain had the word
+first, and a window with a CHAIN row in the bank and a CHAIN button on the bar
+was two different things under one name. The DSP in `dsp/chain.*` keeps it.
+
+**Where it came from.** The feature was first written by another coding agent
+in a separate copy of the plugin, on top of 0.16.0, and reworked here before it
+was merged. What changed in the rework is worth knowing because each item is a
+trap the next change could walk back into:
+
+- **A letter is a position, 0..1.** A slot's A-F take their name, range and
+  default from its type, and the first version told the host the *type's*
+  range -- so a slot switched from Saturator to Filter changed min, max and the
+  stepped flag of six parameters while the plugin was active, which CLAP allows
+  only after a deactivate. A letter is now stored as a position along whatever
+  the type makes of it; the host sees 0..1 and continuous, always, and
+  `descFor()` / `fxLetterFromPosition()` turn the position into the type's
+  value for the window, the text and the engine. Substrike makes the same
+  bargain for the same reason. Self-test 8.
+- **No rescan from the audio thread.** A type arriving as a host event reset the
+  letters and called `clap_host_params::rescan()` from `process()`. It now asks
+  for `on_main_thread()` and rescans there. Self-test 9.
+- **A type picked in the window resets the letters too**; the first version only
+  did it for a type from the host.
+- **The Master bus hears a note on its sample.** It runs once over the whole
+  host block, after the delay, and it used to get every note of the block as
+  one trigger at sample 0 -- a Guard's window, a Hit gate, the Filter's envelope
+  and Ring Mod's restart all landed early. The engine now counts where each of
+  its process() calls starts inside the block. Self-test 10.
+- **A slide does not trigger a slot.** The plugin's oldest rule; the first
+  version triggered Guard, Gate, Filter and Ring on slides too. Self-test 11.
+- **Pre is stereo with one ladder.** With one unison path the Pre bus processed
+  two channels and then used only the left one, so a ping-pong delay lost every
+  other echo and a negative Haas delayed the whole note. It now gets the same
+  signal twice and hands the mid on. Self-test 12.
+- **The tempo reaches the FX every block**, not only when a parameter moved.
+  Self-test 13. Finding that showed an older bug, fixed with it: the sequencer
+  clock read the host's tempo *after* its MIDI-mode return, so **the built-in
+  synced delay ran at 120 bpm in MIDI mode** whatever the project said.
+  Self-test 13b.
+- **The plugin sleeps after an FX tail.** Any Delay, Warp or Reverb slot kept
+  the plugin awake forever. The engine now watches the output after the Master
+  bus and lets the host sleep once it has been quiet for longer than the
+  longest gap a slot can leave between echoes. Self-test 14.
+- **The host's tail includes the FX** (a reverb's decay, a delay's echoes to
+  -60 dB, capped at 30 s), and the host is told when it changes. Self-test 15.
+- **The Saturator re-derives the drive stage at most every 128 samples while a
+  knob glides**, and exactly at the end of the glide. The stage measures its
+  curve to match levels, and the first version did that every 16 samples for as
+  long as Drive or Bias moved.
+- **It built only against a modified `shared/`.** The window's FX calls were
+  added to the shared `GuiDelegate`; they are on SäureKiste's own `WindowHost`
+  now, and `shared/` got only what is generic: an opt-in docgen hook (below) and
+  a white page background in `manual.css`.
+- **One id block.** The first version kept six slots, the crossovers and then
+  ten more slots, so that ids from an unreleased six-slot draft would not move.
+  Nothing was released with them, so the sixteen slots are contiguous and the
+  crossovers follow them.
+- **An empty slot is not written into a preset.** Saving used to write all 178
+  FX lines whatever the chain held.
+- The SAVE button kept one width on both pages; widening it on the FX page moved
+  the FX button out from under the pointer.
+
+**The page.** The FX page shows the effects a chain has, not a row of empty
+slots: ADD EFFECT appends a Saturator on the Master bus, the cross removes an
+effect and closes the gap, the chevrons move it one place with all of its
+settings, and past five strips the list scrolls. ADD EFFECT and the two band
+crossovers sit in a footer row under the strips -- the crossovers belong to the
+chain, and leaving them on the first strip took the place every other strip
+uses for its preset field. The page is never shorter than the Type list
+(`fxMenuFloor()`).
+
+**The types** (`dsp/chain.h`, `dsp/chain.cpp`, `dsp/chain_time.cpp`).
+Seventeen came across from Substrike's effect slots, where they were written and
+measured; the copy belongs to SäureKiste from here on. Two are this plugin's
+own: **Saturator**, the drive stage's ten models with a tone control after them,
+and **Guard**, Substrike's per-lane transient guard as a slot, with a depth.
+Two departures from Substrike, both stated in `chain.h`: Bitcrush is not
+oversampled (its aliasing is the effect), and the Filter's Gain is the level
+after the filter in every mode but Peak, where Substrike's is inert.
+
+**Parameters.** Eleven per slot -- type, position, band, mix, bypass, A-F --
+plus the two crossovers, in one block after the unison controls.
+`fxParamId()` is the only place the arithmetic lives. The values ride in the
+existing (id, value) state block, so there is no state version 6.
+
+**Four kinds of preset**, modelled on the scene / synthesis / insert-effect
+split of a commercial acid instrument the user works with. `PresetKind` in
+`pattern.h`:
+
+| Kind | Holds | Field |
+|---|---|---|
+| Scene | everything | SCENE (the shared GuiDelegate calls, unchanged) |
+| Patch | sound + pattern bank, no FX | PATCH, beside it |
+| FxChain | FX slots + crossovers | FX CHAIN, in SCENE's place on the FX page |
+| Effect | one slot, written as slot 1, no Position | PRESET, on every strip |
+
+A file says which it is in a `preset_kind` line; none means Scene, so every
+existing preset keeps its meaning. Loading dispatches on the file's kind
+everywhere -- the browser, a file dialog, the host's preset-load -- and an
+Effect from the host goes into `fxAppendSlot()`. The PATCH field lists Scenes
+too, through `windowLoadPresetAs()`, which loads any file *as* a kind. Which
+preset each field shows is kept by identity (load key or path), not by index,
+because a save rescans the library; per-kind "edited" flags give each field its
+star. The window gets the kinds through `WindowHost` (`windowPresetKind`,
+`windowCurrentPreset`, `windowLoadPresetAs`, `windowSavePresetAs`), not the
+shared `GuiDelegate`. Self-tests 6, 6b and 6c load each kind through the
+host's path and check what moved and what did not.
+
+**The manual's parameter appendix** prints slot 1 and says the other fifteen
+repeat it, with the letters' range given as "set by the type". That is two
+optional hooks in `shared/tools/docgen.cpp` (`docParamIsDynamic`,
+`docParamIsHidden`), found by overload rather than by name, so RumpelKiste's
+generated reference is byte for byte what it was.
+
+**Not done, and known:** sixteen slots each allocate their largest delay buffer
+at activation whether used or not -- about 13 MB per instance at 48 kHz, 51 MB
+at 192 kHz. Substrike makes the same trade. Removing or moving an effect
+moves its settings between slots but not the running state of its DSP, so a
+moved delay starts its echoes again.
 
 0.16.0 gives the oscillator an experimental end. None of it is the machine's,
 and none of it moves the machine: every factory preset renders bit for bit what

@@ -23,6 +23,7 @@
 #include "dragfile.h"
 #include "filedialog.h"
 
+#include "dsp/chain.h"
 #include "params.h"
 
 #include <algorithm>
@@ -426,10 +427,186 @@ private:
       return mSpec.host && mSpec.advancedRow > 0 && mSpec.advancedRow < mSpec.rowCount;
    }
 
+   // `None` is taken: X11 defines it as a macro.
+   enum class Widget {
+      NoWidget,
+      Prev,
+      Next,
+      Name,
+      Save,
+      PatchPrev,
+      PatchNext,
+      PatchName,
+      PatchSave,
+      Mixer,
+      Hold,
+      Advanced,
+      Reset,
+      Fx
+   };
+
+   // A strip, the three buttons on it, and the slot behind it. The rects are
+   // rebuilt on every layout, so a strip that is scrolled out of the list has
+   // no buttons to press.
+   struct FxRow {
+      int pos = -1;  // where it sits in the chain, 0 first
+      int slot = -1; // the slot it holds, or -1 for the empty chain's row
+      Rect strip, up, down, remove;
+      Rect preset, presetSave; // the strip's own Effect preset field
+   };
+
    int visibleRowCount() const { return hasAdvanced() ? mSpec.advancedRow : mSpec.rowCount; }
 
+   // ------------------------------------------------------ the preset fields
+   //
+   // Up to four preset fields, each of one PresetKind: SCENE and PATCH on the
+   // main page's bar, FX CHAIN in SCENE's place on the FX page's, and an
+   // Effect field on every FX strip. They share one browser and one save
+   // dialog, which are told the kind and, for an Effect, the slot.
+
+   // What the bar's first field is: the Scene, or on the FX page the chain.
+   PresetKind barKind() const { return mFxPage ? PresetKind::FxChain : PresetKind::Scene; }
+
+   int currentOf(PresetKind kind, int slot) const {
+      if (kind == PresetKind::Scene || !mSpec.host)
+         return mDelegate.guiCurrentPreset();
+      return mSpec.host->windowCurrentPreset(kind, slot);
+   }
+
+   bool editedOf(PresetKind kind, int slot) const {
+      if (kind == PresetKind::Scene || !mSpec.host)
+         return mDelegate.guiPresetEdited();
+      return mSpec.host->windowPresetEdited(kind, slot);
+   }
+
+   // Whether a field of `kind` lists preset `index`. A Patch field lists
+   // Scenes as well, because every Scene has a patch in it.
+   bool listsPreset(PresetKind kind, int index) const {
+      const PresetKind k = mSpec.host ? mSpec.host->windowPresetKind(index) : PresetKind::Scene;
+      return k == kind || (kind == PresetKind::Patch && k == PresetKind::Scene);
+   }
+
+   std::vector<int> presetsOf(PresetKind kind) const {
+      std::vector<int> out;
+      const int n = static_cast<int>(mDelegate.guiPresets().size());
+      for (int i = 0; i < n; ++i)
+         if (listsPreset(kind, i))
+            out.push_back(i);
+      return out;
+   }
+
    int currentH() const {
+      if (mFxPage)
+         return fxPageHeight();
       return mAdvancedOpen && mSpec.windowExpandedH > 0 ? mSpec.windowExpandedH : mSpec.windowH;
+   }
+
+   // The slots that hold an effect, in chain order. A type is an enum, so a
+   // slot is either Off or it is in the chain -- there is no third state and no
+   // half-filled slot to draw. A gap the host left by switching a slot in the
+   // middle Off is skipped, so the strips are numbered by place, not by slot.
+   int fxSlotList(std::vector<int> &out) const {
+      out.clear();
+      for (int s = 0; s < kNumFxSlots; ++s)
+         if (std::lround(mDelegate.guiParamValue(fxParamId(s, kFxFieldType))) != 0)
+            out.push_back(s);
+      return static_cast<int>(out.size());
+   }
+
+   int fxUsed() const {
+      int n = 0;
+      for (int s = 0; s < kNumFxSlots; ++s)
+         if (std::lround(mDelegate.guiParamValue(fxParamId(s, kFxFieldType))) != 0)
+            ++n;
+      return n;
+   }
+
+   // What the page was laid out from: every slot's type, in order. A chain that
+   // grew, shrank or changed its makeup behind the window's back has to be laid
+   // out again before it can be drawn or clicked.
+   uint32_t fxSignature() const {
+      uint32_t h = 2166136261u;
+      for (int s = 0; s < kNumFxSlots; ++s) {
+         const int t = static_cast<int>(
+            std::lround(mDelegate.guiParamValue(fxParamId(s, kFxFieldType))));
+         h = (h ^ static_cast<uint32_t>(t + 1)) * 16777619u;
+      }
+      return h;
+   }
+
+   // The strips on screen. One row is reserved for an empty chain's line of
+   // text, so adding the first effect does not change the page's height, and a
+   // long chain scrolls instead of growing the window to sixteen strips.
+   int fxRows() const {
+      const int used = fxUsed();
+      return used < 1 ? 1 : (used > kFxVisibleStrips ? kFxVisibleStrips : used);
+   }
+
+   int fxMaxScroll() const {
+      const int used = fxUsed();
+      return used > kFxVisibleStrips ? used - kFxVisibleStrips : 0;
+   }
+
+   int fxScroll() const {
+      const int max = fxMaxScroll();
+      return mFxScroll < 0 ? 0 : (mFxScroll > max ? max : mFxScroll);
+   }
+
+   void fxScrollTo(int first) {
+      const int max = fxMaxScroll();
+      const int next = first < 0 ? 0 : (first > max ? max : first);
+      if (next != mFxScroll) {
+         mFxScroll = next;
+         buildLayout();
+         mDirty = true;
+      }
+   }
+
+   Rect fxScrollTrack() const {
+      const double top = kHeaderH + kGap;
+      const double h = fxRows() * (kFxStripH + kFxStripGap) - kFxStripGap;
+      return {static_cast<double>(kMargin + mSpec.contentW) + 3.0, top, kFxScrollW, h};
+   }
+
+   Rect fxScrollThumb() const {
+      const Rect track = fxScrollTrack();
+      const int used = fxUsed(), rows = fxRows();
+      if (used <= rows || used <= 0)
+         return {0, 0, 0, 0};
+      const double h = std::max(24.0, track.h * rows / used);
+      const double y = track.y + (track.h - h) * (fxScroll() / static_cast<double>(used - rows));
+      return {track.x, y, track.w, h};
+   }
+
+   // One strip per effect -- not per slot the plugin has -- plus the footer
+   // under them. The step grid is not on the page: what it is for is putting
+   // an effect somewhere in the signal path.
+   int fxPageHeight() const {
+      int y = kHeaderH + kGap;
+      y += fxRows() * (kFxStripH + kFxStripGap);
+      y += kFxFooterH + kFxStripGap;
+      y += 2 + kBarH + 6;
+      const int natural = y - 2 + kHelpH + 8;
+      return std::max(natural, fxMenuFloor());
+   }
+
+   // The shortest the page may be: the Type list has to fit.
+   //
+   // The list opens under the chip it belongs to and is `enumCount` rows of
+   // kMenuRowH. The Type enum is the longest in the plugin, and a page shorter
+   // than the list's own height clips it -- which is what a one-effect chain
+   // was: 308 pixels of window against a 408-pixel list, so half the effects
+   // could not be picked at all. Every strip's list fits at this height: the
+   // ones below the first flip up (menuPanel() does that) and land under the
+   // header, which this height also leaves room for.
+   int fxMenuFloor() const {
+      const Rect firstChip = chipRect({static_cast<double>(kMargin + kFxSlotColW),
+                                       static_cast<double>(kHeaderH + kGap),
+                                       static_cast<double>(kFxTypeW),
+                                       static_cast<double>(kFxStripH)});
+      const double list = static_cast<double>(kNumSlotTypes) * kMenuRowH + 2 * kMenuPad;
+      return static_cast<int>(
+         std::ceil(firstChip.y + firstChip.h + 2.0 + list + 8.0));
    }
 
    // Lays one row of panels out at `y` and returns where the next row starts.
@@ -463,17 +640,120 @@ private:
       return y + rowH + kGap;
    }
 
+   // One strip per effect in the chain: its number, what it is, where it sits,
+   // which band it takes, its bypass and mix, then its six letters. Every one
+   // of them is an ordinary Cell in the ordinary tables, so dragging, wheel,
+   // typing, the dropdown and RESET all reach it without knowing this page
+   // exists. Under the strips, the footer: ADD EFFECT, and the two band
+   // crossovers under the Band column, because they are the chain's rather
+   // than any strip's.
+   //
+   // The strip's preset field and the three buttons at the right-hand end are
+   // the page's own and are not parameters: they are hit-tested here and drawn
+   // by hand. Up and down move the effect along the chain rather than editing
+   // it, and the cross takes it out.
+   int layoutFx(int y) {
+      mFxRows.clear();
+      std::vector<int> slots;
+      const int used = fxSlotList(slots);
+      const int first = fxScroll();
+      mFxListRect = {static_cast<double>(kMargin), static_cast<double>(y),
+                        static_cast<double>(mSpec.contentW),
+                        static_cast<double>(fxRows() * (kFxStripH + kFxStripGap) -
+                                            kFxStripGap)};
+      for (int p = 0; p < fxRows(); ++p) {
+         const int at = first + p;
+         const int slot = at < used ? slots[static_cast<size_t>(at)] : -1;
+         FxRow row;
+         row.pos = at;
+         row.slot = slot;
+         row.strip = {static_cast<double>(kMargin), static_cast<double>(y),
+                      static_cast<double>(mSpec.contentW), static_cast<double>(kFxStripH)};
+         const double by = y + (kFxStripH - kFxButtonH) * 0.5;
+         const double bx = kMargin + mSpec.contentW - kFxButtonW;
+         const double gap = 4.0;
+         row.remove = {bx, by, static_cast<double>(kFxButtonW), static_cast<double>(kFxButtonH)};
+         row.down = {bx - kFxButtonW - gap, by, static_cast<double>(kFxButtonW),
+                     static_cast<double>(kFxButtonH)};
+         row.up = {bx - 2 * (kFxButtonW + gap), by, static_cast<double>(kFxButtonW),
+                   static_cast<double>(kFxButtonH)};
+         row.presetSave = {row.up.x - 12 - kFxPresetSaveW, by,
+                           static_cast<double>(kFxPresetSaveW), static_cast<double>(kFxButtonH)};
+         row.preset = {row.presetSave.x - 4 - kFxPresetW, by, static_cast<double>(kFxPresetW),
+                       static_cast<double>(kFxButtonH)};
+         if (row.slot >= 0) {
+            int x = kMargin + kFxSlotColW;
+            auto add = [&](uint32_t id, int w) {
+               mCells.push_back({id, 0, 0, 1, 0});
+               mCellRects.push_back({static_cast<double>(x), static_cast<double>(y),
+                                     static_cast<double>(w), static_cast<double>(kFxStripH)});
+               x += w + kFxCellGap;
+            };
+            add(fxParamId(slot, kFxFieldType), kFxTypeW);
+            add(fxParamId(slot, kFxFieldPosition), kFxSmallW);
+            add(fxParamId(slot, kFxFieldBand), kFxBandW);
+            add(fxParamId(slot, kFxFieldBypass), kFxSmallW);
+            add(fxParamId(slot, kFxFieldMix), kFxSmallW);
+            for (int letter = 0; letter < kFxLetters; ++letter)
+               add(fxParamId(slot, kFxFieldA + letter), kFxSmallW);
+         } else {
+            row.preset = row.presetSave = {0, 0, 0, 0};
+         }
+         mFxRows.push_back(row);
+         y += kFxStripH + kFxStripGap;
+      }
+
+      mFxFooterRect = {static_cast<double>(kMargin), static_cast<double>(y),
+                       static_cast<double>(mSpec.contentW), static_cast<double>(kFxFooterH)};
+      mFxAddRect = {static_cast<double>(kMargin) + 14.0,
+                    y + (kFxFooterH - kFxButtonH - 2) * 0.5, 150.0,
+                    static_cast<double>(kFxButtonH) + 2.0};
+      // Under the strips' Band column, which is what they split for.
+      double x = kMargin + kFxSlotColW + kFxTypeW + kFxCellGap + kFxSmallW + kFxCellGap;
+      for (uint32_t id : {static_cast<uint32_t>(kParamFxXoverLow),
+                          static_cast<uint32_t>(kParamFxXoverHigh)}) {
+         mCells.push_back({id, 0, 0, 1, 0});
+         mCellRects.push_back({x, static_cast<double>(y), static_cast<double>(kFxSmallW),
+                               static_cast<double>(kFxFooterH)});
+         x += kFxSmallW + kFxCellGap;
+      }
+      mFxSignature = fxSignature();
+      y += kFxFooterH + kFxStripGap;
+      return y;
+   }
+
+   // Where `slot` sits in the chain, counted from 0, or -1 when it is empty.
+   int fxPlaceOfSlot(int slot) const {
+      std::vector<int> slots;
+      fxSlotList(slots);
+      const auto at = std::find(slots.begin(), slots.end(), slot);
+      return at == slots.end() ? -1 : static_cast<int>(at - slots.begin());
+   }
+
+   // The shelf an Effect of this slot's type is saved to: "Delay Effects".
+   std::string typeShelf(int slot) const {
+      const uint32_t id = fxParamId(slot, kFxFieldType);
+      const ParamDesc &d = mSpec.params[id];
+      const int type = static_cast<int>(std::lround(mDelegate.guiParamValue(id)));
+      if (type <= 0 || type >= static_cast<int>(d.enumCount))
+         return std::string();
+      return std::string(d.enumNames[type]) + " Effects";
+   }
+
    void buildLayout() {
       mPanels.clear();
       mCells.clear();
       mCellRects.clear();
+      mFxRows.clear();
+      mFxAddRect = {0, 0, 0, 0};
+      mFxListRect = {0, 0, 0, 0};
+      mFxFooterRect = {0, 0, 0, 0};
 
-      int y = kHeaderH + kGap;
-      const int visible = visibleRowCount();
-      for (int row = 0; row < visible; ++row)
-         y = layoutRow(row, y);
-
-      // The step grid and, beside it, the bank of sixty-four patterns.
+      // Cleared for *every* page, not just the one that computes them. A rect
+      // is a hit test, and a hit test over a grid that is not being drawn
+      // edits steps nobody can see -- which is what happened on the FX page
+      // from the fourth slot down: its strip sits where the step grid would
+      // have been, and a drag there changed notes instead of knobs.
       mSeqRect = {0, 0, 0, 0};
       mBankRect = {0, 0, 0, 0};
       mSeqXpDownRect = {0, 0, 0, 0};
@@ -490,6 +770,21 @@ private:
       mSeqOctDownRect = {0, 0, 0, 0};
       mSeqOctUpRect = {0, 0, 0, 0};
       mSeqOctLabelRect = {0, 0, 0, 0};
+
+      int y = kHeaderH + kGap;
+      const int visible = visibleRowCount();
+      if (mFxPage) {
+         // A page whose list just got shorter has to keep the top of what is
+         // left in view rather than showing the gap the old scroll left.
+         mFxScroll = std::min(mFxScroll, fxMaxScroll());
+         if (mFxScroll < 0)
+            mFxScroll = 0;
+         y = layoutFx(y);
+      } else {
+      for (int row = 0; row < visible; ++row)
+         y = layoutRow(row, y);
+
+      // The step grid and, beside it, the bank of sixty-four patterns.
       if (hasPattern()) {
          const double bankW = hasBank() ? kBankW + kGap : 0.0;
          mSeqRect.x = kMargin;
@@ -541,16 +836,38 @@ private:
          place(mSeqOctDownRect, 18.0);
          y += static_cast<int>(mSeqRect.h) + kGap;
       }
+      }
+
+      // The page has a floor so the Type list fits (see fxMenuFloor), and on
+      // the FX page the room it leaves goes between ADD EFFECT and the bar
+      // rather than under the help line: the bar belongs at the foot of the
+      // window, not in the middle of it.
+      if (mFxPage)
+         y = std::max(y, fxPageHeight() - (kBarH + kHelpH + 14));
 
       const int barY = y + 2;
+      // Two preset fields: SCENE, or FX CHAIN on the FX page, and PATCH. Laid
+      // out the same on both pages, so nothing to their right -- the FX switch
+      // included -- moves out from under the pointer when the page changes;
+      // the FX page simply has no PATCH field.
       mPrevRect = {static_cast<double>(kMargin) + 62, static_cast<double>(barY), 26, kBarH};
-      mNameRect = {mPrevRect.x + mPrevRect.w + 4, static_cast<double>(barY), 300, kBarH};
+      mNameRect = {mPrevRect.x + mPrevRect.w + 4, static_cast<double>(barY), 230, kBarH};
       mNextRect = {mNameRect.x + mNameRect.w + 4, static_cast<double>(barY), 26, kBarH};
       mSaveRect = {mNextRect.x + mNextRect.w + 14, static_cast<double>(barY), 58, kBarH};
-      mMixerRect = {mSaveRect.x + mSaveRect.w + 8, static_cast<double>(barY), 62, kBarH};
+      mPatchPrevRect = {mSaveRect.x + mSaveRect.w + 64, static_cast<double>(barY), 26, kBarH};
+      mPatchNameRect = {mPatchPrevRect.x + mPatchPrevRect.w + 4, static_cast<double>(barY), 200,
+                        kBarH};
+      mPatchNextRect = {mPatchNameRect.x + mPatchNameRect.w + 4, static_cast<double>(barY), 26,
+                        kBarH};
+      mPatchSaveRect = {mPatchNextRect.x + mPatchNextRect.w + 14, static_cast<double>(barY), 58,
+                        kBarH};
+      const Rect lastField = mPatchSaveRect;
+      if (mFxPage)
+         mPatchPrevRect = mPatchNameRect = mPatchNextRect = mPatchSaveRect = {0, 0, 0, 0};
+      mMixerRect = {lastField.x + lastField.w + 8, static_cast<double>(barY), 62, kBarH};
       // The switch for the collapsible section, on the bar because that is the
       // one row of the window that is neither a panel nor the grid.
-      mAdvancedRect = {mSaveRect.x + mSaveRect.w + (hasMixer() ? 78.0 : 8.0),
+      mAdvancedRect = {lastField.x + lastField.w + (hasMixer() ? 78.0 : 16.0),
                        static_cast<double>(barY), 104, kBarH};
       // Where the window says that a mute or a solo is holding a level down.
       // Only drawn while one is, and drawn in the accent so it cannot be
@@ -560,6 +877,10 @@ private:
       // because it is not one module's control -- it undoes all of them.
       mResetRect = {mAdvancedRect.x + mAdvancedRect.w + 8, static_cast<double>(barY), 62, kBarH};
       mHoldRect = {mResetRect.x + mResetRect.w + 10, static_cast<double>(barY), 104, kBarH};
+      // The FX page's switch, beside everything else that changes what the
+      // window is showing. It is always there: the page is how the chain is
+      // used at all, where ADVANCED is a disclosure.
+      mFxRect = {mHoldRect.x + mHoldRect.w + 10, static_cast<double>(barY), 52, kBarH};
       // The version label, right-aligned in the header at baseline 44. The box
       // is a fixed size anchored to the right edge rather than measured from
       // the text, because the layout runs without a cairo context to measure
@@ -568,7 +889,7 @@ private:
       mBarY = barY;
 
       y = barY + kBarH + 6;
-      if (hasAdvanced() && mAdvancedOpen)
+      if (!mFxPage && hasAdvanced() && mAdvancedOpen)
          for (int row = visible; row < mSpec.rowCount; ++row)
             y = layoutRow(row, y);
       mHelpY = y - 2;
@@ -650,6 +971,16 @@ private:
       // in for a few seconds at a time.
       if (mMapMode)
          return true;
+      // A chain that gained, lost or re-typed an effect has different strips,
+      // so the page is laid out again here, from the timer, rather than inside
+      // the click that changed it.
+      if (mFxPage && fxSignature() != mFxSignature) {
+         buildLayout();
+         applySize();
+         if (mSpec.host)
+            mSpec.host->windowRequestResize(pixelW(), pixelH());
+         return true;
+      }
       if (mDirty)
          return true;
       if (hasWaveView()) {
@@ -708,10 +1039,14 @@ private:
 
       drawBackground(cr);
       drawHeader(cr);
-      for (const Panel &p : mPanels)
-         drawPanel(cr, p);
-      drawSequencer(cr);
-      drawBank(cr);
+      if (mFxPage) {
+         drawFxPage(cr);
+      } else {
+         for (const Panel &p : mPanels)
+            drawPanel(cr, p);
+         drawSequencer(cr);
+         drawBank(cr);
+      }
       drawPresetBar(cr);
       drawHelpLine(cr);
       if (mBrowserOpen)
@@ -787,6 +1122,159 @@ private:
       cairo_stroke(cr);
    }
 
+   // The chain, its buttons and the ADD control. The buttons are drawn rather
+   // than typed for the same reason the preset arrows and the mixer's cross
+   // are: a window that is a Cairo surface cannot count on a glyph being there.
+   void drawFxPage(cairo_t *cr) {
+      const int used = fxUsed();
+      for (const FxRow &row : mFxRows) {
+         const Rect &r = row.strip;
+         setColor(cr, mSpec.theme.panelFill);
+         roundedRect(cr, r.x, r.y, r.w, r.h, 5);
+         cairo_fill_preserve(cr);
+         setColor(cr, mSpec.theme.panelEdge);
+         cairo_set_line_width(cr, 1.0);
+         cairo_stroke(cr);
+         if (row.slot < 0) {
+            setColor(cr, mSpec.theme.textMute);
+            drawText(cr, r.x + 14, r.y + r.h * 0.5 + 4,
+                     "No effects yet. ADD EFFECT puts one at the end of the signal path.",
+                     10, false, Align::Left);
+            continue;
+         }
+         char num[16];
+         std::snprintf(num, sizeof(num), "%d", row.pos + 1);
+         setColor(cr, mSpec.theme.accent, 0.85);
+         drawText(cr, r.x + kFxSlotColW * 0.5, r.y + kFxStripH * 0.5 + 4, num, 12, true,
+                  Align::Center);
+         drawFxButton(cr, row.up, 0, row.pos > 0);
+         drawFxButton(cr, row.down, 1, row.pos + 1 < used);
+         drawFxButton(cr, row.remove, 2, true);
+         drawFxPresetField(cr, row);
+      }
+      {
+         const Rect &f = mFxFooterRect;
+         setColor(cr, mSpec.theme.panelFill);
+         roundedRect(cr, f.x, f.y, f.w, f.h, 5);
+         cairo_fill_preserve(cr);
+         setColor(cr, mSpec.theme.panelEdge);
+         cairo_set_line_width(cr, 1.0);
+         cairo_stroke(cr);
+      }
+      for (size_t i = 0; i < mCells.size() && i < mCellRects.size(); ++i)
+         drawCell(cr, mCellRects[i], mCells[i].param);
+
+      // ADD EFFECT, and how much of the pool the chain is using. It is a
+      // button rather than a strip so that an empty chain reads as a chain you
+      // can start rather than as six slots that are all switched off.
+      const bool full = used >= kNumFxSlots;
+      const bool hot = !full && mFxAddRect.contains(mMouseX, mMouseY);
+      setColor(cr, hot ? mSpec.theme.accent : mSpec.theme.panelFill, hot ? 0.18 : 1.0);
+      roundedRect(cr, mFxAddRect.x, mFxAddRect.y, mFxAddRect.w, mFxAddRect.h, 4);
+      cairo_fill_preserve(cr);
+      setColor(cr, full ? mSpec.theme.panelEdge : mSpec.theme.accent,
+               full ? 1.0 : (hot ? 1.0 : 0.55));
+      cairo_set_line_width(cr, 1.0);
+      cairo_stroke(cr);
+      const double px = mFxAddRect.x + 16, py = mFxAddRect.y + mFxAddRect.h * 0.5;
+      cairo_set_line_width(cr, 1.6);
+      setColor(cr, full ? mSpec.theme.textMute : mSpec.theme.accent);
+      cairo_move_to(cr, px - 5, py);
+      cairo_line_to(cr, px + 5, py);
+      cairo_move_to(cr, px, py - 5);
+      cairo_line_to(cr, px, py + 5);
+      cairo_stroke(cr);
+      drawText(cr, mFxAddRect.x + 30, mFxAddRect.y + mFxAddRect.h * 0.5 + 4,
+               full ? "ALL SLOTS IN USE" : "ADD EFFECT", 10, true, Align::Left);
+      char count[64];
+      std::snprintf(count, sizeof(count), "%d of %d in use", used, kNumFxSlots);
+      setColor(cr, mSpec.theme.textMute);
+      drawText(cr, mFxAddRect.x + mFxAddRect.w + 14,
+               mFxAddRect.y + mFxAddRect.h * 0.5 + 4, count, 9, false, Align::Left);
+
+      if (fxMaxScroll() > 0) {
+         const Rect track = fxScrollTrack();
+         const Rect thumb = fxScrollThumb();
+         setColor(cr, mSpec.theme.track, 0.5);
+         roundedRect(cr, track.x, track.y, track.w, track.h, track.w * 0.5);
+         cairo_fill(cr);
+         setColor(cr, mSpec.theme.accent,
+                  mFxScrollDrag || thumb.contains(mMouseX, mMouseY) ? 0.8 : 0.55);
+         roundedRect(cr, thumb.x, thumb.y, thumb.w, thumb.h, thumb.w * 0.5);
+         cairo_fill(cr);
+      }
+   }
+
+   // A strip's Effect preset: its name, which opens the browser on effects,
+   // and SAVE, which saves this one strip. Labelled like a cell so it reads as
+   // one more control of the strip.
+   void drawFxPresetField(cairo_t *cr, const FxRow &row) {
+      const Rect span = {row.preset.x, row.strip.y, row.presetSave.x + row.presetSave.w - row.preset.x,
+                         row.strip.h};
+      const bool nameHot = row.preset.contains(mMouseX, mMouseY) ||
+                           (mBrowserOpen && mBrowserKind == PresetKind::Effect &&
+                            mBrowserSlot == row.slot);
+      const bool saveHot = row.presetSave.contains(mMouseX, mMouseY);
+      setColor(cr, nameHot || saveHot ? mSpec.theme.text : mSpec.theme.textDim);
+      drawLabel(cr, span, "PRESET");
+
+      setColor(cr, mSpec.theme.knobFace);
+      roundedRect(cr, row.preset.x, row.preset.y, row.preset.w, row.preset.h, 3);
+      cairo_fill_preserve(cr);
+      setColor(cr, nameHot ? mSpec.theme.accent : mSpec.theme.panelEdge, nameHot ? 0.8 : 1.0);
+      cairo_set_line_width(cr, 1.0);
+      cairo_stroke(cr);
+      char label[128];
+      presetLabel(PresetKind::Effect, row.slot, label, sizeof(label));
+      setColor(cr, currentOf(PresetKind::Effect, row.slot) >= 0 ? mSpec.theme.text
+                                                                  : mSpec.theme.textMute);
+      drawText(cr, row.preset.x + row.preset.w * 0.5, row.preset.y + 15, label, 9.5, false,
+               Align::Center);
+
+      setColor(cr, mSpec.theme.panelFill);
+      roundedRect(cr, row.presetSave.x, row.presetSave.y, row.presetSave.w, row.presetSave.h, 3);
+      cairo_fill_preserve(cr);
+      setColor(cr, saveHot ? mSpec.theme.accent : mSpec.theme.panelEdge, saveHot ? 0.8 : 1.0);
+      cairo_stroke(cr);
+      setColor(cr, saveHot ? mSpec.theme.accent : mSpec.theme.textDim);
+      drawText(cr, row.presetSave.x + row.presetSave.w * 0.5, row.presetSave.y + 15, "SAVE", 9,
+               true, Align::Center);
+   }
+
+   // kind: 0 up, 1 down, 2 remove. A button that cannot be pressed -- the up
+   // arrow on the first strip -- is drawn but dimmed rather than left out: a
+   // hole in the row reads as a strip with something missing from it.
+   void drawFxButton(cairo_t *cr, const Rect &r, int kind, bool enabled) {
+      const bool hot = enabled && r.contains(mMouseX, mMouseY);
+      setColor(cr, hot ? mSpec.theme.accent : mSpec.theme.panelFill, hot ? 0.18 : 1.0);
+      roundedRect(cr, r.x, r.y, r.w, r.h, 3);
+      cairo_fill_preserve(cr);
+      setColor(cr, hot ? mSpec.theme.accent : mSpec.theme.panelEdge,
+               enabled ? 1.0 : 0.5);
+      cairo_set_line_width(cr, 1.0);
+      cairo_stroke(cr);
+      const double cx = r.x + r.w * 0.5, cy = r.y + r.h * 0.5;
+      cairo_set_line_width(cr, 1.6);
+      setColor(cr, hot ? mSpec.theme.accent
+                       : (enabled ? mSpec.theme.textDim : mSpec.theme.textMute));
+      if (kind == 2) {
+         cairo_move_to(cr, cx - 4, cy - 4);
+         cairo_line_to(cr, cx + 4, cy + 4);
+         cairo_move_to(cr, cx + 4, cy - 4);
+         cairo_line_to(cr, cx - 4, cy + 4);
+      } else {
+         // A chevron pointing the way the effect moves: ends low and apex high
+         // for up, the other way round for down. The two were drawn the wrong
+         // way round at first, so the arrow that looked like up moved the
+         // effect down; the glyph is the only thing the button says.
+         const double d = kind == 0 ? 3.2 : -3.2;
+         cairo_move_to(cr, cx - 4.5, cy + d);
+         cairo_line_to(cr, cx, cy - d);
+         cairo_line_to(cr, cx + 4.5, cy + d);
+      }
+      cairo_stroke(cr);
+   }
+
    void drawPanel(cairo_t *cr, const Panel &p) {
       setColor(cr, mSpec.theme.panelFill);
       roundedRect(cr, p.rect.x, p.rect.y, p.rect.w, p.rect.h, 5);
@@ -857,7 +1345,7 @@ private:
    // through openEntry(); the seed is not on a panel, and a control whose
    // range spans a 32-bit word has to be typeable or it cannot be reached.
    void openEntryAt(uint32_t id, const Rect &where) {
-      const ParamDesc &d = mSpec.params[id];
+      const ParamDesc d = desc(id);
       if (isChip(d))
          return;
       mEntryRect = where;
@@ -889,7 +1377,7 @@ private:
          return;
       const uint32_t id = static_cast<uint32_t>(mEntryParam);
       double raw = 0.0;
-      if (!paramTextToValue(mSpec.params[id], mEntryText.c_str(), &raw)) {
+      if (!paramTextToValue(desc(id), mEntryText.c_str(), &raw)) {
          mEntryFailed = true;
          mDirty = true;
          return;
@@ -961,19 +1449,59 @@ private:
       drawText(cr, f.x + f.w * 0.5, f.y + f.h * 0.5 + 4, shown.c_str(), 9.5, false, Align::Center);
    }
 
+   // The descriptor a parameter is drawn and converted with. A chain slot's
+   // letters are described by their type, which the plugin holds as the value
+   // of the slot's Type parameter, so this is the one place the window asks.
+   // By value: the description changes when a type changes, and a reference
+   // into a table that has to be rebuilt would be a reference to nothing.
+   ParamDesc desc(uint32_t id) const {
+      if (!isFxLetterParam(id))
+         return mSpec.params[id];
+      const uint32_t typeId = fxTypeParamOf(id);
+      const int type = static_cast<int>(std::lround(mDelegate.guiParamValue(typeId)));
+      return fxLetterDesc(id, type);
+   }
+
+   // "Slot 3 Cutoff" on a strip that already says 3 in its own column is just
+   // "Cutoff". The host and the help line still see the whole name.
+   const char *cellLabel(uint32_t id, const ParamDesc &d, char *buf, size_t size) const {
+      if (fxSlotOfParam(id) < 0) {
+         upperCase(d.name, buf, static_cast<uint32_t>(size));
+         return buf;
+      }
+      const char *p = std::strchr(d.name, ' ');
+      if (p) {
+         const char *q = std::strchr(p + 1, ' ');
+         if (q)
+            p = q;
+      }
+      upperCase(p ? p + 1 : d.name, buf, static_cast<uint32_t>(size));
+      return buf;
+   }
+
    void drawCell(cairo_t *cr, const Rect &r, uint32_t id) {
       if (id == mSpec.waveViewParam && hasWaveView()) {
          drawWaveCell(cr, r);
          return;
       }
-      const ParamDesc &d = mSpec.params[id];
+      const ParamDesc d = desc(id);
       const double raw = mDelegate.guiParamValue(id);
       const bool hot = (mHover == static_cast<int>(id)) || (mDrag == static_cast<int>(id));
 
       char label[64];
-      upperCase(d.name, label, sizeof(label));
+      cellLabel(id, d, label, sizeof(label));
       setColor(cr, hot ? mSpec.theme.text : mSpec.theme.textDim);
       drawLabel(cr, r, label);
+
+      // A letter the type does not use: present, because its id is stable, and
+      // visibly doing nothing.
+      if (isFxLetterParam(id) &&
+          !fxLetterInUse(id, static_cast<int>(std::lround(
+                                 mDelegate.guiParamValue(fxTypeParamOf(id)))))) {
+         setColor(cr, mSpec.theme.textMute);
+         drawText(cr, r.x + r.w * 0.5, r.y + 48, "--", 12, false, Align::Center);
+         return;
+      }
 
       char text[128];
       if (!paramValueToText(d, raw, text, sizeof(text)))
@@ -1079,7 +1607,7 @@ private:
                                mDrag == static_cast<int>(target));
       char label[64];
       if (has)
-         upperCase(mSpec.params[target].name, label, sizeof(label));
+         upperCase(desc(target).name, label, sizeof(label));
       else
          std::snprintf(label, sizeof(label), "OSCILLATOR");
       setColor(cr, hot ? mSpec.theme.text : mSpec.theme.textDim);
@@ -1092,7 +1620,7 @@ private:
          return;
       }
       char text[128];
-      if (!paramValueToText(mSpec.params[target], mDelegate.guiParamValue(target), text,
+      if (!paramValueToText(desc(target), mDelegate.guiParamValue(target), text,
                             sizeof(text)))
          std::snprintf(text, sizeof(text), "--");
       setColor(cr, hot ? mSpec.theme.accent : mSpec.theme.text, hot ? 1.0 : 0.85);
@@ -1443,22 +1971,31 @@ private:
       }
    }
 
-   const char *presetLabel(char *buf, size_t size) const {
+   // What a field shows: the preset it came from, with a star once edited.
+   // With none -- a fresh instance, a chain built by hand -- it says what is
+   // there instead of naming nothing.
+   const char *presetLabel(PresetKind kind, int slot, char *buf, size_t size) const {
       const auto &list = mDelegate.guiPresets();
-      const int cur = mDelegate.guiCurrentPreset();
+      const int cur = currentOf(kind, slot);
       if (cur < 0 || cur >= static_cast<int>(list.size())) {
-         std::snprintf(buf, size, "Init");
+         const char *none = "Init";
+         if (kind == PresetKind::FxChain)
+            none = fxUsed() > 0 ? "Unsaved" : "No effects";
+         else if (kind == PresetKind::Effect)
+            none = "Unsaved";
+         std::snprintf(buf, size, "%s", none);
          return buf;
       }
       std::snprintf(buf, size, "%s%s", list[static_cast<size_t>(cur)].name.c_str(),
-                    mDelegate.guiPresetEdited() ? " *" : "");
+                    editedOf(kind, slot) ? " *" : "");
       return buf;
    }
 
-   void drawPresetBar(cairo_t *cr) {
-      setColor(cr, mSpec.theme.textMute);
-      drawText(cr, kMargin, mBarY + 21, "PRESET", 9, true, Align::Left);
-
+   // One preset field: arrows either side of the name, which opens the
+   // browser, and SAVE. Shared by SCENE, PATCH and FX CHAIN.
+   void drawPresetField(cairo_t *cr, PresetKind kind, const Rect &prev, const Rect &name,
+                        const Rect &next, const Rect &save, Widget wPrev, Widget wName,
+                        Widget wNext, Widget wSave) {
       auto button = [&](const Rect &r, int dir, bool hot) {
          setColor(cr, mSpec.theme.panelFill);
          roundedRect(cr, r.x, r.y, r.w, r.h, 4);
@@ -1469,36 +2006,46 @@ private:
          setColor(cr, hot ? mSpec.theme.accent : mSpec.theme.textDim);
          drawTriangle(cr, r.x + r.w * 0.5, r.y + r.h * 0.5, 9, dir);
       };
+      button(prev, -1, mHoverWidget == wPrev);
+      button(next, 1, mHoverWidget == wNext);
 
-      button(mPrevRect, -1, mHoverWidget == Widget::Prev);
-      button(mNextRect, 1, mHoverWidget == Widget::Next);
-
-      const bool hot = mHoverWidget == Widget::Name || mBrowserOpen;
+      const bool hot = mHoverWidget == wName || (mBrowserOpen && mBrowserKind == kind);
       setColor(cr, mSpec.theme.panelFill);
-      roundedRect(cr, mNameRect.x, mNameRect.y, mNameRect.w, mNameRect.h, 4);
+      roundedRect(cr, name.x, name.y, name.w, name.h, 4);
       cairo_fill_preserve(cr);
       setColor(cr, hot ? mSpec.theme.accent : mSpec.theme.panelEdge, hot ? 0.7 : 1.0);
       cairo_set_line_width(cr, 1.0);
       cairo_stroke(cr);
-
-      char name[160];
-      presetLabel(name, sizeof(name));
+      char label[160];
+      presetLabel(kind, -1, label, sizeof(label));
       setColor(cr, mSpec.theme.accent);
-      drawText(cr, mNameRect.x + mNameRect.w * 0.5, mNameRect.y + 21, name, 13, true,
-               Align::Center);
+      drawText(cr, name.x + name.w * 0.5 - 6, name.y + 21, label, 12, true, Align::Center);
       setColor(cr, mSpec.theme.textMute);
-      drawTriangle(cr, mNameRect.x + mNameRect.w - 12, mNameRect.y + mNameRect.h * 0.5, 8, 0);
+      drawTriangle(cr, name.x + name.w - 12, name.y + name.h * 0.5, 8, 0);
 
-      const bool saveHot = mHoverWidget == Widget::Save || mSaveOpen;
+      const bool saveHot = mHoverWidget == wSave || (mSaveOpen && mSaveKind == kind);
       setColor(cr, mSpec.theme.panelFill);
-      roundedRect(cr, mSaveRect.x, mSaveRect.y, mSaveRect.w, mSaveRect.h, 4);
+      roundedRect(cr, save.x, save.y, save.w, save.h, 4);
       cairo_fill_preserve(cr);
       setColor(cr, saveHot ? mSpec.theme.accent : mSpec.theme.panelEdge, saveHot ? 0.7 : 1.0);
       cairo_set_line_width(cr, 1.0);
       cairo_stroke(cr);
       setColor(cr, saveHot ? mSpec.theme.accent : mSpec.theme.textDim);
-      drawText(cr, mSaveRect.x + mSaveRect.w * 0.5, mSaveRect.y + 20, "SAVE", 10, true,
-               Align::Center);
+      drawText(cr, save.x + save.w * 0.5, save.y + 20, "SAVE", 10, true, Align::Center);
+   }
+
+   void drawPresetBar(cairo_t *cr) {
+      setColor(cr, mSpec.theme.textMute);
+      drawText(cr, kMargin, mBarY + 21, mFxPage ? "FX CHAIN" : "SCENE", 9, true, Align::Left);
+      drawPresetField(cr, barKind(), mPrevRect, mNameRect, mNextRect, mSaveRect, Widget::Prev,
+                      Widget::Name, Widget::Next, Widget::Save);
+      if (!mFxPage) {
+         setColor(cr, mSpec.theme.textMute);
+         drawText(cr, mPatchPrevRect.x - 46, mBarY + 21, "PATCH", 9, true, Align::Left);
+         drawPresetField(cr, PresetKind::Patch, mPatchPrevRect, mPatchNameRect, mPatchNextRect,
+                         mPatchSaveRect, Widget::PatchPrev, Widget::PatchName, Widget::PatchNext,
+                         Widget::PatchSave);
+      }
 
       if (hasAdvanced()) {
          const bool advHot = mHoverWidget == Widget::Advanced;
@@ -1531,6 +2078,24 @@ private:
          }
          cairo_close_path(cr);
          cairo_fill(cr);
+      }
+
+      // FX: the page the effect chain is edited on. Always there, unlike
+      // ADVANCED, and lit while it is showing, because it is a place rather
+      // than a disclosure.
+      {
+         const bool fxHot = mHoverWidget == Widget::Fx;
+         const bool on = mFxPage;
+         setColor(cr, on ? mSpec.theme.accent : mSpec.theme.panelFill, on ? 0.16 : 1.0);
+         roundedRect(cr, mFxRect.x, mFxRect.y, mFxRect.w, mFxRect.h, 4);
+         cairo_fill_preserve(cr);
+         setColor(cr, (fxHot || on) ? mSpec.theme.accent : mSpec.theme.panelEdge,
+                  fxHot ? 0.7 : 1.0);
+         cairo_set_line_width(cr, 1.0);
+         cairo_stroke(cr);
+         setColor(cr, (fxHot || on) ? mSpec.theme.accent : mSpec.theme.textDim);
+         drawText(cr, mFxRect.x + mFxRect.w * 0.5, mFxRect.y + 20, "FX", 10, true,
+                  Align::Center);
       }
 
       // RESET, and the second click that means it. An armed button says SURE?
@@ -1616,7 +2181,9 @@ private:
       return {p.x + p.w - 20 - 92 - 10 - 92, p.y + p.h - 20 - 28, 92, 28};
    }
 
-   void openSaveDialog() {
+   void openSaveDialog(PresetKind kind, int slot) {
+      mSaveKind = kind;
+      mSaveSlot = slot;
       mBrowserOpen = false;
       mMixerOpen = false;
       closeMenu();
@@ -1626,7 +2193,9 @@ private:
       // goes out is what the preset really is.
       clearHolds();
       mSaveOpen = true;
-      mSaveName = mDelegate.guiSuggestedPresetName();
+      mSaveName = kind == PresetKind::Scene || !mSpec.host
+                     ? mDelegate.guiSuggestedPresetName()
+                     : mSpec.host->windowSuggestedName(kind, slot);
       mSaveStatus.clear();
       mSaveFailed = false;
       grabKeyboard();
@@ -1714,7 +2283,10 @@ private:
          return;
       }
       std::string error;
-      if (!mDelegate.guiSavePreset(name, error)) {
+      const bool saved = mSaveKind == PresetKind::Scene || !mSpec.host
+                            ? mDelegate.guiSavePreset(name, error)
+                            : mSpec.host->windowSavePresetAs(mSaveKind, mSaveSlot, name, error);
+      if (!saved) {
          mSaveStatus = error.empty() ? std::string("Could not save the preset.") : error;
          mSaveFailed = true;
          mDirty = true;
@@ -1737,11 +2309,15 @@ private:
       cairo_stroke(cr);
 
       setColor(cr, mSpec.theme.accent);
-      drawText(cr, p.x + 20, p.y + 26, "SAVE PRESET", 11, true, Align::Left);
+      static const char *const kTitles[kNumPresetKinds] = {"SAVE SCENE", "SAVE PATCH",
+                                                           "SAVE FX CHAIN", "SAVE EFFECT"};
+      static const char *const kWhat[kNumPresetKinds] = {
+         "sound, patterns and effects", "sound and patterns, without the effects",
+         "the effects alone", "this one effect"};
+      const int k = static_cast<int>(mSaveKind);
+      drawText(cr, p.x + 20, p.y + 26, kTitles[k], 11, true, Align::Left);
       setColor(cr, mSpec.theme.textMute);
-      drawText(cr, p.x + p.w - 20, p.y + 26,
-               hasFolders() ? "to your own preset library" : "to your own preset folder", 9,
-               false, Align::Right);
+      drawText(cr, p.x + p.w - 20, p.y + 26, kWhat[k], 9, false, Align::Right);
 
       const Rect f = saveFieldRect();
       setColor(cr, mSpec.theme.knobFace);
@@ -1762,6 +2338,9 @@ private:
       // for something whose only job is to hold presets.
       drawText(cr, p.x + 20, f.y + f.h + 20,
                !mSaveStatus.empty() ? mSaveStatus.c_str()
+               : mSaveKind != PresetKind::Scene
+                  ? "Type a name, then Enter. It goes on its own shelf unless you type "
+                    "\"Folder/Name\". Esc cancels."
                : hasFolders()
                   ? "Type a name, then Enter. \"Folder/Name\" saves into a folder and makes "
                     "it if it is new. Esc cancels."
@@ -1854,7 +2433,7 @@ private:
       if (mMenuParam < 0)
          return;
       const uint32_t id = static_cast<uint32_t>(mMenuParam);
-      const ParamDesc &d = mSpec.params[id];
+      const ParamDesc d = desc(id);
       const int cur = static_cast<int>(std::floor(mDelegate.guiParamValue(id) + 0.5));
       const int next = std::min(static_cast<int>(d.enumCount) - 1, std::max(0, cur + direction));
       if (next == cur)
@@ -1869,14 +2448,37 @@ private:
    void drawHelpLine(cairo_t *cr) {
       const char *msg = nullptr;
       if (mHover >= 0 && mHover < static_cast<int>(mSpec.paramCount))
-         msg = mSpec.params[mHover].tip;
+         msg = desc(mHover).tip;
       if (!msg && mPaneHover >= 0 && mPaneHover < static_cast<int>(mSpec.paramCount))
-         msg = mSpec.params[mPaneHover].tip;
+         msg = desc(mPaneHover).tip;
       if (!msg && mHoverWidget == Widget::Reset)
          msg = mResetArmed ? "Click again to put every control back to the stock machine. The "
                              "pattern bank, the play mode and the clock are left alone."
                            : "RESET: every control back to the stock machine -- no mods, no "
-                             "modifications, no drive and no delay. Click twice.";
+                             "modifications, no drive, no delay and no effects. Click twice.";
+      if (!msg) {
+         const bool scene = mHoverWidget == Widget::Prev || mHoverWidget == Widget::Name ||
+                            mHoverWidget == Widget::Next || mHoverWidget == Widget::Save;
+         const bool patch = mHoverWidget == Widget::PatchPrev ||
+                            mHoverWidget == Widget::PatchName ||
+                            mHoverWidget == Widget::PatchNext || mHoverWidget == Widget::PatchSave;
+         if (scene && mFxPage)
+            msg = "FX CHAIN: the effects alone. Loading one replaces the chain and leaves the "
+                  "sound and the patterns as they are.";
+         else if (scene)
+            msg = "SCENE: everything -- the sound, the pattern bank and the effects. Loading one "
+                  "replaces all three.";
+         else if (patch)
+            msg = "PATCH: the sound and the pattern bank, without the effects. Loading one keeps "
+                  "the effects you have; any Scene can be loaded as a Patch.";
+      }
+      if (!msg && mFxPage && mFxHoverPreset >= 0)
+         msg = "This strip's effect as a preset of its own. Loading one sets the type and every "
+               "control of the strip, and keeps its place and Position.";
+      if (!msg && mFxPage)
+         msg = "One strip per effect. The arrows move it along the chain, the cross takes it "
+               "out, and ADD puts a new one at the end. The bar's FX CHAIN field saves and loads "
+               "the whole chain.";
       if (!msg) {
          const auto &list = mDelegate.guiPresets();
          const int cur = mDelegate.guiCurrentPreset();
@@ -1954,7 +2556,9 @@ private:
       if (!hasFolders())
          return;
       bool root = false;
-      for (const auto &preset : mDelegate.guiPresets()) {
+      const auto &list = mDelegate.guiPresets();
+      for (int index : presetsOf(mBrowserKind)) {
+         const GuiPreset &preset = list[static_cast<size_t>(index)];
          if (preset.folder.empty()) {
             root = true;
             continue;
@@ -1982,9 +2586,9 @@ private:
    std::vector<int> browserItems() const {
       std::vector<int> out;
       const auto &list = mDelegate.guiPresets();
-      for (size_t i = 0; i < list.size(); ++i)
-         if (mBrowserFolder < 0 || list[i].folder == selectedFolder())
-            out.push_back(static_cast<int>(i));
+      for (int index : presetsOf(mBrowserKind))
+         if (mBrowserFolder < 0 || list[static_cast<size_t>(index)].folder == selectedFolder())
+            out.push_back(index);
       return out;
    }
 
@@ -2030,19 +2634,27 @@ private:
       }
    }
 
-   void openBrowser() {
+   void openBrowser(PresetKind kind, int slot) {
+      mBrowserKind = kind;
+      mBrowserSlot = slot;
+      mBrowserFolder = -1;
       mBrowserOpen = true;
       mBrowserHover = -1;
       mImportOpen = false;
       mBrowserStatus.clear();
       rebuildFolders();
       // Open with the current preset in view, on its own shelf rather than in
-      // the flat list: the folder a preset is in is part of where it is.
-      const int cur = mDelegate.guiCurrentPreset();
+      // the flat list: the folder a preset is in is part of where it is. An
+      // Effect field with nothing loaded opens on its type's shelf.
+      const int cur = currentOf(kind, slot);
       const auto &list = mDelegate.guiPresets();
-      if (hasFolders() && cur >= 0 && cur < static_cast<int>(list.size())) {
-         const auto it =
-            std::find(mFolders.begin(), mFolders.end(), list[static_cast<size_t>(cur)].folder);
+      std::string shelf;
+      if (cur >= 0 && cur < static_cast<int>(list.size()))
+         shelf = list[static_cast<size_t>(cur)].folder;
+      else if (kind == PresetKind::Effect && slot >= 0)
+         shelf = typeShelf(slot);
+      if (hasFolders() && !shelf.empty()) {
+         const auto it = std::find(mFolders.begin(), mFolders.end(), shelf);
          mBrowserFolder = it == mFolders.end() ? -1 : static_cast<int>(it - mFolders.begin());
       }
       const std::vector<int> items = browserItems();
@@ -2205,7 +2817,7 @@ private:
    // never reaches the far end of a seven-way enum without a lot of clicking,
    // and the value the user wants is always visible this way.
    Rect menuPanel() const {
-      const ParamDesc &d = mSpec.params[mMenuParam];
+      const ParamDesc d = desc(mMenuParam);
       const Rect &c = cellRectFor(static_cast<uint32_t>(mMenuParam));
       Rect r;
       r.w = std::max(c.w - 10.0, 96.0);
@@ -2234,7 +2846,7 @@ private:
    int menuItemAt(double x, double y) const {
       if (mMenuParam < 0)
          return -1;
-      const ParamDesc &d = mSpec.params[mMenuParam];
+      const ParamDesc d = desc(mMenuParam);
       for (int i = 0; i < static_cast<int>(d.enumCount); ++i)
          if (menuItemRect(i).contains(x, y))
             return i;
@@ -2247,7 +2859,7 @@ private:
    }
 
    void drawMenu(cairo_t *cr) {
-      const ParamDesc &d = mSpec.params[mMenuParam];
+      const ParamDesc d = desc(mMenuParam);
       const Rect p = menuPanel();
       setColor(cr, mSpec.theme.panelFill);
       roundedRect(cr, p.x, p.y, p.w, p.h, 5);
@@ -2286,7 +2898,14 @@ private:
       cairo_stroke(cr);
 
       setColor(cr, mSpec.theme.accent);
-      drawText(cr, p.x + kBrowserPad, p.y + 24, "PRESETS", 11, true, Align::Left);
+      static const char *const kTitles[kNumPresetKinds] = {"SCENES", "PATCHES AND SCENES",
+                                                           "FX CHAINS", "EFFECTS"};
+      char title[64];
+      if (mBrowserKind == PresetKind::Effect)
+         std::snprintf(title, sizeof(title), "EFFECTS FOR STRIP %d", fxPlaceOfSlot(mBrowserSlot) + 1);
+      else
+         std::snprintf(title, sizeof(title), "%s", kTitles[static_cast<int>(mBrowserKind)]);
+      drawText(cr, p.x + kBrowserPad, p.y + 24, title, 11, true, Align::Left);
       setColor(cr, mSpec.theme.textMute);
       drawText(cr, p.x + p.w - kBrowserPad, p.y + 24,
                browserMaxScroll() > 0 ? "click to load, wheel to scroll, click outside to close"
@@ -2294,7 +2913,7 @@ private:
                9, false, Align::Right);
 
       const auto &list = mDelegate.guiPresets();
-      const int cur = mDelegate.guiCurrentPreset();
+      const int cur = currentOf(mBrowserKind, mBrowserSlot);
 
       // ---- the shelves
       if (hasFolders()) {
@@ -2318,17 +2937,21 @@ private:
                roundedRect(cr, r.x, r.y + 1, r.w, r.h - 2, 3);
                cairo_fill(cr);
             }
-            const char *label = row == 0 ? "All"
-                               : mFolders[static_cast<size_t>(folder)].empty()
-                                  ? "Unfiled"
-                                  : mFolders[static_cast<size_t>(folder)].c_str();
+            // A folder's name is its directory's, whose spaces the file system
+            // side turned into underscores; the shelf shows them as spaces.
+            std::string label = row == 0 ? std::string("All")
+                                : mFolders[static_cast<size_t>(folder)].empty()
+                                   ? std::string("Unfiled")
+                                   : mFolders[static_cast<size_t>(folder)];
+            std::replace(label.begin(), label.end(), '_', ' ');
             setColor(cr, sel ? mSpec.theme.accent : mSpec.theme.text, hot ? 1.0 : 0.8);
-            drawText(cr, r.x + 8, r.y + r.h * 0.5 + 4, label, 10.5, sel, Align::Left);
-            // How many presets are on it, which is the one thing a shelf can
-            // say about itself without being opened.
+            drawText(cr, r.x + 8, r.y + r.h * 0.5 + 4, label.c_str(), 10.5, sel, Align::Left);
+            // How many presets this field lists on it, which is the one thing a
+            // shelf can say about itself without being opened.
             int count = 0;
-            for (const auto &preset : list)
-               if (row == 0 || preset.folder == mFolders[static_cast<size_t>(folder)])
+            for (int index : presetsOf(mBrowserKind))
+               if (row == 0 ||
+                   list[static_cast<size_t>(index)].folder == mFolders[static_cast<size_t>(folder)])
                   ++count;
             char num[12];
             std::snprintf(num, sizeof(num), "%d", count);
@@ -2339,6 +2962,17 @@ private:
 
       // ---- the presets on the shelf
       const std::vector<int> items = browserItems();
+      if (items.empty()) {
+         // No factory set ships for the FX kinds, so an empty list is the
+         // first thing anybody sees there; it says how to fill it.
+         const Rect r = browserItemRect(0);
+         setColor(cr, mSpec.theme.textMute);
+         drawText(cr, r.x + 8, r.y + r.h * 0.5 + 4,
+                  mBrowserKind == PresetKind::Effect
+                     ? "No effect presets yet. SAVE beside a strip's preset field makes one."
+                     : "Nothing here yet. SAVE beside this field makes the first one.",
+                  10, false, Align::Left);
+      }
       for (size_t k = 0; k < items.size(); ++k) {
          if (!browserItemVisible(static_cast<int>(k)))
             continue;
@@ -2628,7 +3262,7 @@ private:
                mHeldLevel[k] = mDelegate.guiParamValue(st.level);
                mHeld[k] = 1;
             }
-            setParamNow(st.level, mSpec.params[st.level].min);
+            setParamNow(st.level, desc(st.level).min);
          } else if (mHeld[k]) {
             setParamNow(st.level, mHeldLevel[k]);
             mHeld[k] = 0;
@@ -2740,7 +3374,7 @@ private:
                         : (hovered ? mSpec.theme.text : mSpec.theme.textDim));
       drawText(cr, s.x + s.w * 0.5, s.y + 12.0, label, 9.0, true, Align::Center);
 
-      const ParamDesc &level = mSpec.params[st.level];
+      const ParamDesc level = desc(st.level);
       const double raw = mDelegate.guiParamValue(st.level);
       drawFader(cr, faderRect(i), normalised(level, raw),
                 hovered && mMixerHit.kind == HitFader, !held);
@@ -2766,10 +3400,10 @@ private:
       }
 
       if (hasParam(st.pan))
-         drawSlider(cr, sliderRect(i, 0), "P", mSpec.params[st.pan],
+         drawSlider(cr, sliderRect(i, 0), "P", desc(st.pan),
                     mDelegate.guiParamValue(st.pan), hovered && mMixerHit.kind == HitPan, !held);
       if (hasParam(st.width))
-         drawSlider(cr, sliderRect(i, 1), "W", mSpec.params[st.width],
+         drawSlider(cr, sliderRect(i, 1), "W", desc(st.width),
                     mDelegate.guiParamValue(st.width), hovered && mMixerHit.kind == HitWidth,
                     !held);
 
@@ -2804,10 +3438,10 @@ private:
       const uint32_t id = hitParam(mMixerHit);
       if (hasParam(id)) {
          char value[128];
-         if (!paramValueToText(mSpec.params[id], mDelegate.guiParamValue(id), value,
+         if (!paramValueToText(desc(id), mDelegate.guiParamValue(id), value,
                                sizeof(value)))
             std::snprintf(value, sizeof(value), "--");
-         std::snprintf(right, sizeof(right), "%s   %s", mSpec.params[id].name, value);
+         std::snprintf(right, sizeof(right), "%s   %s", desc(id).name, value);
       } else if (holdsActive()) {
          std::snprintf(right, sizeof(right), "%s", "M and S are not saved with the preset");
       } else {
@@ -2866,7 +3500,7 @@ private:
          clearHolds();
 
       if (button == kButtonRight || doubleClick) {
-         setParamNow(id, mSpec.params[id].def);
+         setParamNow(id, desc(id).def);
          mLastClickParam = -1;
          mDirty = true;
          return;
@@ -2881,7 +3515,7 @@ private:
       mDragStartX = x;
       mDragStartY = y;
       mDragStartValue = mDelegate.guiParamValue(id);
-      const ParamDesc &d = mSpec.params[id];
+      const ParamDesc d = desc(id);
       const double travel = mDragHoriz ? sliderRect(h.strip, h.kind == HitPan ? 0 : 1).w
                                        : kFaderH - kHandleH;
       mDragUnitsPerPx = (d.max - d.min) / std::max(1.0, travel);
@@ -3617,7 +4251,7 @@ private:
       drawTriangle(cr, r.x + r.w - 9, r.y + r.h * 0.5, 7, 1);
 
       char text[64];
-      if (!paramValueToText(mSpec.params[id], mDelegate.guiParamValue(id), text, sizeof(text)))
+      if (!paramValueToText(desc(id), mDelegate.guiParamValue(id), text, sizeof(text)))
          std::snprintf(text, sizeof(text), "--");
       setColor(cr, t.text);
       drawText(cr, r.x + r.w * 0.5, r.y + r.h - 6.0, text, 9.5, false, Align::Center);
@@ -3817,7 +4451,7 @@ private:
          if (!r.contains(x, y))
             continue;
          if (button == kButtonRight) {
-            setParamThroughHost(id, mSpec.params[id].def);
+            setParamThroughHost(id, desc(id).def);
             return true;
          }
          if (button == kWheelUp || button == kWheelDown) {
@@ -3844,6 +4478,99 @@ private:
       return true; // inside the panel but on nothing: swallow it
    }
 
+   // Whether the pointer is over one of the FX page's own controls -- the
+   // ADD button, the scrollbar or one of the three buttons on a strip. None of
+   // them is a parameter, so the shared hover machinery cannot see them and the
+   // page has to ask for its own repaint when the pointer reaches one.
+   bool fxOwnHit(double x, double y) const {
+      if (mFxAddRect.contains(x, y))
+         return true;
+      if (fxMaxScroll() > 0 && fxScrollTrack().contains(x, y))
+         return true;
+      for (const FxRow &row : mFxRows)
+         if (row.up.contains(x, y) || row.down.contains(x, y) || row.remove.contains(x, y) ||
+             row.preset.contains(x, y) || row.presetSave.contains(x, y))
+            return true;
+      return false;
+   }
+
+   // The FX page's own controls: ADD, and the three buttons on a strip. The
+   // strips' parameters are ordinary cells and are handled further down, so a
+   // click the page does not recognise falls through to them.
+   bool onFxDown(double x, double y, unsigned button) {
+      if (!mFxPage)
+         return false;
+      // The wheel scrolls the list -- unless it is over a knob, where it has
+      // always stepped that knob.
+      if (button == kWheelUp || button == kWheelDown) {
+         if (cellAt(x, y) >= 0)
+            return false;
+         fxScrollTo(fxScroll() + (button == kWheelUp ? -1 : 1));
+         return true;
+      }
+      if (button != kButtonLeft)
+         return false;
+      if (mFxAddRect.contains(x, y)) {
+         if (fxUsed() < kNumFxSlots)
+            mSpec.host->windowFxAdd();
+         mDirty = true;
+         return true;
+      }
+      if (fxMaxScroll() > 0 && fxScrollTrack().contains(x, y)) {
+         const Rect thumb = fxScrollThumb();
+         if (thumb.contains(x, y)) {
+            mFxScrollDrag = true;
+            mFxScrollGrab = y - thumb.y;
+         } else {
+            fxScrollTo(fxScroll() + (y < thumb.y ? -fxRows() : fxRows()));
+         }
+         return true;
+      }
+      for (const FxRow &row : mFxRows) {
+         if (row.slot < 0)
+            continue;
+         if (row.up.contains(x, y)) {
+            if (row.pos > 0)
+               mSpec.host->windowFxMove(row.slot, -1);
+            mDirty = true;
+            return true;
+         }
+         if (row.down.contains(x, y)) {
+            if (row.pos + 1 < fxUsed())
+               mSpec.host->windowFxMove(row.slot, 1);
+            mDirty = true;
+            return true;
+         }
+         if (row.remove.contains(x, y)) {
+            mSpec.host->windowFxRemove(row.slot);
+            mDirty = true;
+            return true;
+         }
+         if (row.preset.contains(x, y)) {
+            openBrowser(PresetKind::Effect, row.slot);
+            return true;
+         }
+         if (row.presetSave.contains(x, y)) {
+            openSaveDialog(PresetKind::Effect, row.slot);
+            return true;
+         }
+      }
+      return false;
+   }
+
+   // The chain's scrollbar thumb, dragged. Same bargain as the step grid's:
+   // the grab offset is kept so the thumb does not jump under the pointer.
+   void onFxScrollMotion(double y) {
+      const Rect track = fxScrollTrack();
+      const Rect thumb = fxScrollThumb();
+      const int used = fxUsed(), rows = fxRows();
+      if (used <= rows || track.h <= thumb.h)
+         return;
+      const double t = (y - mFxScrollGrab - track.y) / (track.h - thumb.h);
+      const double unit = t < 0.0 ? 0.0 : (t > 1.0 ? 1.0 : t);
+      fxScrollTo(static_cast<int>(std::lround(unit * (used - rows))));
+   }
+
    // A parameter written as a complete gesture, so the host records it as one
    // edit rather than as a value that appeared from nowhere.
    void setParamThroughHost(uint32_t id, double value) {
@@ -3854,7 +4581,11 @@ private:
 
    // Returns true when the click was the pane's.
    bool onSeqDown(double x, double y, unsigned button) {
-      if (!hasPattern())
+      // The grid is not on the FX page, so it does not get the click. Its
+      // rects are cleared when that page is laid out, and this is the second
+      // lock on the same door: a page that forgets to clear one must not end up
+      // editing steps underneath its own controls.
+      if (mFxPage || !hasPattern())
          return false;
       if (onBankDown(x, y, button))
          return true;
@@ -4074,8 +4805,6 @@ private:
 
    // ----------------------------------------------------------------- events
 
-   // `None` is taken: X11 defines it as a macro.
-   enum class Widget { NoWidget, Prev, Next, Name, Save, Mixer, Hold, Advanced, Reset };
 
 #if defined(_WIN32)
    void pumpEvents() {
@@ -4395,7 +5124,7 @@ private:
 
             const int item = browserItemAt(x, y);
             if (item >= 0)
-               loadPreset(item);
+               loadPreset(mBrowserKind, mBrowserSlot, item);
             if (item >= 0 || !browserPanel().contains(x, y))
                mBrowserOpen = false;
          }
@@ -4417,6 +5146,15 @@ private:
          return;
       }
 
+      // The FX page's own buttons, before the parameters -- and before the
+      // wheel, which is the page's scroll wherever it is not over a knob. They
+      // sit on top of nothing, but a click on one must not fall through to the
+      // strip behind it.
+      if (onFxDown(x, y, be.button)) {
+         mDirty = true;
+         return;
+      }
+
       if (be.button == kWheelUp || be.button == kWheelDown) {
          const int id = cellAt(x, y);
          if (id >= 0)
@@ -4426,19 +5164,35 @@ private:
       }
 
       if (mPrevRect.contains(x, y)) {
-         stepPreset(-1);
+         stepPreset(barKind(), -1, -1);
          return;
       }
       if (mNextRect.contains(x, y)) {
-         stepPreset(1);
+         stepPreset(barKind(), -1, 1);
          return;
       }
       if (mSaveRect.contains(x, y)) {
-         openSaveDialog();
+         openSaveDialog(barKind(), -1);
          return;
       }
       if (mNameRect.contains(x, y)) {
-         openBrowser();
+         openBrowser(barKind(), -1);
+         return;
+      }
+      if (mPatchPrevRect.contains(x, y)) {
+         stepPreset(PresetKind::Patch, -1, -1);
+         return;
+      }
+      if (mPatchNextRect.contains(x, y)) {
+         stepPreset(PresetKind::Patch, -1, 1);
+         return;
+      }
+      if (mPatchSaveRect.contains(x, y)) {
+         openSaveDialog(PresetKind::Patch, -1);
+         return;
+      }
+      if (mPatchNameRect.contains(x, y)) {
+         openBrowser(PresetKind::Patch, -1);
          return;
       }
       if (be.button == kButtonLeft && hasMixer() && mMixerRect.contains(x, y)) {
@@ -4447,6 +5201,10 @@ private:
       }
       if (be.button == kButtonLeft && hasAdvanced() && mAdvancedRect.contains(x, y)) {
          toggleAdvanced();
+         return;
+      }
+      if (be.button == kButtonLeft && mFxRect.contains(x, y)) {
+         toggleFxPage();
          return;
       }
       if (be.button == kButtonLeft && mResetRect.contains(x, y)) {
@@ -4471,7 +5229,7 @@ private:
       const int id = cellAt(x, y);
       if (id < 0)
          return;
-      const ParamDesc &d = mSpec.params[static_cast<uint32_t>(id)];
+      const ParamDesc d = desc(static_cast<uint32_t>(id));
 
       // Right-click and double-click both mean "put it back where it was".
       const bool doubleClick =
@@ -4540,7 +5298,7 @@ private:
             keep = keep || mSpec.resetKeep[k] == i;
          if (keep)
             continue;
-         const double def = mSpec.params[i].def;
+         const double def = desc(i).def;
          if (mDelegate.guiParamValue(i) == def)
             continue;
          mDelegate.guiBeginEdit(i);
@@ -4554,6 +5312,7 @@ private:
       mSeqDragMode = -1;
       mSeqPaintAnchor = -1;
       mSeqScrollDrag = false;
+      mFxScrollDrag = false;
       if (mDrag >= 0) {
          mDelegate.guiEndEdit(static_cast<uint32_t>(mDrag));
          mDrag = -1;
@@ -4564,6 +5323,19 @@ private:
    }
 
    void onMotion(double x, double y, bool shift) {
+      // The FX page's buttons highlight under the pointer for the same
+      // reason the grid's do: they are not parameters.
+      if (mFxPage) {
+         const bool was = fxOwnHit(mMouseX, mMouseY);
+         mMouseX = x;
+         mMouseY = y;
+         if (was || fxOwnHit(x, y))
+            mDirty = true;
+         mFxHoverPreset = -1;
+         for (const FxRow &row : mFxRows)
+            if (row.preset.contains(x, y) || row.presetSave.contains(x, y))
+               mFxHoverPreset = row.slot;
+      }
       // Kept for the step grid's own buttons, which highlight under the
       // pointer and are not parameters, so the shared hover machinery does not
       // know about them.
@@ -4575,6 +5347,10 @@ private:
          if (wasOver || mSeqRect.contains(x, y) || mBankRect.contains(x, y))
             mDirty = true;
       }
+      if (mFxScrollDrag) {
+         onFxScrollMotion(y);
+         return;
+      }
       if (mSeqScrollDrag) {
          onSeqScrollMotion(x);
          return;
@@ -4585,7 +5361,7 @@ private:
       }
       if (mDrag >= 0) {
          const uint32_t id = static_cast<uint32_t>(mDrag);
-         const ParamDesc &d = mSpec.params[id];
+         const ParamDesc d = desc(id);
          const double span = d.max - d.min;
          const double fine = shift ? 0.2 : 1.0;
          // Knobs are dragged vertically at a fixed rate; the mixer's faders and
@@ -4664,10 +5440,20 @@ private:
          w = Widget::Name;
       else if (mSaveRect.contains(x, y))
          w = Widget::Save;
+      else if (mPatchPrevRect.contains(x, y))
+         w = Widget::PatchPrev;
+      else if (mPatchNextRect.contains(x, y))
+         w = Widget::PatchNext;
+      else if (mPatchNameRect.contains(x, y))
+         w = Widget::PatchName;
+      else if (mPatchSaveRect.contains(x, y))
+         w = Widget::PatchSave;
       else if (hasMixer() && mMixerRect.contains(x, y))
          w = Widget::Mixer;
       else if (hasAdvanced() && mAdvancedRect.contains(x, y))
          w = Widget::Advanced;
+      else if (mFxRect.contains(x, y))
+         w = Widget::Fx;
       else if (mResetRect.contains(x, y))
          w = Widget::Reset;
       else if (holdsActive() && mHoldRect.contains(x, y))
@@ -4731,7 +5517,7 @@ private:
          stepTable(direction);
          return;
       }
-      const ParamDesc &d = mSpec.params[id];
+      const ParamDesc d = desc(id);
       const double span = d.max - d.min;
       double v = mDelegate.guiParamValue(id);
       if (isStepped(d))
@@ -4745,17 +5531,19 @@ private:
       mDirty = true;
    }
 
-   void stepPreset(int direction) {
-      const int n = static_cast<int>(mDelegate.guiPresets().size());
+   // The arrows of a field walk the presets that field lists, in library
+   // order, round the ends.
+   void stepPreset(PresetKind kind, int slot, int direction) {
+      const std::vector<int> items = presetsOf(kind);
+      const int n = static_cast<int>(items.size());
       if (n <= 0)
          return;
-      int cur = mDelegate.guiCurrentPreset();
-      if (cur < 0)
-         cur = direction > 0 ? -1 : 0;
-      int next = (cur + direction) % n;
-      if (next < 0)
-         next += n;
-      loadPreset(next);
+      const auto at = std::find(items.begin(), items.end(), currentOf(kind, slot));
+      int pos = at == items.end() ? (direction > 0 ? -1 : 0) : static_cast<int>(at - items.begin());
+      pos = (pos + direction) % n;
+      if (pos < 0)
+         pos += n;
+      loadPreset(kind, slot, items[static_cast<size_t>(pos)]);
       mDirty = true;
    }
 
@@ -4767,6 +5555,25 @@ private:
    // resizes first and asks the host second: a host that refuses the request
    // leaves the editor clipped, which is visibly wrong, where a window that
    // never relaid itself would be wrong and look fine.
+   // The FX page is a view of the same parameters, so switching it is a
+   // relayout and a resize and nothing else: nothing is committed, nothing is
+   // lost, and the sequencer keeps playing underneath.
+   void toggleFxPage() {
+      mFxPage = !mFxPage;
+      closeEntry();
+      closeMenu();
+      mBrowserOpen = false;
+      mMixerOpen = false;
+      mTableOpen = false;
+      mHover = -1;
+      mHoverWidget = Widget::NoWidget;
+      mDrag = -1;
+      buildLayout();
+      applySize();
+      if (mSpec.host)
+         mSpec.host->windowRequestResize(pixelW(), pixelH());
+   }
+
    void toggleAdvanced() {
       if (!hasAdvanced())
          return;
@@ -4791,7 +5598,7 @@ private:
    // whatever thread the host chose and relaying out a window is not a thing to
    // do from there.
    void syncAdvanced() {
-      if (!hasAdvanced())
+      if (!hasAdvanced() || mFxPage)
          return;
       const bool want = mSpec.host->windowAdvancedOpen();
       if (want == mAdvancedOpen)
@@ -4807,9 +5614,12 @@ private:
       mSpec.host->windowRequestResize(pixelW(), pixelH());
    }
 
-   void loadPreset(int index) {
+   void loadPreset(PresetKind kind, int slot, int index) {
       clearHolds();
-      mDelegate.guiLoadPreset(index);
+      if (kind == PresetKind::Scene || !mSpec.host)
+         mDelegate.guiLoadPreset(index);
+      else
+         mSpec.host->windowLoadPresetAs(index, kind, slot);
       mDirty = true;
    }
 
@@ -4877,8 +5687,36 @@ private:
    std::vector<Cell> mCells;
    std::vector<Rect> mCellRects;
    Rect mPrevRect, mNameRect, mNextRect, mSaveRect, mVersionRect;
+   Rect mPatchPrevRect, mPatchNameRect, mPatchNextRect, mPatchSaveRect;
+   // Which field the browser and the save dialog are serving: its kind, and
+   // for an Effect the slot.
+   PresetKind mBrowserKind = PresetKind::Scene;
+   int mBrowserSlot = -1;
+   PresetKind mSaveKind = PresetKind::Scene;
+   int mSaveSlot = -1;
    Rect mMixerRect, mHoldRect, mAdvancedRect;
    Rect mResetRect;
+   // The FX page: whether it is up, its switch on the bar, and one strip
+   // per effect in the chain. The page is not persisted -- it is a view, not
+   // part of the patch, and a window that reopened on a page it was not saved
+   // on would be a surprise rather than a convenience.
+   bool mFxPage = false;
+   Rect mFxRect;
+   std::vector<FxRow> mFxRows;
+   uint32_t mFxSignature = 0;
+   Rect mFxAddRect{0, 0, 0, 0};
+   Rect mFxFooterRect{0, 0, 0, 0};
+   // The strip whose preset field is under the pointer, for the help line, or
+   // -1.
+   int mFxHoverPreset = -1;
+   Rect mFxListRect{0, 0, 0, 0};
+
+   // Where a long chain is scrolled to, in effects, and the thumb drag that
+   // moves it. The window's, not the plugin's, for the same reason the grid's
+   // scroll is.
+   int mFxScroll = 0;
+   bool mFxScrollDrag = false;
+   double mFxScrollGrab = 0.0;
    // Whether RESET is waiting for the click that confirms it.
    bool mResetArmed = false;
    int mBarY = 0, mHelpY = 0;

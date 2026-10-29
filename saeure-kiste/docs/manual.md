@@ -8,7 +8,7 @@ subtitle: CLAP and VST3 instrument for Linux and Windows
 
 *A monophonic acid bass synthesiser. Linux and Windows, CLAP and VST3.*
 
-Version 0.16.0
+Version 0.17.0
 
 ---
 
@@ -23,8 +23,10 @@ machine every acid record was made on — as its February 1982 service notes
 draw it: a relaxation-oscillator VCO, a four-stage transistor
 ladder filter, a VCA, a decay-only envelope, an accent circuit, and a slide lag
 on the pitch CV. Two stages are added that the machine does not have — a drive
-stage of seven models after the filter, and a delay after that — and both are
-marked as such everywhere they appear.
+stage of ten models after the filter, and a delay after that — and both are
+marked as such everywhere they appear. After all of it there is an
+**effect chain** of up to sixteen inserts, which can also sit between the
+oscillator and the filter -- §9.
 
 The oscillator has additions of its own, for the experimental end of the
 instrument: five more waveforms — sine, triangle, pulse, wavetable and noise —
@@ -39,12 +41,13 @@ It plays two ways: from the host, or from its own sequencer, which runs 1 to 128
 steps and draws on a bank of sixty-four patterns.
 
 It also models a well-known hardware **modification** of the same machine, from
-its author's own published manual — see §10. Every one of those controls
+its author's own published manual — see §11. Every one of those controls
 defaults to the stock circuit, so the plugin is the original until you ask it
 not to be.
 
-Seventy-four parameters, thirty presets, and every one of the parameters can be
-automated and modulated from the host.
+Two hundred and fifty-two parameters -- seventy-four on the panels and the rest
+for the sixteen effect slots -- thirty presets, and every one of the parameters
+can be automated and modulated from the host.
 
 Not affiliated with or endorsed by Roland Corporation. *TB-303* is their
 trademark, used here only to name what was modelled. Not affiliated with or
@@ -105,7 +108,7 @@ with, laid out in the order the machine prints them. Everything else is an
 addition: the VCO panel's Table and oscillator display sit beside the
 originals and are marked **(added)**, as is Slide Time, the VCF Mod, Drive, Delay, Unison,
 Vibrato and Mods panels are additions entire and say so in their headings, and
-the controls of the modification are gathered in §10.
+the controls of the modification are gathered in §11.
 
 **Every knob glides.** A turned knob, or a host's automation, reaches the sound
 over a few milliseconds rather than in one step — 63 % of the way in 20 ms —
@@ -240,10 +243,10 @@ with one voice, there is one filter and the output is mono.
 
 | Control | Range | Default | |
 |---|---|---|---|
-| **Cutoff** | 30 Hz – 5 kHz | 500 Hz | VR3. The centre is 500 Hz because the factory alignment procedure puts it there: with cutoff centred and resonance full, TM3 is trimmed until the filter rings at 2 ms ± 0.5 ms, and 2 ms is 500 Hz. The machine's own travel is 100 Hz – 2.5 kHz; the wider range is the modification's — see §10. |
+| **Cutoff** | 30 Hz – 5 kHz | 500 Hz | VR3. The centre is 500 Hz because the factory alignment procedure puts it there: with cutoff centred and resonance full, TM3 is trimmed until the filter rings at 2 ms ± 0.5 ms, and 2 ms is 500 Hz. The machine's own travel is 100 Hz – 2.5 kHz; the wider range is the modification's — see §11. |
 | **Resonance** | 0 – 100 % | 35 % | VR4. It stops just short of oscillation, because the machine does — the ringing waveform printed for that alignment check dies away. A silverbox that sustains a tone is a modified one. |
 | **Env Mod** | 0 – 100 % | 50 % | VR5, and the one control that does two things at once. See §4. |
-| **Decay** | 30 ms – 3 s | 600 ms | VR6. The envelope has no attack worth the name and no sustain at all — it is triggered and it falls. An accented note ignores this knob. The schematic's own range is 200 ms – 2.5 s; the wider one is the modification's — see §10. |
+| **Decay** | 30 ms – 3 s | 600 ms | VR6. The envelope has no attack worth the name and no sustain at all — it is triggered and it falls. An accented note ignores this knob. The schematic's own range is 200 ms – 2.5 s; the wider one is the modification's — see §11. |
 | **Accent** | 0 – 100 % | 60 % | VR7, and the sixth knob on the machine's own panel. How much louder, brighter and shorter an accented note is. What an accent *is* — which velocities count as one, how long it lingers, how a run of them stacks up — is on the MODS panel behind ADVANCED. |
 
 ### VCF Mod *(the whole panel is added)*
@@ -251,13 +254,13 @@ with one voice, there is one filter and the output is mono.
 ![The VCF MOD panel, in the half behind ADVANCED.](images/panel-vcfmod.png)
 
 Three controls that reach the filter and that the machine does not have. The
-last two are the hardware modification's and are described in §10.
+last two are the hardware modification's and are described in §11.
 
 | Control | Range | Default | |
 |---|---|---|---|
 | **Tracking** | 0 – 200 % | 0 % | Filter key follow. The machine has **none**: its pitch CV reaches the oscillator and stops, so a note two octaves up meets the same filter as the root. 0 % is the machine, 100 % is one-for-one, and past that the filter climbs faster than the note. |
-| **Overdrive** | −60 – +36.5 dB | 0 dB | The oscillator's level into the filter. See §10. |
-| **Filter FM** | 0 – 100 % | 0 % | The amplifier's output back into the filter frequency, at audio rate. See §10. |
+| **Overdrive** | −60 – +36.5 dB | 0 dB | The oscillator's level into the filter. See §11. |
+| **Filter FM** | 0 – 100 % | 0 % | The amplifier's output back into the filter frequency, at audio rate. See §11. |
 
 ### Slide
 
@@ -266,7 +269,7 @@ last two are the hardware modification's and are described in §10.
 
 | Control | Range | Default | |
 |---|---|---|---|
-| **Slide Time** *(added)* | 10 – 360 ms | 60 ms | Fixed on the hardware by C35 (0.22 µF) and its resistor network; a control here because the notes now come from a host. 60 ms is where the original sits, and the travel past 300 ms is the modification's — see §10. |
+| **Slide Time** *(added)* | 10 – 360 ms | 60 ms | Fixed on the hardware by C35 (0.22 µF) and its resistor network; a control here because the notes now come from a host. 60 ms is where the original sits, and the travel past 300 ms is the modification's — see §11. |
 
 ### Drive *(the whole panel is added)*
 
@@ -901,10 +904,42 @@ Measured over 400 seeds: the root is **44 %** of all generated notes, rests are
 
 Presets are text files in your own preset directory
 (`$XDG_CONFIG_HOME/SaeureKiste/presets`, or `%APPDATA%\SaeureKiste\presets` on
-Windows), and the twenty-seven factory presets are compiled into the plugin.
-The browser opens by clicking the preset name on the bar.
+Windows), and the thirty factory presets are compiled into the plugin.
 
-![The preset bar: the two arrows step through the library, the name opens the browser, SAVE writes a new one, ADVANCED opens the lower half of the window, and RESET puts every control back to the stock machine.](images/preset-bar.png)
+![The preset bar: SCENE and PATCH, each with arrows that step through its presets, a name that opens the browser and its own SAVE; then ADVANCED, RESET and the FX page.](images/preset-bar.png)
+
+### Four kinds of preset
+
+A preset is one of four kinds, and the kinds differ in what loading one
+replaces:
+
+| Kind | Holds | Loading it replaces | Where |
+|---|---|---|---|
+| **Scene** | the sound, the pattern bank and the effects | everything | the SCENE field on the bar |
+| **Patch** | the sound and the pattern bank | the sound and the patterns -- the effects stay as they are | the PATCH field beside it |
+| **FX chain** | the effects and the two crossovers | the effects -- the sound and the patterns stay | the FX CHAIN field on the FX page (§9) |
+| **Effect** | one effect: its type and every control on its strip | that one strip -- its place in the chain and its Position stay | the PRESET field on every strip (§9) |
+
+So a Scene is a Patch and an FX chain at once, and the two can be swapped
+independently: keep the effects and try another line under them with PATCH, or
+keep the line and try other effects with FX CHAIN. Every factory preset is a
+Scene, and every Scene can be loaded as a Patch -- the PATCH browser lists them
+all -- which is how a factory line goes under effects of your own.
+
+Each field has its own arrows, which step through the presets of its kind, its
+own browser, opened by clicking its name, and its own SAVE. A field shows the
+preset it came from, with a star once something it holds has been changed by
+hand; loading a Scene fills SCENE, PATCH and FX CHAIN at once.
+
+**SAVE** puts a Scene in your library's root unless you type a folder in front
+of the name, and the other kinds on shelves of their own: *Patches*, *FX
+Chains*, and one per effect type for Effects -- *Delay Effects*, *Filter
+Effects* -- so the browser groups them by what they are. Typing `Folder/Name`
+saves anywhere, for any kind. What kind a file is lives in the file, not in its
+folder, so a preset moved to another folder or handed over in a pack still
+loads as what it is.
+
+### The browser
 
 ![The browser. The folders are down the left; the count beside each is how many presets it holds.](images/preset-browser.png)
 
@@ -1042,7 +1077,184 @@ to start if you want to hear the plugin play itself:
 | **Teeth** | *Beasty.* 92 % resonance, Acc Sweep at 4.5 octaves, the drive at 85 % and the ladder driven half again as hard as the circuit drives it. Almost every step accented, so with Acc Build at 85 % the accent circuit never empties and the whole bar climbs. |
 | **Basement** | *Dark.* The square an octave down, cutoff almost shut, a decay long enough that the filter never finishes closing. Minor seconds and tritones, seven notes in sixteen steps, and Acc Decay at 600 ms so an accent swells instead of stabbing. |
 
-## 9. The window
+## 9. The FX
+
+![The FX page with three effects: a Saturator in front of the ladder, a Filter after the amplifier, and a Reverb on the master bus. Each strip has its own PRESET field; ADD EFFECT and the two crossovers are underneath, and the bar holds the FX CHAIN field.](images/window-fx.png)
+
+An effect chain of up to sixteen inserts, and the one stage of this instrument
+that is not the machine, not a model of it, and not trying to be. It exists
+because the whole point of the silverbox is what the oscillator does *into* the
+ladder, and that is only reachable if something can be put between the two.
+
+The **FX** button on the preset bar switches the window to the page the effects
+are edited on, and back. The page replaces the panels and the grid rather than
+sitting under them: a strip of controls wants the whole window, and a strip is
+exactly one row of cells, so a slot holds the same knobs and chips a panel does.
+The sequencer keeps playing while the page is up.
+
+**The page shows the effects you have, not the slots the plugin could hold.** An
+empty chain is one line of text, with **ADD EFFECT** and the two band crossovers
+in the row under it; each ADD puts
+another strip on the page, at the end of the chain where you can hear it before
+it is configured, and the window grows to fit. The cross at the right-hand end
+of a strip takes that effect out and moves the ones behind it up. There is no
+undo for a removed strip -- its settings go with it.
+
+**The arrows move an effect, settings and all.** The two chevrons on a strip
+send it one place earlier or later in the chain, so putting the same delay
+before the filter instead of after it is two clicks rather than retyping a
+delay. The number at the left-hand end is the strip's place in the chain, and it
+moves with the effect. An automation lane belongs to a place in the chain, not
+to an effect, so a lane drawn for strip 3 stays with strip 3 when the effect on
+it moves: build the chain first, then automate it.
+
+**The page scrolls.** Past five strips the window stops growing and the list
+scrolls instead, with the wheel or the bar at the right-hand edge; the strips
+that are off the page are still in the chain and still running. Sixteen is the
+most a chain can hold, and the ADD button says so when it is reached.
+
+**The page is never shorter than the Type list.** Twenty entries is a long
+list, and a window only as tall as the chain it holds would clip it -- so the
+page keeps the height that list needs even when the chain is empty. Opening
+Type on a strip low down flips the list above the strip rather than off the
+bottom.
+
+### Where a slot sits
+
+Every slot has a **Position**, and it is the reason there are three buses
+rather than one chain at the end:
+
+| Position | Where | What it is for |
+|---|---|---|
+| **Pre** | Between the oscillator and the ladder | Shaping the wave the filter is about to be asked to track. A bandpass, a wavefolder or a saturator here is a different instrument from the same effect afterwards, because the ladder's own resonance and saturation respond to what arrives. |
+| **Post** | After the amplifier's drive stage | What a pedalboard after the machine would do: the note is finished, and the slot shapes the finished note. |
+| **Master** | After the built-in delay, at the very end | The last thing in the box. This is where a limiter, a final EQ or a reverb belongs. |
+
+**Pre and Post are different sounds; Post and Master are the same sound until
+the delay is switched on**, because the delay is the only thing between them.
+That is not a limitation, it is what the two names mean: Post is the end of the
+instrument, Master is the end of everything including the unit's own delay.
+
+Slots run in the order the page shows within the bus they chose, so a set of
+them reads down the page: the first strip before the second, whatever buses
+they are on.
+
+**Pre is stereo even when the instrument is not.** With one unison voice there
+is one ladder, so what a Pre slot sends into it is the middle of its two sides.
+An effect that treats both sides alike is unaffected by that; a ping-pong delay
+or a stereo widener in front of the ladder is heard folded to mono, with every
+echo in it. With unison spreading the voices, each side has a ladder of its own
+and Pre is as wide as everything after it.
+
+### The six controls every slot has
+
+| Control | Range | Default | |
+|---|---|---|---|
+| **Type** | nineteen effects, or Off | Off | Which effect the slot runs. Picking one rewrites what its letters mean and puts them at that effect's defaults. |
+| **Position** | Pre, Post, Master | Pre | Above. A slot added with ADD EFFECT starts on Master. |
+| **Band** | Full, Low, Mid, High, Low+Mid, Mid+High | Full | Which part of the spectrum the slot processes. The split is flat -- the bands sum back to what went in -- so a band split changes no level. |
+| **Bypass** | Off, On | Off | Takes the slot out without losing its settings. It fades rather than cuts. |
+| **Mix** | 0 – 100 % | 100 % | How much of the slot's output is heard. A delay slot *adds* its echoes to the input rather than replacing it, so this is the level of the echoes. |
+| **A – F** | *from the type* | *from the type* | Six letters whose name, range, default and unit all come from the slot's Type. |
+
+The letters are why the page can hold nineteen effects with only six columns of
+controls: a slot is six general-purpose controls that take their meaning from
+the type. The same slot shows **Model, Drive, Bias, Tone, Output** as a
+Saturator and **Low, Mid, Mid Freq, Mid Q, High, Tilt** as an EQ, and the host
+shows the same names. A letter a type does not use is dimmed and does nothing
+rather than disappearing.
+
+To the host every letter runs from 0 to 1 whatever the type, because a host
+expects a parameter's range never to change; the value it displays is in the
+type's own units. An automation lane drawn for a letter therefore keeps its
+shape when the type changes, and means something else under the new type.
+
+### The types
+
+Every letter glides over a few milliseconds like the knobs on the panels, so a
+moved control or an automation lane does not click. A choice -- a model, a
+mode, a sync value -- switches at once.
+
+| Type | Letters | |
+|---|---|---|
+| **Saturator** | Model, Drive, Bias, Tone, Output | The drive stage's ten models with a tone control after them and a DC blocker, as an insert. |
+| **Clipper** | Drive, Knee, Ceiling | A gain into a clipper whose corner is adjustable from a hard edge to a soft one, oversampled. |
+| **Wavefolder** | Drive, Bias, Shape, Output | Folds the wave back on itself; Bias moves where the fold happens, so it folds asymmetrically. Oversampled. |
+| **Bitcrush** | Bits, Rate, Output | Bit depth and sample rate, the second of them down to a hundred hertz. Its aliasing is the effect, so it is not oversampled. |
+| **Filter** | Mode, Cutoff, Reso, Env, Env Decay, Gain | A plain state-variable filter -- twelve and twenty-four dB low/high pass, band pass, notch and peak -- with an envelope of its own, started by every note. Gain is the level after the filter, or the bell's gain in Peak mode. |
+| **EQ** | Low, Mid, Mid Freq, Mid Q, High, Tilt | Three bands and a tilt. Flat at its defaults. |
+| **Compressor** | Threshold, Ratio, Attack, Release, Knee, Makeup | A feed-forward compressor with a soft knee. |
+| **Transient** | Attack, Sustain, Speed, Output | Shapes the front of a note and the tail after it, from -100 % to +100 % each. |
+| **Gate** | Mode, Threshold, Attack, Hold, Release, Range | In Gate mode it follows the level; in Hit mode it opens on every note and closes after Hold, which is how a tail that will not stop is stopped. |
+| **Reverb** | Size, Decay, Damping, Pre-Delay, Low Cut, Width | A small algorithmic room, sized for a bass line rather than a hall. |
+| **Delay** | Time, Sync, Feedback, Color, Drive, Ping-Pong | Its own delay, separate from the instrument's: it can follow the host's tempo, with a filter and a soft clip in the loop. Mix is the level of the echoes. |
+| **Warp** | Time, Sync, Feedback, Pitch, Mode, Diffusion | A delay whose repeats change: each pass is shifted by Pitch, played backwards, or read as four taps. |
+| **Smear** | Time, Diffusion, Stages, Width | A short chain of allpasses: it spreads a note out in time without adding a tail. |
+| **Ring Mod** | Mode, Frequency, Env, Env Decay | Ring modulation or a frequency shift up or down, whose frequency can be swept by its own envelope. |
+| **Stereo** | Width, Haas | Width above 100 % and a short delay between the channels, which is the oldest trick there is for making one voice fill two speakers. |
+| **Utility** | Gain, Polarity, Channels | Gain, an invert, and a choice of stereo, mono, swapped or one side. |
+| **Limiter** | Gain, Ceiling, Release | A peak limiter with no lookahead, so it adds no delay, for a Master slot. |
+| **Comb** | Start, Spacing, Bands, Gain, Width, Taper | A bank of tuned bells: below 0 dB a comb of notches, above it of peaks. |
+| **Guard** | Window, Fade, Depth | A window after each note during which the slot holds its input down, and a fade out of it. In front of a saturator it keeps the drive from flattening the attack; after a reverb it takes the reverb's front off. |
+
+**A slid note is not a new note**, here as everywhere in this instrument. The
+things in the list above that are started by a note -- the Filter's envelope,
+a Gate in Hit mode, a Guard's window and Ring Mod's oscillator -- are started by
+a note that begins, not by one that slides from the last.
+
+### The band split
+
+**Band** runs the slot on the whole signal or on one band of it. The split is a
+Linkwitz-Riley fourth order at the two crossover controls, which belong to the
+chain rather than to any slot and so sit in the row under the strips, beneath
+the Band column -- **Crossover Low** at 200 Hz and **Crossover High** at
+2.53 kHz by default. Because the
+bands sum back to what went in, a slot on Low passes everything above it
+untouched; a Mid+High slot is the one that leaves the bass alone, which is
+usually what a bass instrument's distortion wants.
+
+### FX chain presets and effect presets
+
+The effects have two preset kinds of their own (§8 has all four).
+
+**FX CHAIN**, on the bar while the FX page is up, is the whole chain: every
+effect, where each one sits and the two crossovers. Loading one replaces the
+chain on whatever patch is loaded and leaves the sound, the pattern bank and
+the selected pattern alone -- a chain is something you build once and try on
+several lines. Its SAVE puts it on the *FX Chains* shelf.
+
+**PRESET**, on every strip, is that one effect: its type and every control on
+the strip. Loading one sets the strip and keeps its place in the chain and its
+Position, so a favourite delay can go before the ladder or after the delay
+alike. Its SAVE puts it on a shelf named after its type -- *Delay Effects* --
+and its browser opens on that shelf. An effect preset loaded from the host's
+own preset browser has no strip to go into, so it is added at the end of the
+chain, as ADD EFFECT would add it.
+
+### What it does to a preset that has never heard of it
+
+Nothing. The chain is empty in all thirty factory presets, and an empty slot is
+not in the signal path at all. Every preset in the library renders bit for bit
+what it rendered before the FX existed, at 44.1, 48 and 96 kHz, and so does a
+project saved with an earlier version.
+
+### Things worth knowing
+
+- **The Saturator is not the DRIVE panel.** It runs the same ten models, but it
+  is an insert with its own settings; the DRIVE panel is the stage that was
+  added to the machine, and it stays where it is.
+- **The chain is reordered with the arrows, not by dragging.** A drag on a strip
+  would have to mean both "move this effect" and "turn this knob", and the knob
+  is the more common of the two.
+- **A chain preset replaces the whole chain.** Loading one empties the strips the
+  file does not name, because a short chain on top of a long one would leave the
+  tail of the old one playing underneath it. A Scene does the same, because it
+  is everything; a Patch never touches the chain.
+- **A long tail keeps the plugin awake.** While a delay or a reverb in the chain
+  is still sounding the plugin tells the host it is busy, and it tells the host
+  how long the longest tail can be, so a bounce does not cut it off.
+
+## 10. The window
 
 ![The window with ADVANCED open: unison, the four circuits nobody re-tunes twice in a session, and the mods under them.](images/window-advanced.png)
 
@@ -1059,8 +1271,14 @@ controls are for tuning the engine rather than for playing it.
   into it the same way.
 - The **Table chip's name** opens the wavetable selector, and its arrows step
   through every table, the ones in your folder included.
-- The **preset bar** browses the factory library and anything in your own preset
-  directory; **SAVE** writes a new one there.
+- The **preset bar** has two preset fields, SCENE and PATCH (§8), each browsing
+  the factory library and anything in your own preset directory, with a
+  **SAVE** of its own. On the FX page the first is FX CHAIN instead.
+- **FX**, at the right-hand end, switches the window to the effects page and
+  back (§9). It is a place rather than a disclosure, so it is always there, and
+  it stays lit while it is showing.
+- **SAVE** means the preset, except on the FX page, where it means the effects
+  alone (§9).
 - **ADVANCED**, beside SAVE, opens the collapsible half of the window: the
   UNISON, VCF MOD, SLIDE, VIBRATO and AMP panels, and the mods under them. The window grows
   to make room and shrinks again when you close it, and it remembers which way
@@ -1069,7 +1287,8 @@ controls are for tuning the engine rather than for playing it.
   list either way.
 - **RESET**, beside ADVANCED, puts the whole instrument back to the machine it
   models: every mod, every control of the modification, the drive and the delay
-  back to their defaults, which between them are the stock circuit. It asks
+  back to their defaults, which between them are the stock circuit, and the FX
+  emptied, because the machine had none. It asks
   once — the button reads SURE? and wants a second click — because there is no
   undo for it inside the plugin. **The pattern bank is not touched**, and
   neither are Mode, Rate or which pattern is playing: it is the patch that goes
@@ -1080,7 +1299,7 @@ controls are for tuning the engine rather than for playing it.
   transfer function the DSP uses, unequal capacitor included — sweeping down
   after every note the way the envelope does.
 
-## 10. The modified machine
+## 11. The modified machine
 
 The silverbox has one famous hardware modification, made and sold since the
 early nineties, which adds eight controls the original never had. Its author
@@ -1178,7 +1397,7 @@ filter, the audio Filter FM input, the Filter Out tap, and the CV and gate
 sockets. Those want an audio input port and a second output, which is a
 different shape of plugin. The modification's MIDI retrofits need nothing at all here.
 
-## 11. Where the numbers came from
+## 12. Where the numbers came from
 
 Every number in this instrument is one of four things: read off the schematic,
 printed in the service notes, derived from the two, or fitted because neither

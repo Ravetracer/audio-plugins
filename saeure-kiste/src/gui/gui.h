@@ -84,6 +84,32 @@ public:
    virtual std::string windowTableFolder() = 0;
    // Reads any WAV file as the user's wavetable and selects it.
    virtual bool windowLoadWavetable(const std::string &path, std::string &error) = 0;
+
+   // The FX page. The window shows the slots that hold an effect, in slot
+   // order, and these change which ones those are. Adding fills the slot after
+   // the last effect, removing closes the gap, and moving swaps an effect with
+   // its neighbour, so the page never has a hole in it to draw. `slot` is a
+   // slot index, not a place on the page.
+   virtual void windowFxAdd() = 0;
+   virtual void windowFxRemove(int slot) = 0;
+   virtual void windowFxMove(int slot, int delta) = 0;
+
+   // The three preset fields beside the shared Scene one: PATCH on the main
+   // page, the FX chain on the FX page, and one per FX strip for its Effect.
+   // Every preset in guiPresets() is one PresetKind; `slot` is only read for
+   // an Effect.
+   virtual PresetKind windowPresetKind(int index) const = 0;
+   // What a field shows: an index into guiPresets(), or -1 for nothing.
+   virtual int windowCurrentPreset(PresetKind kind, int slot) const = 0;
+   virtual bool windowPresetEdited(PresetKind kind, int slot) const = 0;
+   // Loads preset `index` as `kind` -- a Scene loaded as a Patch gives up only
+   // its sound and its patterns, and an Effect goes into `slot`.
+   virtual void windowLoadPresetAs(int index, PresetKind kind, int slot) = 0;
+   // SAVE for a field. "Folder/Name" picks a folder as it does for a Scene; a
+   // bare name goes to the kind's own shelf. False, with a reason, on failure.
+   virtual bool windowSavePresetAs(PresetKind kind, int slot, const std::string &name,
+                                   std::string &error) = 0;
+   virtual std::string windowSuggestedName(PresetKind kind, int slot) const = 0;
 };
 
 // Returns nullptr if no X display could be opened. The window reaches the

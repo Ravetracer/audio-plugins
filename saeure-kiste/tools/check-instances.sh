@@ -64,7 +64,18 @@ shot()   { import -window "$1" "$work/$2.png"; }
 # nothing registers, compare the crops against a screenshot before believing it.
 grid()   { convert "$work/$1.png" -crop 1114x300+10+345 "$work/$1-grid.png"; }
 bank()   { convert "$work/$1.png" -crop 240x40+1132+365 "$work/$1-bank.png"; }
-differs() { compare -metric AE "$work/$1.png" "$work/$2.png" null: 2>&1 || true; }
+# The pixel count, as an integer. `compare -metric AE` writes its result on
+# stderr, and ImageMagick 7 writes "225.719 (0.000675401)" where 6 wrote "226";
+# the arithmetic below is integer arithmetic, so what is wanted is the leading
+# number's whole part. A comparison that could not be made at all is -1 rather
+# than 0: a zero would read as "the other instance did not move", which is the
+# passing answer to the half of each check that must not move.
+differs() {
+   local n
+   n="$(compare -metric AE "$work/$1.png" "$work/$2.png" null: 2>&1 |
+        sed -n 's/^[^0-9]*\([0-9][0-9]*\).*/\1/p')"
+   echo "${n:--1}"
+}
 
 fails=0
 ok()   { echo "  [ok] $1"; }

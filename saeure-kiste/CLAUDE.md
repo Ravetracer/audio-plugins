@@ -12,15 +12,17 @@ of truth for what works and what does not.
 
 ## What it is, in one paragraph
 
-Linux and Windows, CLAP and VST3, 74 parameters, 30 presets. VCO → four-stage transistor
-ladder → VCA, with the decay envelope, the accent circuit and the slide lag
-around it, then a drive stage of seven models and a delay after all of it. The
-oscillator also has an experimental end that is not the machine's: five more
-waveforms with a control each and a display of the cycle, wavetables (eight
-built in, plus a user folder browsed as a tree), and unison of up to sixteen
-voices. It plays either
-from the host over MIDI or from its own sequencer locked to the host transport,
-which runs 1 to 128 steps and draws on a bank of sixty-four patterns.
+Linux and Windows, CLAP and VST3, 252 parameters, 30 presets. VCO → four-stage
+transistor ladder → VCA, with the decay envelope, the accent circuit and the
+slide lag around it, then a drive stage of ten models and a delay after all of
+it. The oscillator also has an experimental end that is not the machine's: five
+more waveforms with a control each and a display of the cycle, wavetables
+(eight built in, plus a user folder browsed as a tree), and unison of up to
+sixteen voices. After all of it, or in front of the ladder, sits **the FX**: up
+to sixteen effect slots of nineteen types, on a page of their own. It plays
+either from the host over MIDI or from its own sequencer locked to the host
+transport, which runs 1 to 128 steps and draws on a bank of sixty-four
+patterns.
 
 ## The third source
 
@@ -152,6 +154,9 @@ saeure-kiste/
 │   ├── gui/seqwindow.{h,cpp} the sequencer's piano-roll window
 │   ├── dsp/wavetable.{h,cpp} band-limited wavetables: the built-in eight,
 │   │                        the WAV reader, the stored form's base64
+│   ├── dsp/chain.{h,cpp}, dsp/chain_time.cpp, dsp/chain_dsp.h
+│   │                        the FX: nineteen effect types, the slot around
+│   │                        them and the three buses, ported from Substrike
 │   └── dsp/acid_engine.{h,cpp}  the circuit
 ├── demos/                   plain WAV renders — GITIGNORED
 └── !dev/                    the Roland service-note PDFs — GITIGNORED
@@ -324,7 +329,7 @@ tool names and an environment variable from the folder name, and
   shared one pre-gain mapping, so they all saturated at the same knob position
   and any saturated clipper is the same square wave; the level matching divided
   out how much each curve compressed, which is the difference; and none of them
-  had filtering of its own. What separates the seven models in `dsp/drive.h` is
+  had filtering of its own. What separates the models in `dsp/drive.h` is
   *structure* -- a linear region that survives, an operating point off centre,
   four stages in series with a tone stack between them, a rectifier, a
   quantiser -- and each one's own gain staging over the range its own source
@@ -496,6 +501,44 @@ tool names and an environment variable from the folder name, and
   is whatever is in the folder, so it cannot be an enum with a fixed range;
   the table itself is in the state and the preset instead, which is what lets
   a song survive the file being moved.
+- **The FX are "FX" to anyone outside the code, and "chain" only inside
+  `dsp/chain.*`.** The sequencer's pattern chain had the word first: CHAIN,
+  REPEAT and LENGTH in the bank, `chain_mode`, `chainSlot()`,
+  `isLegacyChainParam()`. Everything the effect rack adds to the plugin, the
+  window, the parameter table and the presets says `fx` -- `fxParamId()`,
+  `kParamFxFirst`, `fx1_type`, the FX button, the `FX Chains` shelf. Keep it
+  that way, or the two meet in one function name again.
+- **An FX letter is stored as a position, 0..1.** Its name, range and default
+  come from its slot's type, and CLAP forbids a range change while the plugin
+  is active, so the host sees 0..1 and continuous whatever the type.
+  `descFor(id)` is the typed descriptor, `hostDesc(id)` the stored one, and
+  `typedFromStored()` / `storedFromTyped()` convert; the window works in the
+  typed space (`guiParamValue()` converts on the way out), presets in real
+  units, the state blob in positions. Anything that clamps or converts a letter
+  must go through those -- `paramTable()[id]` for a letter is a carrier row with
+  a range of plus or minus a billion, there only so the shared preset parser
+  can hold a real value before the slot's type is known.
+- **A type change is a main-thread rescan.** A slot's new type resets its
+  letters and renames them. From the window that is a direct
+  `notifyParamValuesChanged()`; from a host event it may be the audio thread,
+  so it sets `mInfoDirty` and asks for `on_main_thread()`. Never call
+  `rescan()` from `handleEvent()`.
+- **The FX hear note starts, not slides**, through `mHitPending` and
+  `mMasterHitPending` in `startNote()`. The Master bus runs once per host block
+  after the delay, so the engine counts where each `process()` call starts
+  (`beginBlock()`, `mBlockFrame`) and hands the Master slots the real offsets.
+- **A preset is one of four kinds**, and the file says which (`preset_kind`;
+  none means Scene). Every load dispatches on the file's kind -- the browser,
+  a file dialog and the host's preset-load alike -- so a Patch can never wipe
+  the FX and an FX chain can never reset the sound. The window's fields reach
+  the kinds through `WindowHost`; the Scene field is the shared `GuiDelegate`
+  preset API, untouched. Each field remembers its preset by identity (load key
+  or path), never by index, because every save rescans the library. A new kind
+  goes at the end of `PresetKind` and `kKindNames`.
+- **An empty slot is not in the signal path**, not merely silent: `needs()` per
+  bus, every chunk. That is what keeps every factory preset bit-identical to
+  0.16.0, and the recipe in the root `CLAUDE.md` is how to prove it after an
+  engine change.
 - **The version lives in two places** — `project(... VERSION)` in
   `CMakeLists.txt` and `kPluginVersion` in `src/saeurekiste.h`. A
   `static_assert` fails the build when they disagree. Bump both.

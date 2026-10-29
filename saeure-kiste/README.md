@@ -29,7 +29,8 @@ built-in wavetables plus a folder of your own browsed as a tree, and **unison**
 of up to sixteen voices spread across the stereo field through a filter per
 side.
 
-Seventy-four parameters, all of them automatable, thirty presets.
+252 parameters, all of them automatable -- seventy-four on the panels and 178 for the
+sixteen FX slots -- and thirty presets.
 
 Not affiliated with or endorsed by Roland Corporation. *TB-303* is their
 trademark and is used here only to name what was modelled. Not affiliated with
@@ -239,6 +240,59 @@ into their own machines.
 | **Ladder** | How hard the ladder's feedback is driven into its own saturation. |
 | **Res Range** | How much feedback Resonance can ask for. Past 100 % the filter oscillates, which a stock 303 cannot do. |
 | **Drift** | Oscillator instability. Deterministic, so a render is still repeatable. |
+
+## FX
+
+An effect chain of up to sixteen inserts, and the one part of the window that is
+neither the machine nor a model of it. The **FX** button on the preset bar swaps
+the panels and the step grid for it. ("FX" rather than "chain" because the
+sequencer's pattern chain had the word first.)
+
+**The page shows the effects the chain has, not a row of empty slots.**
+**ADD EFFECT** appends a strip -- a Saturator, on the master bus, where it can be
+heard before it is configured -- and the window grows to hold it. The cross at a
+strip's right-hand end removes that effect and closes the gap, and the two
+chevrons move the effect one place earlier or later *with all of its settings*.
+Past five strips the list scrolls and the window stops growing; sixteen is the
+most a chain holds.
+
+Every strip has the same controls, in this order:
+
+| Control | |
+|---|---|
+| **Type** | Which of the nineteen effects the strip runs. Picking one rewrites what its letters mean and puts them at that effect's defaults. |
+| **Position** | **Pre** (between the oscillator and the ladder), **Post** (after the amplifier's drive stage) or **Master** (after the built-in delay, the very end). Post and Master are the same signal until the delay is switched on. |
+| **Band** | Full, or one band of the signal split at the two crossovers, which sit under the strips. The bands sum back flat, so a slot on Low passes everything above it untouched. |
+| **Bypass** | Takes the effect out without losing its settings. It fades rather than cuts. |
+| **Mix** | How much of the effect is heard. A delay slot adds its echoes at this level; at zero the strip is not there. |
+| **A - F** | Six letters whose names, ranges and units come from the Type: Model, Drive, Bias, Tone, Output on a Saturator; Mode, Cutoff, Reso, Env, Env Decay, Gain on a Filter. To the host each letter is 0..1 whatever the type, because CLAP does not let a range change while the plugin runs; the host shows the type's names and values. |
+
+The types are the Saturator (the drive stage's ten models with a tone control),
+Clipper, Wavefolder, Bitcrush, Filter, EQ, Compressor, Transient, Gate, Reverb,
+Delay, Warp, Smear, Ring Mod, Stereo, Utility, Limiter, Comb and Guard -- the
+Guard being a window after each note during which the slot holds its input
+down. Seventeen are ported from Substrike's effect slots; Saturator and Guard
+are this plugin's own. A slide does not restart anything a note starts, as it
+does not restart the envelopes.
+
+Every factory preset leaves the chain empty, so none of them sounds any
+different from before it existed.
+
+## Four kinds of preset
+
+| Kind | Holds | Loading it replaces | Field |
+|---|---|---|---|
+| **Scene** | sound, pattern bank, effects | everything | SCENE on the main bar |
+| **Patch** | sound and pattern bank | sound and patterns; the effects stay | PATCH beside it |
+| **FX chain** | the effects and the crossovers | the effects; sound and patterns stay | FX CHAIN on the FX page's bar |
+| **Effect** | one strip: type and controls | that strip; its place and Position stay | PRESET on every strip |
+
+Every factory preset and every preset written before 0.17.0 is a Scene, and any
+Scene can be loaded through PATCH. Each field has its own arrows, browser and
+SAVE; Patches, FX chains and Effects are saved to shelves of their own
+(`Patches`, `FX Chains`, `Delay Effects` and so on). A file says what it is
+in a `preset_kind` line, so it stays what it is wherever it is moved; a file
+without one is a Scene.
 
 ## The sequencer
 

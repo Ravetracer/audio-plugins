@@ -19,6 +19,11 @@ body {
    font-size: 11pt;
    line-height: 1.55;
    color: #1E2A26;
+   /* Declared rather than left to the renderer. The page is a sheet of paper,
+      and an unset background is whatever the widget's palette happens to be --
+      under a dark desktop theme wkhtmltopdf printed every page on near-black
+      and the manual was unreadable. */
+   background: #FFFFFF;
    margin: 0;
 }
 

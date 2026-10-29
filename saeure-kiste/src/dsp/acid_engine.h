@@ -36,15 +36,24 @@
 // accent, the slide -- is still one circuit driving both. With one voice, or
 // no spread, there is one path and the engine is the machine it always was.
 
+#include <atomic>
 #include <cstdint>
 
 #include "plugincore/dsp/filters.h"
 #include "plugincore/dsp/rng.h"
 
+#include "dsp/chain.h"
 #include "dsp/drive.h"
 #include "dsp/wavetable.h"
 
 namespace saeurekiste {
+
+// How often the filter coefficients are recomputed. Every eighth sample is
+// 6 kHz at 48 k, far above anything the envelopes do, and it keeps one tan()
+// out of the per-sample path. The chain's Pre and Post buses run a block at a
+// time too, which is why it is declared here: the engine keeps one block of
+// the oscillator for them.
+constexpr uint32_t kControlBlock = 8;
 
 // clampv, decayCoef, onePoleCoef and the one-pole filters are the suite's.
 using namespace plugincore;
@@ -114,6 +123,10 @@ struct EngineParams {
    float ampSustain = 0.0f;        // what the sag falls towards
    int sweepSpeed = 0;             // 0 normal, 1 fast, 2 slow
    bool accentHold = false;        // accent every note, whatever it asked for
+
+   // The effect chain. Every slot is Off until somebody sets one, and an
+   // all-Off chain does no work.
+   ChainParams chain;
 };
 
 class AcidEngine {
@@ -169,8 +182,25 @@ public:
    // itself a moment later, so it needs no matching note-off.
    void triggerShot();
 
+   // Called once at the top of every host block, before the first process().
+   // The block is then processed in consecutive pieces, split at its events,
+   // and the engine counts where in the block each piece starts.
+   void beginBlock();
+
    void process(float *outL, float *outR, uint32_t frames);
 
+   // The chain's Master bus, after the plugin's delay: the last thing in the
+   // box. Called once over the whole block, after every process() of it; a
+   // note that started in the block reaches its slots at the sample it
+   // started on, because process() noted where that was.
+   void processMaster(float *outL, float *outR, uint32_t frames);
+
+   // The host's tempo, for the chain's synced times. Every block, because a
+   // tempo is a property of the block rather than of the parameter table.
+   void setTempo(double bpm) { mChain.setTempo(bpm); }
+
+   // The amplifier's release plus the longest tail the chain's slots can hold.
+   // Read by the host from any thread, so the chain's part is published.
    double tailSeconds() const;
    bool isSilent() const;
 
@@ -345,6 +375,35 @@ private:
    uint32_t mNoteCounter = 0;
    uint32_t mShotFrames = 0;      // the free note's remaining gate, in samples
    bool mShotHolding = false;
+
+   // The chain. It sits inside the sample path at two of its three buses, so
+   // the oscillator and the filter are worked out in two passes over a block
+   // and these are what connects them; see process(). Both buffers hold one
+   // control block, and the second channel is a copy when unison is not
+   // spreading anything.
+   Chain mChain;
+   float mOscBuf[2][kControlBlock] = {};
+   float mVcaEnvBuf[kControlBlock] = {};
+   // A note starts at the beginning of a process() call, because the host's
+   // events are split there; these say that one did, once for the Pre and
+   // Post buses and once for the Master's.
+   bool mHitPending = false;
+   bool mMasterHitPending = false;
+
+   // Where in the host's block the Master bus's notes started. process() is
+   // called over consecutive pieces of the block, so the offset is counted.
+   static constexpr int kMaxMasterHits = 64;
+   void noteMasterHit();
+   uint32_t mBlockFrame = 0;
+   int mMasterHits[kMaxMasterHits] = {};
+   int mMasterHitCount = 0;
+
+   // How long the chain may still be sounding; see trackChainTail().
+   static constexpr float kChainTailFloor = 1.0e-5f;
+   static constexpr double kChainTailHoldSeconds = 0.25;
+   void trackChainTail(const float *l, const float *r, uint32_t n);
+   uint32_t mChainRingFrames = 0;
+   std::atomic<double> mChainTailSeconds{0.0};
 };
 
 } // namespace saeurekiste

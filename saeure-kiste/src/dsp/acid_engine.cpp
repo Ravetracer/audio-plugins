@@ -183,11 +183,6 @@ constexpr float kSweepFastScale = 0.33f;
 constexpr float kSweepSlowScale = 3.0f;
 constexpr float kSweepSlowCeiling = 2.0f;
 
-// How often the filter coefficients are recomputed. Every eighth sample is
-// 6 kHz at 48 k, far above anything the envelopes do, and it keeps one tan()
-// out of the per-sample path.
-constexpr uint32_t kControlBlock = 8;
-
 // How the continuous controls reach a new value. A host sends automation as a
 // staircase and a dragged knob arrives once per audio block, so a control that
 // jumped straight to each value put a step into the cutoff every few
@@ -359,6 +354,7 @@ void AcidEngine::prepare(double sampleRate, uint32_t /*maxBlockFrames*/) {
    // own, so it has to be told the rate before anything is reset.
    for (Path &p : mPath)
       p.drive.prepare(mSampleRate);
+   mChain.prepare(mSampleRate);
    // The built-in wavetables are made on first use, which takes a moment, so
    // it happens here on the main thread rather than in the first process().
    builtinTable(0);
@@ -416,6 +412,12 @@ void AcidEngine::reset() {
    mVibAge = 0.0f;
    mVibCents = 0.0f;
    mModWheel = 0.0f;
+   mChain.reset();
+   mHitPending = false;
+   mMasterHitPending = false;
+   mMasterHitCount = 0;
+   mBlockFrame = 0;
+   mChainRingFrames = 0;
    // A glide under way ends where it was going: after a reset the engine is
    // where the controls are, not somewhere on the way to them.
    if (mGlideLeft > 0) {
@@ -445,6 +447,10 @@ void AcidEngine::setParams(const EngineParams &p) {
       mGlideLeft = mGlideTotal;
    }
    updateDerived();
+   // The chain is not glided: a slot has its own 5 ms glide on every letter,
+   // and its type, position and band are switches.
+   mChain.setParams(p.chain);
+   mChainTailSeconds.store(mChain.tailSeconds(), std::memory_order_relaxed);
 }
 
 void AcidEngine::glideParams(uint32_t frames) {
@@ -618,6 +624,14 @@ void AcidEngine::startNote(int16_t key, bool accent, bool vibrato, bool slide) {
    // and it is not wrong by the same amount twice.
    mNoteDriftCents = mDriftRng.white() * kDriftPerNoteCents;
 
+   // The chain hears a note start the way the envelopes do: a slid note is a
+   // continuation, so it does not restart a slot's envelope, open a Hit gate
+   // again, cut a Guard window into the glide or restart Ring Mod's oscillator.
+   if (!slide) {
+      mHitPending = true;
+      mMasterHitPending = true;
+   }
+
    mVibAmount = vibrato ? 1.0f : 0.0f;
    // The vibrato delay restarts with the note, but not with a slide: a slid
    // note is a continuation, and restarting the delay would make the vibrato
@@ -770,6 +784,10 @@ void AcidEngine::triggerShot() {
 // ----------------------------------------------------------------- process
 
 void AcidEngine::process(float *outL, float *outR, uint32_t frames) {
+   // A note started by the events in front of this call starts here, at this
+   // call's first sample of the host's block.
+   noteMasterHit();
+
    const float sr = static_cast<float>(mSampleRate);
    const float invSr = 1.0f / sr;
    const float nyquistGuard = sr * 0.45f;
@@ -849,6 +867,19 @@ void AcidEngine::process(float *outL, float *outR, uint32_t frames) {
       const int wave = mParams.waveform;
       const bool droops = wave == kWaveSquare || wave == kWavePulse;
 
+      // The chain's two inside-the-path buses. A slot processes a block rather
+      // than a sample, so when either is in use this chunk is computed in
+      // passes: the oscillator first, then what sits in front of the ladder,
+      // then the ladder and everything after it, then what sits after the
+      // amplifier. With an all-Off chain -- which is every factory preset and
+      // every project saved before the chain existed -- needs() is false, the
+      // chain is never called, and the arithmetic per sample is what it was.
+      const bool preLive = mChain.needs(ChainPosition::Pre);
+      const bool postLive = mChain.needs(ChainPosition::Post);
+      int hits[1] = {0};
+      const int hitCount = mHitPending ? 1 : 0;
+      mHitPending = false;
+
       for (uint32_t s = 0; s < n; ++s) {
          // ------------------------------------------------------- envelopes
          mVcfEnv *= mAccented ? mDecayCoefAccent : mDecayCoefOpen;
@@ -917,8 +948,49 @@ void AcidEngine::process(float *outL, float *outR, uint32_t frames) {
             osc[1] = r * mUnisonNorm;
          }
 
-         for (int p = 0; p < paths; ++p) {
-            Path &path = mPath[p];
+         // The oscillator itself, before its droop and before the chain: what
+         // the machine sends into the filter, and what a Pre slot sits between.
+         mOscBuf[0][s] = osc[0];
+         mOscBuf[1][s] = osc[1];
+         // The amplifier's envelope at this sample, for pass B. Stored rather
+         // than recomputed because it is one envelope shared by both paths.
+         mVcaEnvBuf[s] = mVcaEnv;
+      }
+
+      // The square's droop and Overdrive are the oscillator's own shape, so
+      // they are applied before anything in front of the ladder sees it.
+      for (int p = 0; p < paths; ++p) {
+         Path &path = mPath[p];
+         for (uint32_t s = 0; s < n; ++s) {
+            float x = mOscBuf[p][s];
+            if (droops)
+               x = path.squareDroop.tick(x) * kSquareLevel;
+            // Overdrive: the oscillator's level into the ladder. The input pair
+            // is linear over the swing the machine gives it and compresses
+            // above that, so at the stock setting this is the identity.
+            mOscBuf[p][s] = softKnee(x * mParams.oscDrive, kLadderInputKnee);
+         }
+      }
+
+      // With one path the Pre bus still runs in stereo, because its effects
+      // are stereo ones -- a ping-pong delay puts every other echo on the
+      // right -- and what goes on into the single ladder is the mid of the two.
+      // A slot that treats both sides alike leaves them equal, so its mid is
+      // exactly what it made.
+      if (preLive) {
+         if (!mStereo)
+            std::memcpy(mOscBuf[1], mOscBuf[0], n * sizeof(float));
+         mChain.process(mOscBuf[0], mOscBuf[1], static_cast<int>(n), ChainPosition::Pre, hits,
+                        hitCount);
+         if (!mStereo)
+            for (uint32_t s = 0; s < n; ++s)
+               mOscBuf[0][s] = 0.5f * (mOscBuf[0][s] + mOscBuf[1][s]);
+      }
+
+      for (int p = 0; p < paths; ++p) {
+         Path &path = mPath[p];
+         float *dst = p == 0 ? outL + i : outR + i;
+         for (uint32_t s = 0; s < n; ++s) {
             if (fmOn) {
                // The amplifier's output from the previous sample, which is
                // what makes this a feedback path and not an impossibility.
@@ -927,14 +999,7 @@ void AcidEngine::process(float *outL, float *outR, uint32_t frames) {
                coefficientsFor(fc);
             }
 
-            float x = osc[p];
-            if (droops)
-               x = path.squareDroop.tick(x) * kSquareLevel;
-
-            // Overdrive: the oscillator's level into the ladder. The input pair
-            // is linear over the swing the machine gives it and compresses
-            // above that, so at the stock setting this is the identity.
-            x = softKnee(x * mParams.oscDrive, kLadderInputKnee);
+            float x = mOscBuf[p][s];
 
             // --------------------------------------------------------- VCF
             //
@@ -972,7 +1037,7 @@ void AcidEngine::process(float *outL, float *outR, uint32_t frames) {
             z[3] = y + v;
 
             // ----------------------------------------------------- VCA + out
-            float out = y * mVcaEnv;
+            float out = y * mVcaEnvBuf[s];
 
             out = path.drive.tick(out);
             out = path.tone.tick(out);
@@ -995,7 +1060,8 @@ void AcidEngine::process(float *outL, float *outR, uint32_t frames) {
                out = softKnee(out, mMufflerKnee) * mMufflerMakeup;
 
             // What Filter FM reads: the amplifier's output after the Muffler,
-            // as Whittle specifies.
+            // as Whittle specifies. A Post slot goes after this point, so the
+            // feedback path still reads the amplifier rather than an echo.
             path.lastOut = clampv(out, -4.0f, 4.0f);
 
             // The last line of defence, and only that: the amplifier, the drive
@@ -1011,15 +1077,64 @@ void AcidEngine::process(float *outL, float *outR, uint32_t frames) {
             // hundredth of a decibel under the plugin's own bound by luck
             // rather than by construction. A host is entitled to a signal
             // inside +/-1 and this is what guarantees it.
-            out = clampv(path.dcBlock.tick(out) * mParams.gain, -1.0f, 1.0f);
-
-            (p == 0 ? outL : outR)[i + s] = out;
+            dst[s] = clampv(path.dcBlock.tick(out) * mParams.gain, -1.0f, 1.0f);
          }
-         if (!mStereo)
-            outR[i + s] = outL[i + s];
       }
+      if (!mStereo)
+         std::memcpy(outR + i, outL + i, n * sizeof(float));
+
+      if (postLive)
+         mChain.process(outL + i, outR + i, static_cast<int>(n), ChainPosition::Post, hits,
+                        hitCount);
 
       i += n;
+   }
+   mBlockFrame += frames;
+}
+
+// ------------------------------------------------------------- the master bus
+
+void AcidEngine::beginBlock() {
+   mBlockFrame = 0;
+   mMasterHitCount = 0;
+}
+
+void AcidEngine::noteMasterHit() {
+   if (!mMasterHitPending)
+      return;
+   mMasterHitPending = false;
+   // Kept in order, and a block with more note starts than this keeps the
+   // first ones: the cap is far above what a sequencer step grid can produce.
+   if (mMasterHitCount < kMaxMasterHits)
+      mMasterHits[mMasterHitCount++] = static_cast<int>(mBlockFrame);
+}
+
+void AcidEngine::processMaster(float *outL, float *outR, uint32_t frames) {
+   if (mChain.needs(ChainPosition::Master))
+      mChain.process(outL, outR, static_cast<int>(frames), ChainPosition::Master, mMasterHits,
+                     mMasterHitCount);
+   // Measured here, at the very end, because everything a Post slot holds
+   // passes through to this point. A Pre slot needs no tracking: the
+   // amplifier closes behind it.
+   if (mChain.needs(ChainPosition::Post) || mChain.needs(ChainPosition::Master))
+      trackChainTail(outL, outR, frames);
+   else
+      mChainRingFrames = 0;
+}
+
+// Whether the chain is still sounding after the engine has stopped. A slot can
+// hold a sound for a long time -- a delay's echoes, a reverb's tail -- and a
+// delay waits for its next echo in silence, so the chain counts as rung out
+// only once its output has been quiet for longer than the longest such wait.
+void AcidEngine::trackChainTail(const float *l, const float *r, uint32_t n) {
+   float loudest = 0.0f;
+   for (uint32_t s = 0; s < n; ++s)
+      loudest = std::max(loudest, std::max(std::fabs(l[s]), std::fabs(r[s])));
+   if (loudest > kChainTailFloor) {
+      const double hold = mChain.silentHold() + kChainTailHoldSeconds * mSampleRate;
+      mChainRingFrames = static_cast<uint32_t>(std::min(hold, 1.0e9));
+   } else {
+      mChainRingFrames = mChainRingFrames > n ? mChainRingFrames - n : 0;
    }
 }
 
@@ -1177,12 +1292,15 @@ void AcidEngine::drawCycle(const EngineParams &p, const Wavetable *table, float 
 }
 
 double AcidEngine::tailSeconds() const {
-   // The VCA release plus whatever the filter is still ringing with.
-   return 0.25;
+   // The VCA release plus whatever the filter is still ringing with, and
+   // whatever the chain holds after that.
+   return 0.25 + mChainTailSeconds.load(std::memory_order_relaxed);
 }
 
 bool AcidEngine::isSilent() const {
-   return !mGate && mVcaEnv < 1.0e-5f && !mShotHolding;
+   // A chain slot can hold a sound after the engine has stopped: a delay's
+   // echoes, a reverb's tail. Telling the host it may sleep would cut them.
+   return !mGate && mVcaEnv < 1.0e-5f && !mShotHolding && mChainRingFrames == 0;
 }
 
 } // namespace saeurekiste

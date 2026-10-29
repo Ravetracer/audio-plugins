@@ -15,6 +15,39 @@ preset, which exists for exactly this.
 
 ## 2. Smaller things
 
+- **No factory preset uses the FX.** The chain is empty in all thirty, which is
+  deliberate -- it is what makes them render byte for byte what they did
+  before the stage existed -- but it means the library demonstrates neither the
+  FX nor an FX chain preset. A handful of effects would go a long way: a
+  bandpass in front of the ladder, a tape-echoed line, and a ducked variation
+  of a preset that is already there. They would have to be new presets rather
+  than changed ones, because a changed preset moves the demo renders too.
+- **No factory Patches, FX chains or Effects.** The thirty factory presets are
+  Scenes, which the PATCH field lists, so that kind is covered; the FX CHAIN
+  and strip PRESET browsers start empty and say so. A few factory chains and
+  effects -- a tape echo, a bandpass for the Pre bus, a ducking Guard -- would
+  show what the kinds are for. They need the factory set to be able to hold
+  kinds other than Scene, which `embed_presets.cmake` does not care about and
+  the browser already handles.
+- **Every FX slot allocates its delay memory up front.** The largest type's
+  buffer, for all sixteen slots, at activation: about 13 MB per instance at
+  48 kHz and 51 MB at 192 kHz, used or not. Allocating per type on the audio
+  thread is not an option; allocating on the main thread when a type is picked
+  and handing the buffer over is, and is the fix if it ever matters.
+- **Moving an FX effect restarts it.** Remove and move copy a slot's settings
+  to another slot; the DSP state stays where it was, so a moved delay or reverb
+  starts from silence. Moving the state with the settings would mean moving
+  the effect objects, which are not built for it.
+- **The chain's Saturator is not the drive stage.** It runs the same ten models
+  with a tone control after them, but it does not touch the drive stage's own
+  settings, so a Saturator slot and the DRIVE panel are two separate gain
+  stages. That is deliberate -- one is the machine's, one is an insert -- and it
+  is worth knowing before wondering why they do not agree.
+- **The two drive types clip slightly at their defaults.** On a source already
+  peaking near full scale, the Saturator lands about +0.7 dB and the Wavefolder
+  about +1.1 dB at their own defaults, which is their makeup gain rather than a
+  fault. The selftest prints them; if the defaults ever move, that is where to
+  look.
 - **The pattern map has no chromatic-run shortcut.** Every pad is learned one
   at a time, which is right for an arbitrary layout and tedious for the common
   one -- sixteen pads onto patterns 1 to 16 is sixteen clicks and sixteen
@@ -240,6 +273,20 @@ It is a voicing decision about how the input pair saturates, not a contract, and
 a test written to pin it down would only be asserting today's numbers.
 
 ## 4. Fixed, and worth remembering
+
+**The synced delay ran at 120 bpm in MIDI mode.** `updateSequencerClock()`
+read the host's tempo after the early return it takes in MIDI mode, so the
+built-in delay's Sync -- and, in 0.17.0's first draft, every synced FX time --
+used whatever tempo the sequencer had last seen, or 120 if it never ran. It was
+found by the FX's tempo test, not by playing: nobody had synced the delay in
+MIDI mode against a project at another tempo. Self-test 13b pins it.
+
+**A page that does not draw something has to un-hit it as well.** While the FX
+page was being written, its lower strips took clicks that belonged to the step
+grid: the grid's hit rects were zeroed only in the branch that builds the main
+page, so they still sat under the strips. The rects are cleared for *every*
+page at the top of `buildLayout()`, and `onSeqDown()` returns at once while the
+FX page is up -- two fixes, because one alone is the kind that comes back.
 
 **A looping host used to wedge the sequencer.** The first pass through the loop
 played, the second turned into one endless slide that faded out over about

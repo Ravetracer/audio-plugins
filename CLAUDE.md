@@ -38,6 +38,7 @@ audio-plugins/
 ├── .gitignore
 ├── release.sh         builds every plugin and packs the archives
 ├── setup-winbuild.sh  one-time Windows cross-build setup
+├── devbox.sh          runs a command in the build container (devbox/Dockerfile)
 ├── shared/            the PluginCore library every plugin is built on
 ├── CLAP/              CLAP SDK checkouts       — GITIGNORED, see below
 ├── winbuild/          meson venv + Windows Cairo — GITIGNORED
@@ -53,7 +54,7 @@ audio-plugins/
 
 | # | Plugin | Folder | Status | Platforms | Formats | What it is |
 |---|--------|--------|--------|-----------|---------|------------|
-| 1 | **SäureKiste** | `saeure-kiste/` | 0.16.0 | Linux, Windows | CLAP, VST3 | a Roland TB-303 model, from the 1982 service notes, plus Robin Whittle's Devil Fish modification |
+| 1 | **SäureKiste** | `saeure-kiste/` | 0.17.0 | Linux, Windows | CLAP, VST3 | a Roland TB-303 model, from the 1982 service notes, plus Robin Whittle's Devil Fish modification |
 | 2 | **RumpelKiste** | `rumpel-kiste/` | 0.2.1 | Linux, Windows | CLAP, VST3 | a Roland TR-909 model, from the 1984 service notes, with SäureKiste's sequencer and drive stage |
 | 3 | **Aurum** | `aurum/` | 0.3.1 | Linux, Windows | CLAP, VST3 | a clean-room algorithmic reverb (FDN, allpass ring, plate) with a per-frequency decay contour; own DSP and GUI, see *Aurum* below |
 | 4 | **Substrike** | `substrike/` | 1.1.0 | Linux, Windows | CLAP, VST3 | a layered kick drum designer for every style; standalone like Aurum, see *Substrike* below |
@@ -183,6 +184,15 @@ ported**. Four things, and the first two are bugs every Verdalis manual has:
   still be one self-contained file. See `saeure-kiste/tools/make-screenshots.sh`
   for how the images themselves are made; nothing about it is plugin-specific
   except the coordinates.
+
+A fifth, from SäureKiste 0.17.0 and **not yet ported**: `manual.css` sets
+`background: #FFFFFF` on the body. wkhtmltopdf paints an unset background with
+the desktop theme's window colour, so under a dark theme every page of a manual
+came out near-black -- a Verdalis manual built on such a desktop has the same
+bug. The two optional docgen hooks from the same release (`docParamIsDynamic`,
+`docParamIsHidden`) are only needed by a plugin with runtime-typed parameters
+and need not be ported until one exists; they are found by overload, so a
+plugin that does not define them compiles and documents exactly as before.
 
 The third case is a one-line formatting bug found here in SäureKiste 0.7.0 and
 **not yet ported**: `paramValueToText` printed a `ParamKind::Stepped` value
@@ -512,6 +522,39 @@ cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
 cmake --build build
 cmake --install build            # defaults to ~/.clap/<PluginName>
 ```
+
+### The build container
+
+The development machine no longer has the toolchain installed: mingw-w64, wine,
+meson, wkhtmltopdf and sox are gone from the host. Everything runs through
+`./devbox.sh`, which builds `devbox/Dockerfile` (Ubuntu 24.04, tagged by a hash
+of the Dockerfile, so an edit rebuilds it) and runs a command in it:
+
+```sh
+./devbox.sh                                   # shell
+./devbox.sh ./release.sh 0.19.0               # from the repository root
+cd saeure-kiste && ../devbox.sh ninja -C build-devbox
+```
+
+- The repository is mounted at its **own absolute path** and the command runs
+  in the current folder as the calling user, so CMake caches are valid on both
+  sides and nothing written is owned by root. Anything outside the repository
+  -- the scratch folder of a session, `/tmp` -- is not visible inside; put
+  scratch trees under the gitignored `dist/` or a `build*/` folder.
+- The home is a **tmpfs owned by the caller** (wine refuses a home it does not
+  own, and needs exec on its prefix). Settings a plugin writes, wine prefixes,
+  `~/.config` -- all of it dies with the container, so the GUI and wine rules
+  below about scratch `XDG_*` and `WINEPREFIX` hold by construction.
+- GUI tools need a display: start `Xvfb :87 &` inside the container and set
+  `DISPLAY=:87`. Nothing reaches the host's desktop.
+- The mingw compiler is Ubuntu's default (win32 thread model), the one every
+  Windows release so far was built with. `winbuild/cairo-mingw` from the host
+  works unchanged.
+- **Plugins cannot be listened to here.** The machine has no DAW any more; the
+  user tests the builds on another system. What can be checked here is the
+  build, the self-tests on both platforms, renders, screenshots and the release.
+- `clap-validator` is not in the image (it is Rust); build it from
+  `CLAP/clap-validator` when it is needed.
 
 A `build/` tree records the absolute source path it was configured against, so
 moving or renaming a plugin folder makes its existing tree fail hard with

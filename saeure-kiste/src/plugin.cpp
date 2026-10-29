@@ -1,4 +1,5 @@
 #include <algorithm>
+#include <array>
 #include <atomic>
 // <chrono> is used by the pattern generator's salt, which is compiled whether
 // or not this build has a window; on Linux it arrives transitively and on
@@ -62,6 +63,16 @@ const clap_plugin_descriptor_t kDescriptor = {
 // everything else on the shelf is named after the folder it was found in.
 constexpr const char *kFactoryFolder = "Factory Presets";
 
+// Where an FX chain saved on its own lands in the user's library, unless a
+// folder is typed in front of its name. A chain is not a patch, so it gets a
+// shelf of its own rather than sitting among the presets it is meant to be
+// tried on. What makes a file a chain is its preset_kind line, not this
+// folder -- a chain copied elsewhere, or imported inside a pack under another
+// name, still loads as one. An Effect goes to a shelf named after its type.
+constexpr const char *kFxChainFolder = "FX Chains";
+// And a Patch's: the sound and the pattern bank without the FX.
+constexpr const char *kPatchFolder = "Patches";
+
 constexpr uint32_t kStateMagic = 0x54534B53u; // 'SKST' little-endian
 // Version 1, and the first version under this name.
 //
@@ -97,6 +108,11 @@ constexpr uint32_t kStateMagic = 0x54534B53u; // 'SKST' little-endian
 // Version 5 appends the user's wavetable: a 32-bit name length and the name,
 // then a 32-bit frame count and that many frames of kWtSourceLen int16
 // samples. Zero frames is no table. A blob without it loads with no table.
+//
+// The FX needed no version of its own: its 178 parameters ride in the same
+// (id, value) block as every other one, so a blob written before they existed
+// loads with every slot Off, which is what an unused chain is. There is nothing
+// after the wavetable to tell apart.
 constexpr uint32_t kStateVersion = 5;
 
 // More than this in a name is a corrupt blob rather than a long file name.
@@ -162,7 +178,7 @@ public:
       mPlugin.get_extension = [](const clap_plugin_t *p, const char *id) {
          return self(p)->getExtension(id);
       };
-      mPlugin.on_main_thread = [](const clap_plugin_t *) {};
+      mPlugin.on_main_thread = [](const clap_plugin_t *p) { self(p)->onMainThread(); };
    }
 
 #ifdef SAEUREKISTE_WITH_GUI
@@ -197,14 +213,76 @@ private:
 
    // ------------------------------------------------------------------- params
 
+   // An FX letter means whatever its slot's type makes of it: what A is
+   // called, what range it has and what it defaults to all come from the type.
+   // A host, though, has to be shown one fixed range per parameter -- CLAP
+   // allows a range to change only while the plugin is deactivated -- so a
+   // letter is stored as a position, 0..1, and the type says what that
+   // position means. Every conversion goes through the three functions below,
+   // so the host, the window, the engine and the preset writer cannot disagree.
+
+   // The descriptor a value is shown and converted with: an FX letter's
+   // type's, or the table's own row.
+   ParamDesc descFor(uint32_t id) const {
+      if (!isFxLetterParam(id))
+         return paramTable()[id];
+      const uint32_t typeId = fxTypeParamOf(id);
+      const int type =
+         static_cast<int>(std::lround(mValues[typeId].load(std::memory_order_relaxed)));
+      return fxLetterDesc(id, type);
+   }
+
+   // The descriptor of what is stored and what the host sees: the table's row,
+   // or for an FX letter a plain 0..1 under the type's name, whose default is
+   // the type's default as a position.
+   ParamDesc hostDesc(uint32_t id) const {
+      if (!isFxLetterParam(id))
+         return paramTable()[id];
+      const ParamDesc typed = descFor(id);
+      ParamDesc d = typed;
+      d.kind = ParamKind::Linear;
+      d.min = 0.0;
+      d.max = 1.0;
+      d.def = fxLetterToPosition(typed, typed.def);
+      d.dispMin = d.dispMax = 0.0;
+      d.unit = "";
+      d.enumNames = nullptr;
+      d.enumCount = 0;
+      return d;
+   }
+
+   // A stored value in descFor()'s raw space, and back. The identity for
+   // everything but an FX letter.
+   double typedFromStored(uint32_t id, double stored) const {
+      return isFxLetterParam(id) ? fxLetterFromPosition(descFor(id), stored) : stored;
+   }
+   double storedFromTyped(uint32_t id, double raw) const {
+      return isFxLetterParam(id) ? fxLetterToPosition(descFor(id), raw) : raw;
+   }
+
    double effective(uint32_t id) const {
-      const ParamDesc &d = paramTable()[id];
+      const ParamDesc d = hostDesc(id);
       const double v = mValues[id].load(std::memory_order_relaxed) +
                        mMods[id].load(std::memory_order_relaxed);
       return v < d.min ? d.min : (v > d.max ? d.max : v);
    }
 
-   double realValue(uint32_t id) const { return paramToReal(paramTable()[id], effective(id)); }
+   double realValue(uint32_t id) const {
+      return paramToReal(descFor(id), typedFromStored(id, effective(id)));
+   }
+
+   // Picking a type rewrites what A-F mean, so they are put at that type's
+   // defaults. Without it, a slot switched from Saturator to Filter would
+   // arrive with its cutoff wherever the drive's Bias happened to leave it.
+   void resetFxLetters(uint32_t typeParam) {
+      const int slot = fxSlotOfParam(typeParam);
+      if (slot < 0)
+         return;
+      for (int letter = 0; letter < kFxLetters; ++letter) {
+         const uint32_t id = fxParamId(slot, kFxFieldA + letter);
+         mValues[id].store(hostDesc(id).def, std::memory_order_relaxed);
+      }
+   }
 
    // The delay's settings. Not part of EngineParams: the stage is not in the
    // engine, it is after it, and one of its controls -- the synced time --
@@ -294,15 +372,42 @@ private:
       p.sweepSpeed = static_cast<int>(realValue(kParamSweepSpeed));
       p.accentHold = static_cast<int>(realValue(kParamAccentHold)) != 0;
 
+      // The FX. Every slot is handed over whole; an all-Off chain does no
+      // work in process(), so this costs the audio thread nothing when nobody
+      // uses it.
+      for (int slot = 0; slot < kNumFxSlots; ++slot) {
+         SlotParams &s = p.chain.slots[static_cast<size_t>(slot)];
+         s.type = static_cast<SlotType>(static_cast<int>(std::lround(
+            realValue(fxParamId(slot, kFxFieldType)))));
+         s.band = static_cast<SlotBand>(static_cast<int>(std::lround(
+            realValue(fxParamId(slot, kFxFieldBand)))));
+         s.mix = realValue(fxParamId(slot, kFxFieldMix));
+         s.bypass = realValue(fxParamId(slot, kFxFieldBypass)) != 0.0;
+         p.chain.position[static_cast<size_t>(slot)] = static_cast<ChainPosition>(
+            static_cast<int>(std::lround(realValue(fxParamId(slot, kFxFieldPosition)))));
+         for (int letter = 0; letter < kFxLetters; ++letter) {
+            const uint32_t id = fxParamId(slot, kFxFieldA + letter);
+            double v = realValue(id);
+            // A percent letter is a fraction like every other percent in the
+            // table and is handed to the chain in whole percent, which is what
+            // the effects are written in.
+            if (descFor(id).kind == ParamKind::Percent)
+               v *= 100.0;
+            s.v[static_cast<size_t>(letter)] = v;
+         }
+      }
+      p.chain.xoverLow = realValue(kParamFxXoverLow);
+      p.chain.xoverHigh = realValue(kParamFxXoverHigh);
+
       mEngine.setParams(p);
    }
 
    static uint32_t paramsCount(const clap_plugin_t *) { return kNumParams; }
 
-   static bool paramsGetInfo(const clap_plugin_t *, uint32_t index, clap_param_info_t *info) {
+   static bool paramsGetInfo(const clap_plugin_t *p, uint32_t index, clap_param_info_t *info) {
       if (index >= kNumParams)
          return false;
-      const ParamDesc &d = paramTable()[index];
+      const ParamDesc d = self(p)->hostDesc(paramTable()[index].id);
       std::memset(info, 0, sizeof(*info));
       info->id = d.id;
       info->flags = CLAP_PARAM_IS_AUTOMATABLE | CLAP_PARAM_IS_MODULATABLE;
@@ -328,20 +433,24 @@ private:
       return true;
    }
 
-   static bool paramsValueToText(const clap_plugin_t *, clap_id id, double value, char *out,
+   static bool paramsValueToText(const clap_plugin_t *p, clap_id id, double value, char *out,
                                  uint32_t size) {
-      const ParamDesc *d = paramById(id);
-      if (!d)
+      if (id >= kNumParams)
          return false;
-      return paramValueToText(*d, value, out, size);
+      const SaeureKistePlugin *plug = self(p);
+      return paramValueToText(plug->descFor(id), plug->typedFromStored(id, value), out, size);
    }
 
-   static bool paramsTextToValue(const clap_plugin_t *, clap_id id, const char *text,
+   static bool paramsTextToValue(const clap_plugin_t *p, clap_id id, const char *text,
                                  double *out) {
-      const ParamDesc *d = paramById(id);
-      if (!d)
+      if (id >= kNumParams)
          return false;
-      return paramTextToValue(*d, text, out);
+      const SaeureKistePlugin *plug = self(p);
+      double raw = 0.0;
+      if (!paramTextToValue(plug->descFor(id), text, &raw))
+         return false;
+      *out = plug->storedFromTyped(id, raw);
+      return true;
    }
 
    static void paramsFlush(const clap_plugin_t *p, const clap_input_events_t *in,
@@ -387,6 +496,36 @@ private:
          static_cast<const clap_host_params_t *>(mHost->get_extension(mHost, CLAP_EXT_PARAMS));
       if (hostParams && hostParams->request_flush)
          hostParams->request_flush(mHost);
+   }
+
+   // An FX slot's type renames its six letters and moves their values, and a
+   // host caches both until it is told otherwise. The rescan has to happen on
+   // the main thread, so the audio thread asks for a callback and this is what
+   // it finds.
+   void onMainThread() {
+      if (mInfoDirty.load(std::memory_order_acquire))
+         notifyParamValuesChanged();
+   }
+
+   // The FX can lengthen the tail by seconds -- a delay at high feedback, a
+   // long reverb -- and a host that bounces a track keeps rendering for as
+   // long as the tail says. The host is told when it moves. [audio-thread]
+   void notifyTailChanged() {
+      const double tail = mEngine.tailSeconds();
+      if (tail == mTailReported)
+         return;
+      mTailReported = tail;
+      if (!mHost)
+         return;
+      auto *hostTail =
+         static_cast<const clap_host_tail_t *>(mHost->get_extension(mHost, CLAP_EXT_TAIL));
+      if (hostTail && hostTail->changed)
+         hostTail->changed(mHost);
+   }
+
+   void requestHostCallback() {
+      if (mHost && mHost->request_callback)
+         mHost->request_callback(mHost);
    }
 
    void drainGuiEdits(const clap_output_events_t *out, uint32_t time) {
@@ -527,10 +666,12 @@ private:
          if (!readExactly(stream, &id, sizeof(id)) ||
              !readExactly(stream, &value, sizeof(value)))
             return false;
-         const ParamDesc *d = paramById(id);
-         if (!d)
+         if (!paramById(id))
             continue; // unknown id from a newer version: ignore
-         plug->mValues[id].store(clampv(value, d->min, d->max), std::memory_order_relaxed);
+         // An FX letter is stored as a position, so its range is 0..1 rather
+         // than its table row's carrier range.
+         const ParamDesc d = plug->hostDesc(id);
+         plug->mValues[id].store(clampv(value, d.min, d.max), std::memory_order_relaxed);
       }
       // The bank, then the window state. A truncated read leaves everything
       // after it alone rather than failing the load: a project that opens with
@@ -602,6 +743,9 @@ private:
       plug->publishUserTable(std::move(table));
 
       plug->mParamsDirty.store(true, std::memory_order_release);
+      // A project can hold chain types other than the ones the host last saw,
+      // so the letters' names and ranges have to be re-read with it.
+      plug->mInfoDirty.store(true, std::memory_order_release);
       plug->notifyParamValuesChanged();
       return true;
    }
@@ -684,14 +828,185 @@ private:
    void applyPreset(const PresetData &preset) {
       for (uint32_t i = 0; i < kNumParams; ++i)
          mValues[i].store(paramTable()[i].def, std::memory_order_relaxed);
-      for (const auto &kv : preset.values) {
-         const ParamDesc *d = paramById(kv.first);
-         if (!d)
-            continue;
-         mValues[kv.first].store(clampv(kv.second, d->min, d->max), std::memory_order_relaxed);
-      }
+      applyPresetValues(preset, false);
+      mParamsDirty.store(true, std::memory_order_release);
+      mInfoDirty.store(true, std::memory_order_release);
+      notifyParamValuesChanged();
+   }
+
+   // An FX chain preset: the whole chain and nothing else.
+   //
+   // The difference from applyPreset() is the loop it does not have. A preset
+   // resets every parameter it does not mention, which is right for a preset
+   // and wrong for a chain: a chain is a thing to drop onto a sequence and a
+   // set of knobs you already like, so everything outside it has to survive it
+   // untouched. The chain itself is replaced whole, so a slot the file does not
+   // mention is emptied rather than left playing underneath it.
+   void applyFxChainPreset(const PresetData &preset) {
+      for (int slot = 0; slot < kNumFxSlots; ++slot)
+         clearFxSlot(slot);
+      applyPresetValues(preset, true);
+      mParamsDirty.store(true, std::memory_order_release);
+      mInfoDirty.store(true, std::memory_order_release);
+      notifyParamValuesChanged();
+   }
+
+   // A preset's values, which are in real units. An FX letter was read through
+   // its wide carrier row and is converted again here with what its slot's type
+   // makes of it, so the types go first: the file is written in that order, but
+   // a hand-edited one need not be.
+   void applyPresetValues(const PresetData &preset, bool fxOnly) {
+      auto apply = [&](uint32_t id, double value) {
+         const ParamDesc *d = paramById(id);
+         if (!d || (fxOnly && !isFxParam(id)))
+            return;
+         if (isFxLetterParam(id)) {
+            const ParamDesc typed = descFor(id);
+            value = fxLetterToPosition(typed, realToParam(typed, value));
+         }
+         const ParamDesc stored = hostDesc(id);
+         mValues[id].store(clampv(value, stored.min, stored.max), std::memory_order_relaxed);
+      };
+      for (const auto &kv : preset.values)
+         if (fxTypeParamOf(kv.first) == kv.first)
+            apply(kv.first, kv.second);
+      for (const auto &kv : preset.values)
+         if (fxTypeParamOf(kv.first) != kv.first)
+            apply(kv.first, kv.second);
+   }
+
+   // ------------------------------------------------- the four kinds of load
+   //
+   // A Scene is everything; a Patch is a Scene's sound and pattern bank with the
+   // FX left alone; an FX chain is the FX and nothing else; an Effect is one
+   // slot. Each also says which field shows what was loaded -- loading a Scene
+   // fills all of them, because a Scene is a patch and a chain at once.
+
+   // Which preset a field came from: a factory preset by its load key, a file
+   // by its path. Stable across a rescan, unlike an index into mPresets.
+   static std::string presetIdentity(uint32_t locationKind, const char *location,
+                                     const char *loadKey) {
+      if (locationKind == CLAP_PRESET_DISCOVERY_LOCATION_PLUGIN)
+         return std::string("key:") + (loadKey ? loadKey : "");
+      return location ? std::string(location) : std::string();
+   }
+
+   static std::string presetIdentity(const GuiPreset &entry) {
+      return entry.loadKey.empty() ? entry.path : "key:" + entry.loadKey;
+   }
+
+   int presetIndexOf(const std::string &identity) const {
+      if (identity.empty())
+         return -1;
+      for (size_t i = 0; i < mPresets.size(); ++i)
+         if (presetIdentity(mPresets[i]) == identity)
+            return static_cast<int>(i);
+      return -1;
+   }
+
+   void loadScene(const PresetData &preset, const PatternData &pattern, const std::string &from) {
+      applyPreset(preset);
+      applyPattern(pattern);
+      mPatchFrom = from;
+      // A Scene names the chain only if it has one: an empty chain is not a
+      // chain preset anybody chose.
+      bool hasFx = false;
+      for (const auto &kv : preset.values)
+         hasFx = hasFx || (fxTypeParamOf(kv.first) == kv.first && kv.second > 0.5);
+      mFxChainFrom = hasFx ? from : std::string();
+      mEffectFrom.fill(std::string());
+      mPatchEdited = mFxEdited = false;
+      mEffectEdited.fill(false);
+   }
+
+   // The sound and the pattern bank of a Patch -- or of a Scene, which has
+   // both -- with the FX left as they are. Everything outside the FX goes back
+   // to its default first, exactly as a Scene load does, so a Patch written
+   // before a parameter existed does not leave that parameter where the last
+   // one put it.
+   void loadPatch(const PresetData &preset, const PatternData &pattern, const std::string &from) {
+      for (uint32_t i = 0; i < kNumParams; ++i)
+         if (!isFxParam(i))
+            mValues[i].store(paramTable()[i].def, std::memory_order_relaxed);
+      PresetData sound;
+      for (const auto &kv : preset.values)
+         if (!isFxParam(kv.first))
+            sound.values.push_back(kv);
+      applyPresetValues(sound, false);
+      applyPattern(pattern);
+      mPatchFrom = from;
+      mPatchEdited = false;
+      mPresetEdited = true;
       mParamsDirty.store(true, std::memory_order_release);
       notifyParamValuesChanged();
+   }
+
+   void loadFxChain(const PresetData &preset, const std::string &from) {
+      applyFxChainPreset(preset);
+      mFxChainFrom = from;
+      mEffectFrom.fill(std::string());
+      mFxEdited = false;
+      mEffectEdited.fill(false);
+      mPresetEdited = true;
+   }
+
+   // An Effect is written as slot 1, whatever slot it was saved from, and goes
+   // into `slot` here: its type, band, mix and letters. The slot keeps its
+   // place in the chain and its Position, because where an effect sits is the
+   // chain's business rather than the effect's.
+   void loadEffect(int slot, const PresetData &preset, const std::string &from) {
+      if (slot < 0 || slot >= kNumFxSlots)
+         return;
+      double type = 0.0;
+      for (const auto &kv : preset.values)
+         if (kv.first == fxParamId(0, kFxFieldType))
+            type = kv.second;
+      if (type < 0.5)
+         return; // an Effect with no effect in it
+      const uint32_t typeId = fxParamId(slot, kFxFieldType);
+      mValues[typeId].store(type, std::memory_order_relaxed);
+      resetFxLetters(typeId);
+      mValues[fxParamId(slot, kFxFieldBypass)].store(0.0, std::memory_order_relaxed);
+      for (const auto &kv : preset.values) {
+         const int field = fxSlotOfParam(kv.first) == 0 ? fxFieldOfParam(kv.first) : -1;
+         if (field != kFxFieldBand && field != kFxFieldMix && field < kFxFieldA)
+            continue;
+         const uint32_t id = fxParamId(slot, field);
+         double value = kv.second;
+         if (isFxLetterParam(id)) {
+            const ParamDesc typed = descFor(id);
+            value = fxLetterToPosition(typed, realToParam(typed, value));
+         }
+         const ParamDesc stored = hostDesc(id);
+         mValues[id].store(clampv(value, stored.min, stored.max), std::memory_order_relaxed);
+      }
+      mEffectFrom[static_cast<size_t>(slot)] = from;
+      mEffectEdited[static_cast<size_t>(slot)] = false;
+      mFxEdited = true;
+      mPresetEdited = true;
+      mParamsDirty.store(true, std::memory_order_release);
+      mInfoDirty.store(true, std::memory_order_release);
+      notifyParamValuesChanged();
+   }
+
+   // Edits by hand. The Scene is edited by any of them; the Patch by anything
+   // outside the FX, the chain by anything inside it, and an Effect by its own
+   // slot's controls.
+   void markPatchEdited() {
+      mPresetEdited = true;
+      mPatchEdited = true;
+   }
+
+   void markParamEdited(uint32_t id) {
+      mPresetEdited = true;
+      if (!isFxParam(id)) {
+         mPatchEdited = true;
+         return;
+      }
+      mFxEdited = true;
+      const int slot = fxSlotOfParam(id);
+      if (slot >= 0)
+         mEffectEdited[static_cast<size_t>(slot)] = true;
    }
 
    // Any path that moves parameters behind the host's back -- loading a preset,
@@ -702,8 +1017,12 @@ private:
          return;
       auto *hostParams =
          static_cast<const clap_host_params_t *>(mHost->get_extension(mHost, CLAP_EXT_PARAMS));
-      if (hostParams && hostParams->rescan)
-         hostParams->rescan(mHost, CLAP_PARAM_RESCAN_VALUES | CLAP_PARAM_RESCAN_TEXT);
+      if (!hostParams || !hostParams->rescan)
+         return;
+      uint32_t flags = CLAP_PARAM_RESCAN_VALUES | CLAP_PARAM_RESCAN_TEXT;
+      if (mInfoDirty.exchange(false, std::memory_order_acq_rel))
+         flags |= CLAP_PARAM_RESCAN_INFO;
+      hostParams->rescan(mHost, flags);
    }
 
    void reportPresetError(uint32_t locationKind, const char *location, const char *loadKey,
@@ -721,6 +1040,16 @@ private:
       auto *log = static_cast<const clap_host_log_t *>(mHost->get_extension(mHost, CLAP_EXT_LOG));
       if (log && log->log)
          log->log(mHost, CLAP_LOG_WARNING, msg.c_str());
+   }
+
+   static bool readBuiltinPreset(const char *loadKey, PresetData &preset, PatternData &pattern,
+                                 std::string &error) {
+      for (unsigned i = 0; i < kNumBuiltinPresets; ++i)
+         if (std::strcmp(kBuiltinPresets[i].loadKey, loadKey) == 0)
+            return parsePreset(kBuiltinPresets[i].text, std::strlen(kBuiltinPresets[i].text),
+                               preset, &pattern, error);
+      error = std::string("unknown built-in preset '") + loadKey + "'";
+      return false;
    }
 
    static bool presetLoadFromLocation(const clap_plugin_t *p, uint32_t locationKind,
@@ -744,19 +1073,7 @@ private:
             plug->reportPresetError(locationKind, location, loadKey, "missing preset load key");
             return false;
          }
-         const BuiltinPreset *found = nullptr;
-         for (unsigned i = 0; i < kNumBuiltinPresets; ++i) {
-            if (std::strcmp(kBuiltinPresets[i].loadKey, loadKey) == 0) {
-               found = &kBuiltinPresets[i];
-               break;
-            }
-         }
-         if (!found) {
-            plug->reportPresetError(locationKind, location, loadKey,
-                                    std::string("unknown built-in preset '") + loadKey + "'");
-            return false;
-         }
-         if (!parsePreset(found->text, std::strlen(found->text), preset, &pattern, error)) {
+         if (!readBuiltinPreset(loadKey, preset, pattern, error)) {
             plug->reportPresetError(locationKind, location, loadKey, error);
             return false;
          }
@@ -765,9 +1082,33 @@ private:
          return false;
       }
 
-      plug->applyPreset(preset);
-      plug->applyPattern(pattern);
-      plug->notePresetLoaded(locationKind, loadKey, location);
+      // What a file replaces is what it is, wherever it was loaded from -- the
+      // browser, a file dialog or the host's own preset list. An Effect from
+      // the host has no slot to go into, so it is added at the end of the
+      // chain, the way ADD EFFECT adds one.
+      const std::string from = presetIdentity(locationKind, location, loadKey);
+      switch (pattern.kind) {
+      case PresetKind::Patch:
+         plug->loadPatch(preset, pattern, from);
+         break;
+      case PresetKind::FxChain:
+         plug->loadFxChain(preset, from);
+         break;
+      case PresetKind::Effect: {
+         const int slot = plug->fxAppendSlot();
+         if (slot < 0) {
+            plug->reportPresetError(locationKind, location, loadKey, "every FX slot is in use");
+            return false;
+         }
+         plug->loadEffect(slot, preset, from);
+         break;
+      }
+      case PresetKind::Scene:
+      default:
+         plug->loadScene(preset, pattern, from);
+         plug->notePresetLoaded(locationKind, loadKey, location);
+         break;
+      }
 
       if (plug->mHost) {
          auto *hostPreset = static_cast<const clap_host_preset_load_t *>(
@@ -1113,6 +1454,23 @@ private:
          mTranspose = 0;
       }
 
+      const clap_event_transport_t *tr = pr ? pr->transport : nullptr;
+
+      // The tempo, whether or not the host is rolling, and in every mode. A
+      // stopped DAW still says what the project's tempo is, and a pattern
+      // running off a held key is the one case where the plugin has to work it
+      // out for itself -- so reading this only while playing meant the
+      // audition ran at whatever tempo the plugin last saw, or at 120 if the
+      // transport had never been started since it was instantiated. And it is
+      // read before the mode is: the synced delay and the FX's synced times
+      // need it in MIDI mode too, and reading it after the MIDI-mode return
+      // left them at 120 there whatever the project said.
+      if (tr && (tr->flags & CLAP_TRANSPORT_HAS_TEMPO) && tr->tempo > 1.0)
+         mTempo = tr->tempo;
+      // The tempo the window puts in a dragged MIDI file. Published rather than
+      // read across the threads raw.
+      mTempoPublished.store(mTempo, std::memory_order_relaxed);
+
       if (!sequencerMode()) {
          if (mSeqRunning) {
             seqStopAll();
@@ -1126,17 +1484,6 @@ private:
 
       bool playing = false;
       bool lockedToHost = false;
-      const clap_event_transport_t *tr = pr ? pr->transport : nullptr;
-
-      // The tempo, whether or not the host is rolling. A stopped DAW still
-      // says what the project's tempo is, and a pattern running off a held key
-      // is the one case where the plugin has to work it out for itself -- so
-      // reading this only while playing meant the audition ran at whatever
-      // tempo the plugin last saw, or at 120 if the transport had never been
-      // started since it was instantiated. Changing the project tempo then did
-      // nothing at all until the host was put into play.
-      if (tr && (tr->flags & CLAP_TRANSPORT_HAS_TEMPO) && tr->tempo > 1.0)
-         mTempo = tr->tempo;
 
       if (tr && (tr->flags & CLAP_TRANSPORT_IS_PLAYING)) {
          if (tr->flags & CLAP_TRANSPORT_HAS_BEATS_TIMELINE) {
@@ -1226,10 +1573,6 @@ private:
          if (behind > mLastFired + 1.0e-9 && mStepPos - behind < 0.5)
             mNextOn = behind;
       }
-
-      // The tempo the window puts in a dragged MIDI file. Published rather than
-      // read across the threads raw.
-      mTempoPublished.store(mTempo, std::memory_order_relaxed);
 
       const double sr = mSampleRate > 0.0 ? mSampleRate : 48000.0;
       mFramesPerStep = 60.0 / (mTempo > 1.0 ? mTempo : 120.0) / perBeat * sr;
@@ -1354,7 +1697,7 @@ private:
       if (pattern < 0 || pattern >= kMaxPatterns || index < 0 || index >= kMaxSteps)
          return;
       mPattern[pattern][index].store(step.pack(), std::memory_order_relaxed);
-      mPresetEdited = true;
+      markPatchEdited();
    }
 
    // Zero based; the parameter counts from one, because that is how a pattern
@@ -1489,7 +1832,7 @@ private:
       transposePattern(steps, semitones, mTransposeMemory[pattern]);
       for (int i = 0; i < kMaxSteps; ++i)
          mPattern[pattern][i].store(steps[i], std::memory_order_relaxed);
-      mPresetEdited = true;
+      markPatchEdited();
    }
 
    // ------------------------------------------------------------- chains
@@ -1585,7 +1928,7 @@ private:
       const int pattern = seqShownPattern();
       for (int i = 0; i < kMaxSteps; ++i)
          mPattern[pattern][i].store(steps[i], std::memory_order_relaxed);
-      mPresetEdited = true;
+      markPatchEdited();
    }
 
    // GEN: a new line, not the same one again.
@@ -1649,12 +1992,24 @@ private:
       }
       case CLAP_EVENT_PARAM_VALUE: {
          const auto *ev = reinterpret_cast<const clap_event_param_value_t *>(hdr);
-         const ParamDesc *d = paramById(ev->param_id);
-         if (!d)
+         if (!paramById(ev->param_id))
             break;
-         const double value = clampv(ev->value, d->min, d->max);
+         // An FX letter arrives as a position, 0..1, which is the range the
+         // host was told about; hostDesc() says so for every parameter.
+         const ParamDesc d = hostDesc(ev->param_id);
+         const double value = clampv(ev->value, d.min, d.max);
          const double before = mValues[ev->param_id].exchange(value, std::memory_order_relaxed);
          mParamsDirty.store(true, std::memory_order_relaxed);
+         // A slot's type decides what its letters mean, so a new type puts them
+         // at its defaults, and the host is asked to re-read their names and
+         // values. That is a main-thread call and this may be the audio thread,
+         // so it is asked for through on_main_thread().
+         if (fxTypeParamOf(ev->param_id) == ev->param_id &&
+             std::lround(value) != std::lround(before)) {
+            resetFxLetters(ev->param_id);
+            mInfoDirty.store(true, std::memory_order_release);
+            requestHostCallback();
+         }
          // An old automation lane, or a render asking for a chain, sets every
          // pattern -- but only when it moves, so a host that resends the value
          // it already has does not flatten the per-pattern settings.
@@ -1762,6 +2117,7 @@ private:
       uint32_t eventIndex = 0;
       uint32_t frame = 0;
       bool clockUpdated = false;
+      mEngine.beginBlock();
 
       while (frame < numFrames) {
          // Consume every event scheduled at or before the current frame, so
@@ -1782,6 +2138,9 @@ private:
          if (!clockUpdated) {
             updateSequencerClock(pr);
             clockUpdated = true;
+            // The FX's synced times follow the tempo every block, whether a
+            // parameter moved or not.
+            mEngine.setTempo(mTempo > 1.0 ? mTempo : 120.0);
          }
 
          // A key press starts the pattern over. Consumed here rather than in
@@ -1844,8 +2203,17 @@ private:
       // are read once per block because one of them, the synced time, depends
       // on the tempo, which is a property of the block rather than of the
       // parameter table.
+      //
+      // The FX Master bus comes after it, which is the whole difference
+      // between Master and Post: Post is the end of the instrument, Master is
+      // the end of everything including the delay that was added to it. It
+      // runs over the whole block too, and a note that started inside the block
+      // still reaches its slots on the sample it started on: the engine counted
+      // where each piece of the block began.
       syncDelayParams();
       mDelay.process(outL, outR, numFrames);
+      mEngine.processMaster(outL, outR, numFrames);
+      notifyTailChanged();
 
       // Published for the window's activity meter; the GUI never reads engine
       // state directly.
@@ -1873,12 +2241,15 @@ private:
       if (mPresetsScanned)
          return;
       mPresetsScanned = true;
+      mPresets.clear();
+      mPresetKinds.clear();
 #ifdef SAEUREKISTE_WITH_GUI
       for (unsigned i = 0; i < kNumBuiltinPresets; ++i) {
          PresetData data;
+         PatternData pattern;
          std::string error;
          if (!parsePreset(kBuiltinPresets[i].text, std::strlen(kBuiltinPresets[i].text), data,
-                          error))
+                          &pattern, error))
             continue;
          GuiPreset entry;
          entry.name = data.name.empty() ? kBuiltinPresets[i].loadKey : data.name;
@@ -1886,13 +2257,14 @@ private:
          entry.loadKey = kBuiltinPresets[i].loadKey;
          entry.folder = kFactoryFolder;
          mPresets.push_back(entry);
+         mPresetKinds.push_back(pattern.kind);
       }
 
       const std::string dir = userPresetDir();
       std::error_code ec;
       if (dir.empty() || !std::filesystem::is_directory(dir, ec))
          return;
-      std::vector<GuiPreset> user;
+      std::vector<std::pair<GuiPreset, PresetKind>> user;
       const std::string suffix = std::string(".") + kPresetExtension;
       // The library's root and one level of folders under it. One level,
       // because a preset library is a shelf rather than a filesystem and a
@@ -1908,8 +2280,9 @@ private:
                continue;
             const std::string path = entry.path().string();
             PresetData data;
+            PatternData pattern;
             std::string error;
-            if (!parsePresetFile(path, data, error))
+            if (!parsePresetFile(path, data, &pattern, error))
                continue;
             GuiPreset item;
             item.name = data.name.empty() ? name.substr(0, name.size() - suffix.size()) : data.name;
@@ -1917,7 +2290,7 @@ private:
             item.path = path;
             item.userContent = true;
             item.folder = folder;
-            user.push_back(item);
+            user.emplace_back(item, pattern.kind);
          }
       };
       scan(dir, std::string());
@@ -1931,10 +2304,14 @@ private:
 
       // Sorted by folder first so the browser's own grouping and the order the
       // arrow buttons walk in are the same order.
-      std::sort(user.begin(), user.end(), [](const GuiPreset &a, const GuiPreset &b) {
+      std::sort(user.begin(), user.end(), [](const auto &x, const auto &y) {
+         const GuiPreset &a = x.first, &b = y.first;
          return a.folder == b.folder ? a.name < b.name : a.folder < b.folder;
       });
-      mPresets.insert(mPresets.end(), user.begin(), user.end());
+      for (const auto &entry : user) {
+         mPresets.push_back(entry.first);
+         mPresetKinds.push_back(entry.second);
+      }
 #endif
    }
 
@@ -1999,10 +2376,13 @@ private:
    // Chain and Chain Repeat are drawn as parameters but belong to the pattern
    // on screen, so the window's reads and writes of them go there and the host
    // hears nothing about it. See kParamChainRepeat.
+   // The window works in descFor()'s raw space, so it is handed an FX letter
+   // as its type's value -- Hz, dB, a model -- and hands one back the same way.
    double guiParamValue(uint32_t id) const override {
       if (isLegacyChainParam(id))
          return chainSlot(id).load(std::memory_order_relaxed);
-      return id < kNumParams ? mValues[id].load(std::memory_order_relaxed) : 0.0;
+      return id < kNumParams ? typedFromStored(id, mValues[id].load(std::memory_order_relaxed))
+                             : 0.0;
    }
 
    void guiBeginEdit(uint32_t id) override {
@@ -2011,19 +2391,29 @@ private:
    }
 
    void guiSetParam(uint32_t id, double value) override {
-      const ParamDesc *d = paramById(id);
-      if (!d)
+      if (!paramById(id))
          return;
-      const double clamped = clampv(value, d->min, d->max);
+      const ParamDesc typed = descFor(id);
       if (isLegacyChainParam(id)) {
-         chainSlot(id).store(static_cast<int>(std::floor(clamped + 0.5)), std::memory_order_relaxed);
-         mPresetEdited = true;
+         chainSlot(id).store(static_cast<int>(std::floor(clampv(value, typed.min, typed.max) + 0.5)),
+                             std::memory_order_relaxed);
+         markPatchEdited();
          return;
       }
-      mValues[id].store(clamped, std::memory_order_relaxed);
+      const ParamDesc stored = hostDesc(id);
+      const double v = clampv(storedFromTyped(id, clampv(value, typed.min, typed.max)), stored.min,
+                              stored.max);
+      const double before = mValues[id].exchange(v, std::memory_order_relaxed);
       mParamsDirty.store(true, std::memory_order_release);
-      mPresetEdited = true;
-      pushGuiEdit(id, clamped, EditKind::Value);
+      markParamEdited(id);
+      pushGuiEdit(id, v, EditKind::Value);
+      // A new type puts its letters at its defaults, as it does from the host.
+      // This is the main thread, so the host can be told straight away.
+      if (fxTypeParamOf(id) == id && std::lround(v) != std::lround(before)) {
+         resetFxLetters(id);
+         mInfoDirty.store(true, std::memory_order_release);
+         notifyParamValuesChanged();
+      }
    }
 
    void guiEndEdit(uint32_t id) override {
@@ -2109,28 +2499,35 @@ private:
    }
 
    bool guiSavePreset(const std::string &input, std::string &error) override {
-      std::string folder, name;
-      splitFolder(input, folder, name);
-      if (name.empty()) {
-         error = "Give the preset a name after the folder.";
-         return false;
-      }
-      const std::string path = plugincore::userPresetPathIn(presetContext(), folder, name);
-      if (path.empty()) {
-         error = "No user preset directory: neither XDG_CONFIG_HOME nor HOME is set.";
-         return false;
-      }
-
       // Everything the engine is currently using, written as the user's own
       // preset. Author and description are left out: they belong to whoever
       // wrote the preset this was derived from, not to this copy.
       PresetData data;
-      data.name = name;
       for (uint32_t i = 0; i < kNumParams; ++i) {
          const uint32_t id = paramTable()[i].id;
-         data.values.emplace_back(id, mValues[id].load(std::memory_order_relaxed));
+         if (fxSlotWorthSaving(id))
+            data.values.emplace_back(id, presetValue(id));
       }
       PatternData pattern;
+      bankForPreset(pattern);
+      std::string path;
+      if (!writeUserPreset(input, "", data, pattern, path, error))
+         return false;
+
+      // What was just saved is what every field now shows: the Scene, and
+      // the patch and the chain inside it.
+      mCurrentPreset = presetIndexOf(path);
+      mPresetEdited = false;
+      mPatchFrom = path;
+      mPatchEdited = false;
+      mFxChainFrom = fxSlotsInUseCount() > 0 ? path : std::string();
+      mFxEdited = false;
+      return true;
+   }
+
+   // The pattern bank and the user's wavetable, which a Scene and a Patch both
+   // carry.
+   void bankForPreset(PatternData &pattern) {
       pattern.present = true;
       for (int i = 0; i < kMaxPatterns * kMaxSteps; ++i)
          pattern.steps[i] = mPattern[i / kMaxSteps][i % kMaxSteps].load(std::memory_order_relaxed);
@@ -2140,23 +2537,349 @@ private:
          pattern.chainRepeat[p] = mChainRepeat[p].load(std::memory_order_relaxed);
       }
       userTableForPreset(pattern);
+   }
 
+   // Writes a preset into the user's library and rescans it. "Folder/Name"
+   // saves into a folder, creating it if it is not there; a bare name goes into
+   // `defaultFolder`, which for a Scene is the library's root, as every save
+   // was before folders existed, and for the other kinds is their own shelf.
+   // The selection of every field is kept by identity, so the rescan moves no
+   // field off what it showed.
+   bool writeUserPreset(const std::string &input, const std::string &defaultFolder,
+                        PresetData &data, const PatternData &pattern, std::string &path,
+                        std::string &error) {
+      std::string folder, name;
+      splitFolder(input, folder, name);
+      if (name.empty()) {
+         error = "Give the preset a name after the folder.";
+         return false;
+      }
+      if (input.find_first_of("/\\") == std::string::npos)
+         folder = defaultFolder;
+      path = plugincore::userPresetPathIn(presetContext(), folder, name);
+      if (path.empty()) {
+         error = "No user preset directory: neither XDG_CONFIG_HOME nor HOME is set.";
+         return false;
+      }
+      data.name = name;
       if (!writePresetFile(path, formatPreset(data, &pattern), error))
          return false;
-
-      // Rescan so the browser shows it at once, and select what was just saved.
-      mPresets.clear();
+      const std::string current =
+         mCurrentPreset >= 0 && mCurrentPreset < static_cast<int>(mPresets.size())
+            ? presetIdentity(mPresets[static_cast<size_t>(mCurrentPreset)])
+            : std::string();
       mPresetsScanned = false;
       ensurePresetList();
-      mCurrentPreset = -1;
-      for (size_t i = 0; i < mPresets.size(); ++i) {
-         if (mPresets[i].path == path) {
-            mCurrentPreset = static_cast<int>(i);
-            break;
-         }
-      }
-      mPresetEdited = false;
+      mCurrentPreset = presetIndexOf(current);
       return true;
+   }
+
+   // What a preset file holds for a parameter: real units, which for an FX
+   // letter are only known through its slot's type.
+   double presetValue(uint32_t id) const {
+      const double stored = mValues[id].load(std::memory_order_relaxed);
+      return isFxLetterParam(id) ? paramToReal(descFor(id), typedFromStored(id, stored)) : stored;
+   }
+
+   // An empty FX slot is left out of a preset file: loading a preset starts
+   // from the defaults, where every slot is empty, so its eleven lines would
+   // say nothing. Everything that is not an FX slot parameter is written.
+   bool fxSlotWorthSaving(uint32_t id) const {
+      const int slot = fxSlotOfParam(id);
+      return slot < 0 || fxSlotType(slot) != 0;
+   }
+
+   // ------------------------------------------------------ the FX structure
+   //
+   // Adding, removing and moving are edits to the chain rather than to the
+   // sound: they write the same parameters the page does, on the main thread,
+   // and then ask the host to re-read them -- names included, because moving a
+   // slot changes what "Slot 3 Cutoff" is called and what it does.
+   //
+   // The engine runs the slots in index order, so a slot's index is its place
+   // in the chain, and the window keeps the used ones packed at the front. A
+   // host can still switch a slot in the middle Off, which leaves a gap; a gap
+   // is not a place, so everything below counts the slots that hold an effect
+   // rather than assuming there are none.
+   //
+   // The cost is the one thing to know before automating a slot: a lane follows
+   // the slot, not the effect, so moving an effect to another place in the chain
+   // moves its lane with it. A chain is edited while it is being built, not
+   // mid-take.
+   int fxSlotType(int slot) const {
+      return static_cast<int>(std::lround(
+         mValues[fxParamId(slot, kFxFieldType)].load(std::memory_order_relaxed)));
+   }
+
+   // The slots that hold an effect, in chain order. A slot whose type is Off is
+   // not in the chain, so a gap is not a position: what the page numbers is
+   // this list, and what the engine runs is this list, in this order.
+   int fxSlotsInUse(int *out) const {
+      int n = 0;
+      for (int s = 0; s < kNumFxSlots; ++s)
+         if (fxSlotType(s) > 0)
+            out[n++] = s;
+      return n;
+   }
+
+   // Where `slot` sits in the chain, or -1 when it is not in it.
+   int fxPlaceOf(int slot) const {
+      int slots[kNumFxSlots];
+      const int n = fxSlotsInUse(slots);
+      for (int i = 0; i < n; ++i)
+         if (slots[i] == slot)
+            return i;
+      return -1;
+   }
+
+   // Every stored value, in the order the fields are declared. Safe to copy
+   // between slots as they are: a letter is a position along its type, and
+   // after the copy both slots hold the same type.
+   void copyFxSlot(int dst, int src) {
+      for (int f = 0; f < kFxParamsPerSlot; ++f)
+         mValues[fxParamId(dst, f)].store(
+            mValues[fxParamId(src, f)].load(std::memory_order_relaxed),
+            std::memory_order_relaxed);
+   }
+
+   // An empty slot, back to the defaults, so ADD always starts from the same
+   // place. The type goes first: a letter's default is its type's.
+   void clearFxSlot(int slot) {
+      mValues[fxParamId(slot, kFxFieldType)].store(0.0, std::memory_order_relaxed);
+      for (int f = 1; f < kFxParamsPerSlot; ++f) {
+         const uint32_t id = fxParamId(slot, f);
+         mValues[id].store(hostDesc(id).def, std::memory_order_relaxed);
+      }
+   }
+
+   void fxStructureChanged() {
+      mPresetEdited = true;
+      mFxEdited = true;
+      mParamsDirty.store(true, std::memory_order_release);
+      mInfoDirty.store(true, std::memory_order_release);
+      notifyParamValuesChanged();
+   }
+
+   int fxSlotsInUseCount() const {
+      int slots[kNumFxSlots];
+      return fxSlotsInUse(slots);
+   }
+
+   // Where a new effect goes: at the end of the chain, which is the slot after
+   // the last effect, or -- when the host has left the far end of the pool
+   // full -- the first gap. -1 when every slot is in use.
+   int fxAppendSlot() const {
+      int slots[kNumFxSlots];
+      const int n = fxSlotsInUse(slots);
+      if (n >= kNumFxSlots)
+         return -1;
+      int slot = n > 0 ? slots[n - 1] + 1 : 0;
+      if (slot >= kNumFxSlots) {
+         slot = 0;
+         while (fxSlotType(slot) != 0)
+            ++slot;
+      }
+      return slot;
+   }
+
+   // A new effect is a Saturator on the master bus: the end of the chain is
+   // the one place every chain has, and an insert that landed in front of the
+   // ladder would change the sound before its own knobs were touched.
+   void windowFxAdd() override {
+      const int slot = fxAppendSlot();
+      if (slot < 0)
+         return;
+      const uint32_t typeId = fxParamId(slot, kFxFieldType);
+      mValues[typeId].store(static_cast<double>(SlotType::Saturator), std::memory_order_relaxed);
+      resetFxLetters(typeId);
+      const int kMaster = static_cast<int>(ChainPosition::Master);
+      mValues[fxParamId(slot, kFxFieldPosition)].store(kMaster, std::memory_order_relaxed);
+      mValues[fxParamId(slot, kFxFieldBand)].store(0.0, std::memory_order_relaxed);
+      mValues[fxParamId(slot, kFxFieldMix)].store(1.0, std::memory_order_relaxed);
+      mValues[fxParamId(slot, kFxFieldBypass)].store(0.0, std::memory_order_relaxed);
+      mEffectFrom[static_cast<size_t>(slot)].clear();
+      mEffectEdited[static_cast<size_t>(slot)] = false;
+      fxStructureChanged();
+   }
+
+   void windowFxRemove(int slot) override {
+      int slots[kNumFxSlots];
+      const int n = fxSlotsInUse(slots);
+      const int at = fxPlaceOf(slot);
+      if (at < 0)
+         return;
+      // The ones after it move up into the gap, so the chain stays packed and a
+      // slot's index stays its place. The engine fades the last one out on its
+      // own: its type goes Off and its voice keeps running for the glide.
+      for (int i = at; i + 1 < n; ++i) {
+         copyFxSlot(slots[i], slots[i + 1]);
+         mEffectFrom[static_cast<size_t>(slots[i])] = mEffectFrom[static_cast<size_t>(slots[i + 1])];
+         mEffectEdited[static_cast<size_t>(slots[i])] =
+            mEffectEdited[static_cast<size_t>(slots[i + 1])];
+      }
+      clearFxSlot(slots[n - 1]);
+      mEffectFrom[static_cast<size_t>(slots[n - 1])].clear();
+      mEffectEdited[static_cast<size_t>(slots[n - 1])] = false;
+      fxStructureChanged();
+   }
+
+   void windowFxMove(int slot, int delta) override {
+      int slots[kNumFxSlots];
+      const int n = fxSlotsInUse(slots);
+      const int at = fxPlaceOf(slot);
+      const int to = at + delta;
+      if (at < 0 || to < 0 || to >= n || delta == 0)
+         return;
+      const int other = slots[to];
+      for (int f = 0; f < kFxParamsPerSlot; ++f) {
+         const uint32_t a = fxParamId(slot, f), b = fxParamId(other, f);
+         const double av = mValues[a].load(std::memory_order_relaxed);
+         const double bv = mValues[b].load(std::memory_order_relaxed);
+         mValues[a].store(bv, std::memory_order_relaxed);
+         mValues[b].store(av, std::memory_order_relaxed);
+      }
+      std::swap(mEffectFrom[static_cast<size_t>(slot)], mEffectFrom[static_cast<size_t>(other)]);
+      std::swap(mEffectEdited[static_cast<size_t>(slot)],
+                mEffectEdited[static_cast<size_t>(other)]);
+      fxStructureChanged();
+   }
+
+   // ------------------------------------------- Patch, FX chain and Effect
+   //
+   // The window's other three preset fields. The Scene field is the shared
+   // GuiDelegate's preset calls, unchanged.
+
+   PresetKind windowPresetKind(int index) const override {
+      return index >= 0 && index < static_cast<int>(mPresetKinds.size())
+                ? mPresetKinds[static_cast<size_t>(index)]
+                : PresetKind::Scene;
+   }
+
+   int windowCurrentPreset(PresetKind kind, int slot) const override {
+      switch (kind) {
+      case PresetKind::Patch: return presetIndexOf(mPatchFrom);
+      case PresetKind::FxChain: return presetIndexOf(mFxChainFrom);
+      case PresetKind::Effect:
+         return slot >= 0 && slot < kNumFxSlots ? presetIndexOf(mEffectFrom[static_cast<size_t>(slot)])
+                                                 : -1;
+      case PresetKind::Scene:
+      default: return mCurrentPreset;
+      }
+   }
+
+   bool windowPresetEdited(PresetKind kind, int slot) const override {
+      switch (kind) {
+      case PresetKind::Patch: return mPatchEdited;
+      case PresetKind::FxChain: return mFxEdited;
+      case PresetKind::Effect:
+         return slot >= 0 && slot < kNumFxSlots && mEffectEdited[static_cast<size_t>(slot)];
+      case PresetKind::Scene:
+      default: return mPresetEdited;
+      }
+   }
+
+   // Loads preset `index` as `kind`, whatever kind of file it is: the Patch
+   // field lists Scenes as well as Patches, because every Scene has a patch in
+   // it, and a Scene loaded there gives up its sound and its patterns only.
+   void windowLoadPresetAs(int index, PresetKind kind, int slot) override {
+      if (index < 0 || index >= static_cast<int>(mPresets.size()))
+         return;
+      if (kind == PresetKind::Scene) {
+         guiLoadPreset(index);
+         return;
+      }
+      const GuiPreset entry = mPresets[static_cast<size_t>(index)];
+      PresetData preset;
+      PatternData pattern;
+      std::string error;
+      const bool read =
+         entry.loadKey.empty()
+            ? parsePresetFile(entry.path, preset, &pattern, error)
+            : readBuiltinPreset(entry.loadKey.c_str(), preset, pattern, error);
+      if (!read)
+         return;
+      const std::string from = presetIdentity(entry);
+      if (kind == PresetKind::Patch)
+         loadPatch(preset, pattern, from);
+      else if (kind == PresetKind::FxChain)
+         loadFxChain(preset, from);
+      else
+         loadEffect(slot, preset, from);
+   }
+
+   bool windowSavePresetAs(PresetKind kind, int slot, const std::string &input,
+                           std::string &error) override {
+      if (kind == PresetKind::Scene)
+         return guiSavePreset(input, error);
+      PresetData data;
+      PatternData pattern;
+      pattern.kind = kind;
+      std::string folder;
+      if (kind == PresetKind::Patch) {
+         // Everything a Scene has but the FX.
+         for (uint32_t i = 0; i < kNumParams; ++i)
+            if (!isFxParam(paramTable()[i].id))
+               data.values.emplace_back(paramTable()[i].id, presetValue(paramTable()[i].id));
+         bankForPreset(pattern);
+         folder = kPatchFolder;
+      } else if (kind == PresetKind::FxChain) {
+         // The slots that hold an effect, and the two crossovers. Loading one
+         // empties the chain first, so the empty slots need no lines.
+         for (uint32_t id = kParamFxFirst; id < kNumParams; ++id)
+            if (fxSlotWorthSaving(id))
+               data.values.emplace_back(id, presetValue(id));
+         data.description = "Effects: what each one is, where it sits in the signal path, and "
+                            "the two band crossovers.";
+         folder = kFxChainFolder;
+      } else {
+         if (slot < 0 || slot >= kNumFxSlots || fxSlotType(slot) == 0) {
+            error = "There is no effect in that slot.";
+            return false;
+         }
+         // One slot, written as slot 1 so it can go into any slot, without its
+         // Position: where an effect sits belongs to the chain it is put in.
+         for (int f : {static_cast<int>(kFxFieldType), static_cast<int>(kFxFieldBand),
+                       static_cast<int>(kFxFieldMix)})
+            data.values.emplace_back(fxParamId(0, f), presetValue(fxParamId(slot, f)));
+         for (int l = 0; l < kFxLetters; ++l)
+            data.values.emplace_back(fxParamId(0, kFxFieldA + l),
+                                     presetValue(fxParamId(slot, kFxFieldA + l)));
+         // One shelf per type, so the browser groups them by what they are.
+         folder = std::string(paramTable()[fxParamId(0, kFxFieldType)]
+                                 .enumNames[fxSlotType(slot)]) +
+                  " Effects";
+      }
+      std::string path;
+      if (!writeUserPreset(input, folder, data, pattern, path, error))
+         return false;
+      if (kind == PresetKind::Patch) {
+         mPatchFrom = path;
+         mPatchEdited = false;
+      } else if (kind == PresetKind::FxChain) {
+         mFxChainFrom = path;
+         mFxEdited = false;
+      } else {
+         mEffectFrom[static_cast<size_t>(slot)] = path;
+         mEffectEdited[static_cast<size_t>(slot)] = false;
+      }
+      return true;
+   }
+
+   std::string windowSuggestedName(PresetKind kind, int slot) const override {
+      const int cur = windowCurrentPreset(kind, slot);
+      if (cur >= 0)
+         return mPresets[static_cast<size_t>(cur)].name;
+      switch (kind) {
+      case PresetKind::Patch: return "My Patch";
+      case PresetKind::FxChain: return "My Effects";
+      case PresetKind::Effect:
+         return slot >= 0 && slot < kNumFxSlots && fxSlotType(slot) > 0
+                   ? std::string("My ") +
+                        paramTable()[fxParamId(0, kFxFieldType)].enumNames[fxSlotType(slot)]
+                   : std::string("My Effect");
+      case PresetKind::Scene:
+      default: return guiSuggestedPresetName();
+      }
    }
 
    // --------------------------------------------------- folders and packs
@@ -2773,6 +3496,11 @@ private:
    std::atomic<double> mValues[kNumParams];
    std::atomic<double> mMods[kNumParams];
    std::atomic<bool> mParamsDirty{true};
+   // An FX slot's type changed, or the chain was rebuilt, so the host's cached
+   // names for the letters are stale and have to be re-read on the main thread.
+   std::atomic<bool> mInfoDirty{false};
+   // The tail the host was last told about; see notifyTailChanged().
+   double mTailReported = 0.0;
    std::atomic<uint32_t> mVoiceMeter{0};
    std::atomic<uint32_t> mNoteCounterMeter{0};
    // Free phrases requested by the editor, drained by the audio thread. Capped
@@ -2863,6 +3591,16 @@ private:
 
    bool mPresetsScanned = false;
    int mCurrentPreset = -1;
+   // The other three preset fields. Each remembers the preset it came from by
+   // identity -- the load key of a factory preset, the path of a file -- rather
+   // than by index, because a save rescans the library and moves every index
+   // after the new file. See presetIdentity().
+   std::string mPatchFrom, mFxChainFrom;
+   std::array<std::string, kNumFxSlots> mEffectFrom;
+   bool mPatchEdited = false, mFxEdited = false;
+   std::array<bool, kNumFxSlots> mEffectEdited{};
+   // The kind of every entry in mPresets, in the same order.
+   std::vector<PresetKind> mPresetKinds;
    bool mPresetEdited = false;
 #ifdef SAEUREKISTE_WITH_GUI
    std::vector<GuiPreset> mPresets;

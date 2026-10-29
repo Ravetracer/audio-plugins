@@ -3,6 +3,7 @@
 # Regenerates the manual's screenshots into docs/images/.
 #
 #   ./tools/make-screenshots.sh [outdir]
+#   SAEUREKISTE_BUILD=build-devbox ./tools/make-screenshots.sh
 #
 # The manual embeds these as data URIs, so they are committed rather than built
 # at release time: `release.sh` runs on machines with no X display and must not
@@ -34,7 +35,8 @@ set -euo pipefail
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 plugin_dir="$(cd "${here}/.." && pwd)"
 out="${1:-${plugin_dir}/docs/images}"
-build="${plugin_dir}/build"
+build="${SAEUREKISTE_BUILD:-${plugin_dir}/build}"
+case "$build" in /*) ;; *) build="${plugin_dir}/${build}" ;; esac
 
 for tool in xdotool import convert; do
    command -v "$tool" >/dev/null 2>&1 || { echo "${tool} not found" >&2; exit 1; }
@@ -100,14 +102,14 @@ WIN_W=1440; WIN_H=765; WIN_H_OPEN=1037
 ROW0_Y=74; ROW1_Y=210; PANEL_H=128
 SEQ_Y=346; SEQ_H=315; BANK_X=1192; BANK_W=232; SEQ_W=1168
 BAR_Y=669; ADV_ROW2_Y=709; ADV_ROW3_Y=845
-RESET_X=661; RESET_Y=687             # the RESET button, right of ADVANCED
+RESET_X=995; RESET_Y=687             # the RESET button, right of ADVANCED
 
 # Where the things this script clicks are, so a coordinate appears once.
 MODE_CHIP_X=98; MODE_CHIP_Y=261      # the SEQUENCER panel's Mode chip, right arrow
-ADVANCED_X=570; ADVANCED_Y=687       # the ADVANCED button on the preset bar
+ADVANCED_X=904; ADVANCED_Y=687       # the ADVANCED button on the preset bar
 MAP_X=960; ROW_Y=352                 # MAP, in the grid's title row
 PREV_X=1253; NEXT_X=1363; NAV_Y=549  # PREV and NEXT, under the bank
-PRESET_NAME_X=258; PRESET_NAME_Y=687
+PRESET_NAME_X=223; PRESET_NAME_Y=687
 
 host_pid=""
 host_started=0
@@ -299,6 +301,57 @@ start_host "$WIN_H"
 click 66 $TABLE_CHIP_Y 0.6
 click 120 $((187 + 4 + 11 * 20 + 10)) 0.8
 grab table-selector    16       $ROW0_Y  340    506
+stop_host
+
+# ---------------------------------------------------------------- the FX page
+#
+# The page has a floor so the Type list fits (548), and from three strips on it
+# grows with the chain: three strips, the footer and the bar are 578.
+#
+# ADD EFFECT appends a Saturator at the end of the signal path, so slot 1 needs
+# no work beyond being added; the other two are stepped to their type through
+# the chip's right-hand arrow rather than by opening a list, because a list
+# opens downwards from the top strip and where it lands is the window's
+# business, not this script's.
+FX_X=1176; FX_Y=685                # the FX button on the preset bar
+ADD_X=105                          # ADD EFFECT, in the footer under the strips
+WIN_H_CHAIN=578                    # three strips, the footer and the bar
+TYPE_CHIP_ARROW_X=228              # the Type chip's right arrow, any strip
+POS_CHIP_LEFT_X=260                # the Position chip's left arrow: ADD puts a
+                                   # slot on Master, which is the last value
+CHAIN_ROW0_Y=122                   # the first strip's chips
+CHAIN_ROW_STEP=102                 # one strip with its gap
+
+# ADD sits in the footer under the strips, so its own y moves down with the
+# page: the strips start at 74 and are 102 apart, and the button is centred in
+# the 96-pixel footer. An empty page already reserves one strip's row for its
+# line of text, so nothing moves between no strips and one.
+add_slot() { # $1 = how many strips the page shows before the click
+   local n=$1
+   [ "$n" -lt 1 ] && n=1
+   click $ADD_X $((74 + n * CHAIN_ROW_STEP + 48)) 0.45
+}
+
+start_host "$WIN_H"
+click $FX_X $FX_Y 0.8
+# Slot 1: Saturator, moved to Pre -- it arrives on Master, two steps back.
+add_slot 0
+for _ in 1 2; do
+   click $POS_CHIP_LEFT_X $CHAIN_ROW0_Y 0.3
+done
+# Slot 2: Filter (Saturator -> Clipper -> Wavefolder -> Bitcrush -> Filter),
+# moved to Post: one step back from Master.
+add_slot 1
+for _ in 1 2 3 4; do
+   click $TYPE_CHIP_ARROW_X $((CHAIN_ROW0_Y + CHAIN_ROW_STEP)) 0.25
+done
+click $POS_CHIP_LEFT_X $((CHAIN_ROW0_Y + CHAIN_ROW_STEP)) 0.3
+# Slot 3: Reverb (nine steps on from Saturator), left on the master bus.
+add_slot 2
+for _ in 1 2 3 4 5 6 7 8 9; do
+   click $TYPE_CHIP_ARROW_X $((CHAIN_ROW0_Y + 2 * CHAIN_ROW_STEP)) 0.25
+done
+grab window-fx         0        0        $WIN_W $WIN_H_CHAIN
 stop_host
 
 # ------------------------------------------------------- the collapsible half

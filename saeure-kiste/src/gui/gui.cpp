@@ -10,6 +10,7 @@
 
 #include "gui/seqwindow.h"
 
+#include "dsp/chain.h"
 #include "params.h"
 #include "saeurekiste.h"
 
@@ -252,8 +253,13 @@ constexpr bool everyPanelIsOnARow() {
 
 static_assert(everyPanelIsOnARow(), "kRowStart / kRowCount do not cover every panel");
 static_assert(everyPanelHoldsItsParams(), "a panel has more parameters than it has cells");
-static_assert(placedParams() + kNumPaneParams == static_cast<int>(kNumParams),
-              "every parameter must be on exactly one panel or in kPaneParams");
+// The chain is not on a panel: it has a page of its own, laid out by the
+// window from the id block, so its parameters are counted here rather than
+// placed on a panel that would have to be 68 columns wide.
+constexpr int kNumFxParams = kNumFxSlots * kFxParamsPerSlot + 2;
+static_assert(placedParams() + kNumPaneParams + kNumFxParams ==
+                 static_cast<int>(kNumParams),
+              "every parameter must be on a panel, in kPaneParams or in the chain");
 static_assert(rowWidth(0) <= kContentW, "row 0 is wider than the window");
 static_assert(rowWidth(1) <= kContentW, "row 1 is wider than the window");
 static_assert(rowWidth(2) <= kContentW, "row 2 is wider than the window");

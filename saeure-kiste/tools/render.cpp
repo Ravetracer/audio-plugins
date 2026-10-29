@@ -63,6 +63,7 @@ const char *dlerrorCompat() { return "see GetLastError()"; }
 #   define RD_DLERROR() dlerror()
 #endif
 
+#include "dsp/chain.h"
 #include "dsp/delay.h"
 #include "dsp/drive.h"
 #include "params.h"
@@ -145,6 +146,9 @@ const clap_host_log_t kHostLog = {
    }};
 
 uint32_t gRescanCount = 0;
+// How often the plugin asked for on_main_thread(). The FX ask for one instead
+// of rescanning from the audio thread.
+uint32_t gCallbackRequests = 0;
 
 const clap_host_params_t kHostParams = {
    [](const clap_host_t *, clap_param_rescan_flags) { ++gRescanCount; },
@@ -190,7 +194,7 @@ clap_host_t gHost = {
    },
    [](const clap_host_t *) {},
    [](const clap_host_t *) {},
-   [](const clap_host_t *) {},
+   [](const clap_host_t *) { ++gCallbackRequests; },
 };
 
 // ------------------------------------------------------- preset discovery side
@@ -4256,6 +4260,612 @@ int runSelfTest(const clap_plugin_entry_t *entry, double sampleRate) {
       }
       std::error_code rmec;
       std::filesystem::remove_all(dir, rmec);
+   }
+
+   // --- the FX
+   //
+   // The effect chain is the one part of this instrument the machine never
+   // had, so there is no service note to check it against. What a host relies
+   // on is checkable, though, and it is what this section does: an Off chain is
+   // not there at all, every type runs and every type is heard, the three buses
+   // are three different sounds, a slot at zero mix is the dry signal again, a
+   // chain preset moves the chain and nothing else -- and the CLAP contract
+   // holds while a slot's type changes what its letters mean.
+   if (const auto *fxp = static_cast<const clap_plugin_params_t *>(
+          plugin->get_extension(plugin, CLAP_EXT_PARAMS))) {
+      using namespace saeurekiste;
+
+      static clap_output_events_t sink{};
+      sink.try_push = [](const clap_output_events_t *, const clap_event_header_t *) {
+         return true;
+      };
+      // Everything below moves a parameter the way a host does, through
+      // flush(), rather than writing the plugin's atomics: the point is to test
+      // the path a host takes, and flush() is the call CLAP provides for it.
+      auto put = [&](uint32_t id, double value) {
+         EventList ev;
+         ev.params.push_back(makeParamValue(id, value));
+         ev.build();
+         fxp->flush(plugin, &ev.in, &sink);
+      };
+      auto infoFor = [&](uint32_t id, clap_param_info_t &out) {
+         const uint32_t count = fxp->count(plugin);
+         for (uint32_t i = 0; i < count; ++i)
+            if (fxp->get_info(plugin, i, &out) && out.id == id)
+               return true;
+         return false;
+      };
+      auto valueOf = [&](uint32_t id) {
+         double v = 0.0;
+         fxp->get_value(plugin, id, &v);
+         return v;
+      };
+      auto same = [](const RenderResult &a, const RenderResult &b) {
+         return a.interleaved.size() == b.interleaved.size() &&
+                std::memcmp(a.interleaved.data(), b.interleaved.data(),
+                            a.interleaved.size() * sizeof(float)) == 0;
+      };
+      // A slot's mix glides over 5 ms so switching one on does not click, which
+      // means a comparison that asks "is this the dry signal" has to start
+      // after that fade instead of at the first sample. Twenty milliseconds is
+      // four times the glide.
+      auto sameAfterFade = [&](const RenderResult &a, const RenderResult &b) {
+         const size_t skip = static_cast<size_t>(sampleRate * 0.02) * 2;
+         if (a.interleaved.size() != b.interleaved.size() || a.interleaved.size() <= skip)
+            return false;
+         return std::memcmp(a.interleaved.data() + skip, b.interleaved.data() + skip,
+                            (a.interleaved.size() - skip) * sizeof(float)) == 0;
+      };
+
+      const uint32_t typeId = fxParamId(0, kFxFieldType);
+      const uint32_t posId = fxParamId(0, kFxFieldPosition);
+      const uint32_t bandId = fxParamId(0, kFxFieldBand);
+      const uint32_t mixId = fxParamId(0, kFxFieldMix);
+      // The type list is the plugin's own, not the host's: CLAP carries no
+      // enum names, which is why the table in params.cpp is the one place they
+      // live and every other reader comes through it.
+      const ParamDesc *typeDesc = paramById(typeId);
+      if (typeDesc && typeDesc->enumNames) {
+         const int typeCount = static_cast<int>(typeDesc->enumCount);
+         auto typeNamed = [&](const char *name) {
+            for (int i = 0; i < typeCount; ++i)
+               if (std::strcmp(typeDesc->enumNames[i], name) == 0)
+                  return i;
+            return 0;
+         };
+
+         gParamOverrides.clear();
+         plugin->reset(plugin);
+         const RenderResult dry = renderPlugin(plugin, sampleRate, 512, 0.4, 0.4, 60, 1.0);
+
+         // 1. Off is a bypass, and it has to be one in every position and every
+         //    band: these are the values an old project's empty slots have, and
+         //    that project has to render what it always did.
+         for (int slot = 0; slot < kNumFxSlots; ++slot) {
+            put(fxParamId(slot, kFxFieldType), 0.0);
+            put(fxParamId(slot, kFxFieldPosition), static_cast<double>(slot % 3));
+            put(fxParamId(slot, kFxFieldBand), static_cast<double>(slot % kNumSlotBands));
+            put(fxParamId(slot, kFxFieldMix), 1.0);
+         }
+         plugin->reset(plugin);
+         const RenderResult off = renderPlugin(plugin, sampleRate, 512, 0.4, 0.4, 60, 1.0);
+         check(same(off, dry),
+               "every slot Off is no chain at all, whatever its position or band");
+
+         // 2. Every type is heard at its own defaults -- that is the state a
+         //    user gets after picking a type and touching nothing else, and a
+         //    type nobody can hear there is a type that does nothing. A few
+         //    defaults are deliberately neutral and cannot be heard by
+         //    construction: an EQ flat, a Utility, Stereo and Limiter at unity,
+         //    a Transient shaper at 0 dB and a Guard that has not been asked to
+         //    guard anything. "No change" is what each of those defaults means.
+         //
+         //    At its defaults a type has to stay near full scale: the source
+         //    line already peaks just under 1, and the two drive types add
+         //    about a decibel of makeup, which is their voice rather than a
+         //    fault. Anything past a quarter above the source is a gain stage
+         //    nobody asked for.
+         //
+         //    Pushed to every letter's limit the requirement is only that they
+         //    stay finite: an output gain at maximum is an output gain at
+         //    maximum, and the loudest is printed so a range that moves shows
+         //    up in the log rather than in somebody's ears.
+         const char *const neutral[] = {"EQ", "Utility", "Stereo", "Limiter", "Transient",
+                                        "Guard"};
+         auto isNeutral = [&](const char *name) {
+            for (const char *n : neutral)
+               if (std::strcmp(n, name) == 0)
+                  return true;
+            return false;
+         };
+         int ran = 0, tameAtDefaults = 0;
+         float loudest = 0.0f;
+         std::string quiet, notMuted, over, worst, defaultLoud;
+         for (int t = 1; t < typeCount; ++t) {
+            const char *typeName = typeDesc->enumNames[t];
+            put(typeId, static_cast<double>(t));
+            put(posId, 2.0); // Master
+            put(bandId, 0.0);
+            put(mixId, 1.0);
+            plugin->reset(plugin);
+            const RenderResult tame = renderPlugin(plugin, sampleRate, 512, 0.4, 0.4, 60, 1.0);
+            if (!tame.sawNonFinite && tame.peak <= 1.25f)
+               ++tameAtDefaults;
+            else {
+               char peak[64];
+               std::snprintf(peak, sizeof(peak), " %s %.2f", typeName,
+                             static_cast<double>(tame.peak));
+               defaultLoud += peak;
+            }
+            if (same(tame, dry)) {
+               if (!isNeutral(typeName))
+                  quiet += std::string(" ") + typeName;
+            }
+
+            for (int l = 0; l < kFxLetters; ++l) {
+               clap_param_info_t info{};
+               if (infoFor(fxParamId(0, kFxFieldA + l), info))
+                  put(info.id, info.max_value);
+            }
+            plugin->reset(plugin);
+            const RenderResult res = renderPlugin(plugin, sampleRate, 512, 0.4, 0.4, 60, 1.0);
+            if (!res.sawNonFinite)
+               ++ran;
+            if (res.peak > 1.001f)
+               over += std::string(" ") + typeName;
+            if (res.peak > loudest) {
+               loudest = res.peak;
+               worst = typeName;
+            }
+
+            // 3. At zero mix a slot is not there, whether it is running or not.
+            put(mixId, 0.0);
+            plugin->reset(plugin);
+            const RenderResult muted = renderPlugin(plugin, sampleRate, 512, 0.4, 0.4, 60, 1.0);
+            if (!sameAfterFade(muted, dry))
+               notMuted += std::string(" ") + typeName;
+            put(mixId, 1.0);
+         }
+         std::printf("       loudest at maximum: %.3f (%s)\n", static_cast<double>(loudest),
+                     worst.c_str());
+         check(ran == typeCount - 1, "every effect type runs, at every letter's maximum");
+         check(tameAtDefaults == typeCount - 1,
+               "no effect type runs away at its own defaults");
+         if (!defaultLoud.empty())
+            std::printf("       above full scale at defaults:%s\n", defaultLoud.c_str());
+         if (!over.empty())
+            std::printf("       above full scale when pushed:%s\n", over.c_str());
+         if (!quiet.empty())
+            std::printf("       silent at its defaults:%s\n", quiet.c_str());
+         check(quiet.empty(), "every effect type is heard at its own defaults");
+         if (!notMuted.empty())
+            std::printf("       audible at zero mix:%s\n", notMuted.c_str());
+         check(notMuted.empty(), "a slot at zero mix is the dry signal again");
+
+         // 4. The three buses are three different sounds. A wavefolder in front
+         //    of the ladder shapes the oscillator; the same one after the
+         //    amplifier shapes what came out of it; and Master is after the
+         //    built-in delay, which is what tells it apart from Post -- so the
+         //    delay is switched on here, or Post and Master are the same point
+         //    in the signal path and rightly sound the same.
+         put(kParamDelayOn, 1.0);
+         put(kParamDelayMix, 0.35);
+         put(typeId, static_cast<double>(typeNamed("Wavefolder")));
+         put(mixId, 1.0);
+         // Its default fold is gentle enough to be nearly transparent, and the
+         // question here is which bus a slot is on, not how hard it folds.
+         for (int l = 0; l < kFxLetters; ++l) {
+            clap_param_info_t info{};
+            if (infoFor(fxParamId(0, kFxFieldA + l), info))
+               put(info.id, 0.5 * (info.min_value + info.max_value));
+         }
+         RenderResult atBus[3];
+         for (int bus = 0; bus < 3; ++bus) {
+            put(posId, static_cast<double>(bus));
+            plugin->reset(plugin);
+            atBus[bus] = renderPlugin(plugin, sampleRate, 512, 0.4, 0.4, 60, 1.0);
+         }
+         check(!sameAfterFade(atBus[0], atBus[1]) && !sameAfterFade(atBus[1], atBus[2]) &&
+                  !sameAfterFade(atBus[0], atBus[2]),
+               "Pre, Post and Master are three different sounds");
+
+         // 5. A letter's name and range come from its slot's type. That is what
+         //    lets one id be Cutoff under a Filter and something else entirely
+         //    under a Saturator, without the id ever moving.
+         auto firstLetterName = [&](int type) {
+            put(typeId, static_cast<double>(type));
+            clap_param_info_t info{};
+            return infoFor(fxParamId(0, kFxFieldA), info) ? std::string(info.name)
+                                                              : std::string();
+         };
+         const std::string underFilter = firstLetterName(typeNamed("Filter"));
+         const std::string underSaturator = firstLetterName(typeNamed("Saturator"));
+         check(!underFilter.empty() && underFilter != underSaturator,
+               "a slot letter is renamed by the slot's type");
+         check(valueOf(typeId) == static_cast<double>(typeNamed("Saturator")),
+               "and the type it was set to is the one the host reads back");
+
+         // 6. An FX chain preset moves the chain and nothing else -- the path
+         //    the browser's FX Chains shelf takes, through a real file.
+         const std::string cdir =
+            (std::filesystem::temp_directory_path() /
+             ("saeurekiste-chain-" + std::to_string(
+#if defined(_WIN32)
+                 static_cast<unsigned long>(GetCurrentProcessId())
+#else
+                 static_cast<unsigned long>(getpid())
+#endif
+                 ))).string();
+         std::error_code cec;
+         std::filesystem::create_directories(cdir, cec);
+         const std::string cpath = cdir + "/test-chain." + std::string(kPresetExtension);
+
+         // A patch the chain file must leave alone.
+         const ParamDesc &cut = *paramById(kParamCutoff);
+         const double cutRaw = realToParam(cut, 1234.0);
+         put(kParamCutoff, cutRaw);
+         put(kParamPattern, 6.0);
+
+         PresetData cd;
+         cd.name = "Test Chain";
+         cd.values.emplace_back(fxParamId(0, kFxFieldType),
+                                static_cast<double>(typeNamed("Filter")));
+         cd.values.emplace_back(fxParamId(0, kFxFieldPosition), 2.0);
+         cd.values.emplace_back(fxParamId(0, kFxFieldMix), 1.0);
+         // Written in real units: a Filter's letter A is its mode, by index.
+         cd.values.emplace_back(fxParamId(0, kFxFieldA), 5.0);
+         PatternData cpat;
+         cpat.kind = PresetKind::FxChain;
+         const std::string ctext = formatPreset(cd, &cpat);
+         std::string cerr;
+         check(writePresetFile(cpath, ctext, cerr), "a chain preset writes");
+         check(ctext.find("preset_kind = FX Chain") != std::string::npos,
+               "and says in the file that it is one");
+
+         PresetData cback;
+         PatternData cpback;
+         check(parsePresetFile(cpath, cback, &cpback, cerr) && cpback.kind == PresetKind::FxChain,
+               "a chain preset parses back as a chain");
+
+         // Move the chain away from what the file says, then load it.
+         put(typeId, 0.0);
+         put(posId, 0.0);
+         const auto *pl = static_cast<const clap_plugin_preset_load_t *>(
+            plugin->get_extension(plugin, CLAP_EXT_PRESET_LOAD));
+         check(pl && pl->from_location(plugin, CLAP_PRESET_DISCOVERY_LOCATION_FILE,
+                                      cpath.c_str(), ""),
+               "a chain preset loads");
+         check(valueOf(typeId) == static_cast<double>(typeNamed("Filter")),
+               "which puts the slot back to the type the file names");
+         check(valueOf(posId) == 2.0, "and its bus");
+         check(std::fabs(valueOf(cut.id) - cutRaw) < 1e-9,
+               "a chain preset leaves the patch's own controls alone");
+         check(valueOf(kParamPattern) == 6.0, "and leaves the pattern selection alone");
+
+         // 6b. A Patch is the sound and the pattern bank without the FX: loading
+         //     one moves the patch's own controls and leaves the chain alone.
+         //     A Scene loaded the same way is everything again.
+         {
+            put(typeId, static_cast<double>(typeNamed("Delay")));
+            put(posId, 2.0);
+            const std::string ppath = cdir + "/test-patch." + std::string(kPresetExtension);
+            PresetData pd;
+            pd.name = "Test Patch";
+            pd.values.emplace_back(kParamCutoff, realToParam(cut, 321.0));
+            PatternData ppat;
+            ppat.kind = PresetKind::Patch;
+            const std::string ptext = formatPreset(pd, &ppat);
+            check(writePresetFile(ppath, ptext, cerr) &&
+                     ptext.find("preset_kind = Patch") != std::string::npos,
+                  "a Patch preset writes and says what it is");
+            check(pl && pl->from_location(plugin, CLAP_PRESET_DISCOVERY_LOCATION_FILE,
+                                         ppath.c_str(), ""),
+                  "a Patch preset loads");
+            check(std::fabs(valueOf(kParamCutoff) - realToParam(cut, 321.0)) < 1e-9 &&
+                     valueOf(typeId) == static_cast<double>(typeNamed("Delay")),
+                  "and moves the sound while the FX chain stays where it was");
+            check(std::fabs(valueOf(kParamPattern) - paramById(kParamPattern)->def) < 1e-9,
+                  "and puts what it does not name back to its default");
+
+            // A Scene with no FX in it empties the chain: it is everything.
+            const std::string spath = cdir + "/test-scene." + std::string(kPresetExtension);
+            check(writePresetFile(spath, formatPreset(pd, nullptr), cerr) &&
+                     pl->from_location(plugin, CLAP_PRESET_DISCOVERY_LOCATION_FILE,
+                                       spath.c_str(), ""),
+                  "a Scene preset loads");
+            check(valueOf(typeId) == 0.0, "and empties a chain it does not mention");
+         }
+
+         // 6c. An Effect preset is one slot, written as slot 1 and loaded into
+         //     whichever slot asks. From the host it has no slot to go into, so
+         //     it goes after the last effect, as ADD EFFECT would put it.
+         {
+            for (int s2 = 0; s2 < kNumFxSlots; ++s2)
+               put(fxParamId(s2, kFxFieldType), 0.0);
+            put(fxParamId(0, kFxFieldType), static_cast<double>(typeNamed("Saturator")));
+            put(fxParamId(1, kFxFieldType), static_cast<double>(typeNamed("Utility")));
+            const std::string epath = cdir + "/test-effect." + std::string(kPresetExtension);
+            PresetData ed;
+            ed.name = "Test Effect";
+            ed.values.emplace_back(fxParamId(0, kFxFieldType),
+                                   static_cast<double>(typeNamed("Filter")));
+            ed.values.emplace_back(fxParamId(0, kFxFieldMix), 0.5);
+            ed.values.emplace_back(fxParamId(0, kFxFieldB), 777.0); // a Filter's cutoff, in Hz
+            PatternData epat;
+            epat.kind = PresetKind::Effect;
+            check(writePresetFile(epath, formatPreset(ed, &epat), cerr) &&
+                     pl->from_location(plugin, CLAP_PRESET_DISCOVERY_LOCATION_FILE,
+                                       epath.c_str(), ""),
+                  "an Effect preset loads from the host");
+            char cutoffText[64] = {};
+            fxp->value_to_text(plugin, fxParamId(2, kFxFieldB), valueOf(fxParamId(2, kFxFieldB)),
+                               cutoffText, sizeof(cutoffText));
+            check(valueOf(fxParamId(2, kFxFieldType)) == static_cast<double>(typeNamed("Filter")) &&
+                     std::fabs(valueOf(fxParamId(2, kFxFieldMix)) - 0.5) < 1e-9 &&
+                     std::string(cutoffText) == "777 Hz",
+                  "into the slot after the last effect, with its own settings");
+            check(valueOf(fxParamId(0, kFxFieldType)) == static_cast<double>(typeNamed("Saturator")) &&
+                     valueOf(fxParamId(1, kFxFieldType)) == static_cast<double>(typeNamed("Utility")),
+                  "and leaves the effects before it alone");
+            for (int s2 = 0; s2 < kNumFxSlots; ++s2)
+               put(fxParamId(s2, kFxFieldType), 0.0);
+         }
+
+         std::error_code crmec;
+         std::filesystem::remove_all(cdir, crmec);
+
+         // 7. Every slot owns its eleven ids, and the same effect in the same
+         //    bus at slot 5 and at slot 12 renders the same samples: the id
+         //    arithmetic is the one thing that could wire two slots differently.
+         bool idsSound = true;
+         std::array<bool, kNumParams> seenId{};
+         for (int slot = 0; slot < kNumFxSlots && idsSound; ++slot)
+            for (int f = 0; f < kFxParamsPerSlot; ++f) {
+               const uint32_t id = fxParamId(slot, f);
+               if (id >= kNumParams || seenId[id] || fxSlotOfParam(id) != slot ||
+                   fxFieldOfParam(id) != f || !isFxParam(id)) {
+                  idsSound = false;
+                  break;
+               }
+               seenId[id] = true;
+            }
+         check(idsSound, "every FX slot has its own eleven ids");
+
+         const int util = typeNamed("Utility");
+         auto utilityAt = [&](int slot) {
+            for (int s = 0; s < kNumFxSlots; ++s)
+               put(fxParamId(s, kFxFieldType), 0.0);
+            put(fxParamId(slot, kFxFieldType), static_cast<double>(util));
+            put(fxParamId(slot, kFxFieldPosition), 2.0);
+            put(fxParamId(slot, kFxFieldBand), 0.0);
+            put(fxParamId(slot, kFxFieldMix), 1.0);
+            // Utility's first letter is Gain, and its minimum is silence: the
+            // point is that the slot is heard at all, not by how much.
+            clap_param_info_t gain{};
+            if (infoFor(fxParamId(slot, kFxFieldA), gain))
+               put(gain.id, gain.min_value);
+            plugin->reset(plugin);
+            return renderPlugin(plugin, sampleRate, 512, 0.4, 0.4, 60, 1.0);
+         };
+         const RenderResult atFive = utilityAt(5);
+         const RenderResult atTwelve = utilityAt(12);
+         check(sameAfterFade(atFive, atTwelve),
+               "slot 13 is wired exactly like slot 6");
+         check(atTwelve.peak < 0.5f * dry.peak,
+               "and it is heard: a Utility at its minimum quiets the chain");
+         for (int s = 0; s < kNumFxSlots; ++s)
+            put(fxParamId(s, kFxFieldType), 0.0);
+         // Test 4 switched the built-in delay on; its echoes would land in the
+         // windows the tests below measure.
+         put(kParamDelayOn, 0.0);
+         put(kParamMode, 0.0);
+
+         // Sets a letter of slot 0 to a value in its type's own units, through
+         // the host's text path -- the only place the type's range is visible
+         // from outside.
+         auto putLetter = [&](int letter, const char *text) {
+            const uint32_t id = fxParamId(0, kFxFieldA + letter);
+            double v = 0.0;
+            const bool ok = fxp->text_to_value(plugin, id, text, &v);
+            if (ok)
+               put(id, v);
+            return ok;
+         };
+         auto oneSlot = [&](const char *type, double position) {
+            put(typeId, static_cast<double>(typeNamed(type)));
+            put(posId, position);
+            put(bandId, 0.0);
+            put(mixId, 1.0);
+         };
+         auto peakIn = [&](const RenderResult &r, double from, double to) {
+            const size_t a = static_cast<size_t>(from * sampleRate) * 2;
+            const size_t b = std::min(r.interleaved.size(), static_cast<size_t>(to * sampleRate) * 2);
+            float peak = 0.0f;
+            for (size_t i = a; i < b; ++i)
+               peak = std::max(peak, std::fabs(r.interleaved[i]));
+            return peak;
+         };
+         auto noteAt = [](uint32_t frame, uint16_t type, int16_t key) {
+            SeqEvent e{};
+            e.frame = frame;
+            e.type = type;
+            e.key = key;
+            e.velocity = 0.8;
+            e.noteId = -1;
+            return e;
+         };
+
+         // 8. A host is shown one range per parameter, and CLAP lets it change
+         //    only while the plugin is deactivated. So a letter is 0..1 and
+         //    continuous whatever its type -- a Saturator's model and a
+         //    Filter's cutoff are the same host parameter -- and the type shows
+         //    in its name and its text instead.
+         {
+            bool fixedRange = true;
+            for (const char *type : {"Saturator", "Filter", "Guard"}) {
+               put(typeId, static_cast<double>(typeNamed(type)));
+               for (int l = 0; l < kFxLetters; ++l) {
+                  clap_param_info_t info{};
+                  if (!infoFor(fxParamId(0, kFxFieldA + l), info) || info.min_value != 0.0 ||
+                      info.max_value != 1.0 || (info.flags & CLAP_PARAM_IS_STEPPED))
+                     fixedRange = false;
+               }
+            }
+            check(fixedRange, "an FX letter's host range is 0..1 under every type");
+            put(typeId, static_cast<double>(typeNamed("Filter")));
+            char text[64] = {};
+            fxp->value_to_text(plugin, fxParamId(0, kFxFieldA), 1.0, text, sizeof(text));
+            double back = -1.0;
+            check(std::string(text) == "Peak" &&
+                     fxp->text_to_value(plugin, fxParamId(0, kFxFieldA), "Peak", &back) &&
+                     back == 1.0,
+                  "and its text is the type's: a Filter's letter A at the top reads Peak");
+         }
+
+         // 9. A new type puts its letters at that type's defaults and asks the
+         //    host to re-read their names. A type can arrive in process(), on
+         //    the audio thread, where rescan() is not allowed: the plugin asks
+         //    for on_main_thread() there and rescans from it.
+         {
+            put(typeId, static_cast<double>(typeNamed("Saturator")));
+            const uint32_t rescans = gRescanCount, asks = gCallbackRequests;
+            EventList ev;
+            ev.params.push_back(makeParamValue(typeId, static_cast<double>(typeNamed("Filter"))));
+            ev.build();
+            runOneBlock(plugin, ev);
+            check(gRescanCount == rescans && gCallbackRequests > asks,
+                  "a type set in process() asks for the main thread instead of rescanning");
+            plugin->on_main_thread(plugin);
+            check(gRescanCount > rescans, "and the rescan happens there");
+            clap_param_info_t cutoff{};
+            check(infoFor(fxParamId(0, kFxFieldB), cutoff) &&
+                     valueOf(cutoff.id) == cutoff.default_value,
+                  "and the new type's letters start at its defaults");
+         }
+
+         // 10. A note that starts in the middle of a block reaches a Master
+         //     slot on the sample it starts on. A Guard with a 40 ms window and
+         //     full depth makes it visible: from the note to 40 ms after it the
+         //     output is silence, and from the block's first sample it would
+         //     open 15 ms early.
+         {
+            const uint32_t at = 700;
+            const std::vector<SeqEvent> note = {noteAt(at, CLAP_EVENT_NOTE_ON, 48),
+                                                noteAt(at + static_cast<uint32_t>(0.3 * sampleRate),
+                                                       CLAP_EVENT_NOTE_OFF, 48)};
+            plugin->reset(plugin);
+            const RenderResult open = renderSequence(plugin, sampleRate, 1024, 0.4, 0.1, note);
+            oneSlot("Guard", 2.0);
+            putLetter(0, "40");
+            putLetter(1, "0");
+            plugin->reset(plugin);
+            const RenderResult guarded = renderSequence(plugin, sampleRate, 1024, 0.4, 0.1, note);
+            const double t = at / sampleRate;
+            check(open.peak > 0.05f && peakIn(open, t + 0.030, t + 0.038) > 0.01f &&
+                     peakIn(guarded, t + 0.030, t + 0.038) == 0.0f,
+                  "a Master slot hears a note on the sample it starts on");
+         }
+
+         // 11. A slide is not a new note, here as everywhere in this instrument:
+         //     a Post Guard must not cut a hole into a slid step.
+         {
+            oneSlot("Guard", 1.0);
+            putLetter(0, "30");
+            putLetter(1, "0");
+            const uint32_t b = static_cast<uint32_t>(0.2 * sampleRate);
+            const std::vector<SeqEvent> slid = {
+               noteAt(0, CLAP_EVENT_NOTE_ON, 48), noteAt(b, CLAP_EVENT_NOTE_ON, 55),
+               noteAt(b + 2400, CLAP_EVENT_NOTE_OFF, 48),
+               noteAt(b + static_cast<uint32_t>(0.2 * sampleRate), CLAP_EVENT_NOTE_OFF, 55)};
+            plugin->reset(plugin);
+            const RenderResult r = renderSequence(plugin, sampleRate, 512, 0.5, 0.1, slid);
+            check(peakIn(r, 0.002, 0.025) == 0.0f && peakIn(r, 0.205, 0.225) > 0.01f,
+                  "a slid note does not reopen a Guard's window");
+         }
+
+         // 12. With one unison voice the Pre bus still runs in stereo and what
+         //     reaches the ladder is the mid. A Stereo slot that delays the left
+         //     side by 30 ms is the test: taking the left side alone would delay
+         //     the whole note.
+         {
+            oneSlot("Stereo", 0.0);
+            putLetter(1, "-30");
+            plugin->reset(plugin);
+            const RenderResult r = renderPlugin(plugin, sampleRate, 512, 0.3, 0.1, 48, 0.8);
+            check(peakIn(r, 0.004, 0.025) > 0.25f * peakIn(dry, 0.004, 0.025),
+                  "a mono Pre bus keeps both sides of a stereo slot");
+         }
+
+         // 13. A synced FX delay follows the host's tempo from block to block,
+         //     whether or not a parameter moved: at 90 bpm a quarter note is
+         //     667 ms, and the echo has to be there and not at 500 ms.
+         {
+            oneSlot("Delay", 2.0);
+            putLetter(1, "1/4");
+            putLetter(2, "0");
+            const std::vector<SeqEvent> blip = {noteAt(0, CLAP_EVENT_NOTE_ON, 48),
+                                                noteAt(static_cast<uint32_t>(0.05 * sampleRate),
+                                                       CLAP_EVENT_NOTE_OFF, 48)};
+            plugin->reset(plugin);
+            renderSequence(plugin, sampleRate, 512, 0.2, 0.0, blip, true, 120.0);
+            plugin->reset(plugin);
+            const RenderResult slow = renderSequence(plugin, sampleRate, 512, 1.0, 0.0, blip, true,
+                                                     90.0);
+            check(peakIn(slow, 0.667, 0.70) > 4.0f * peakIn(slow, 0.50, 0.53),
+                  "a synced FX delay follows a tempo change with no parameter moving");
+         }
+
+         // 13b. The same for the built-in delay, in MIDI mode. The tempo used
+         //      to be read after the MIDI-mode return in the sequencer clock,
+         //      so the synced delay ran at 120 bpm there whatever the host said.
+         {
+            put(typeId, 0.0);
+            put(kParamDelayOn, 1.0);
+            put(kParamDelaySync, static_cast<double>(kDelaySynced));
+            put(kParamDelayDivision, static_cast<double>(kDelayDiv4));
+            put(kParamDelayFeedback, 0.0);
+            put(kParamDelayMix, 0.5);
+            put(kParamDelayMode, 0.0); // Mono: one line, one time
+            const std::vector<SeqEvent> blip = {noteAt(0, CLAP_EVENT_NOTE_ON, 48),
+                                                noteAt(static_cast<uint32_t>(0.05 * sampleRate),
+                                                       CLAP_EVENT_NOTE_OFF, 48)};
+            plugin->reset(plugin);
+            const RenderResult slow = renderSequence(plugin, sampleRate, 512, 1.0, 0.0, blip, true,
+                                                     90.0);
+            check(peakIn(slow, 0.667, 0.70) > 4.0f * peakIn(slow, 0.50, 0.53),
+                  "the built-in synced delay follows the host's tempo in MIDI mode");
+            put(kParamDelayOn, 0.0);
+         }
+
+         // 14. A slot that holds a tail lets the plugin sleep once the tail is
+         //     over, and not before: a delay waits for its next echo in silence.
+         {
+            oneSlot("Delay", 2.0);
+            plugin->reset(plugin);
+            const RenderResult r = renderPlugin(plugin, sampleRate, 512, 0.1, 6.0, 48, 0.8);
+            check(r.sleepAt > static_cast<uint32_t>(0.6 * sampleRate),
+                  "a plugin with a delay slot sleeps once the echoes are over");
+         }
+
+         // 15. The host's tail includes the FX: a bounce has to keep rendering
+         //     while a reverb rings out.
+         {
+            oneSlot("Reverb", 2.0);
+            putLetter(1, "3000");
+            EventList none;
+            none.build();
+            runOneBlock(plugin, none);
+            const auto *tail =
+               static_cast<const clap_plugin_tail_t *>(plugin->get_extension(plugin, CLAP_EXT_TAIL));
+            check(tail && tail->get(plugin) > static_cast<uint32_t>(3.0 * sampleRate),
+                  "the tail includes a reverb slot's decay");
+            put(typeId, 0.0);
+            runOneBlock(plugin, none);
+            check(tail && tail->get(plugin) < static_cast<uint32_t>(sampleRate),
+                  "and gives it back when the slot is emptied");
+         }
+      }
+      gParamOverrides.clear();
    }
 
    // --- a fresh instance must be silent until a note arrives

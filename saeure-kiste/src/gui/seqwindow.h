@@ -129,6 +129,36 @@ constexpr double kArcSweep = 1.5 * 3.14159265358979323846;
 // crossed sixteen would move every panel under it.
 constexpr int kSeqPaneHeight = 315;
 
+// The FX page. One strip per effect, 96 pixels tall because that is a cell,
+// so a strip holds the same knobs and chips a panel does without any second
+// kind of control. The widths are what six letters, the four switches, the
+// strip's preset field and the three buttons on the right come to.
+//
+// The page shows the effects that are in the chain, not the slots the plugin
+// happens to have: an empty chain is one line of text, then the footer row
+// with ADD EFFECT and the two band crossovers, which belong to the chain
+// rather than to any strip. Past kFxVisibleStrips the list scrolls, so the
+// window does not grow to the height of sixteen slots.
+constexpr int kFxStripH = 96;
+constexpr int kFxStripGap = 6;
+constexpr int kFxSlotColW = 26;
+constexpr int kFxTypeW = 200;
+constexpr int kFxBandW = 104;
+constexpr int kFxSmallW = 84;
+constexpr int kFxCellGap = 4;
+constexpr int kFxButtonW = 26;
+constexpr int kFxButtonH = 22;
+constexpr int kFxPresetW = 124;
+constexpr int kFxPresetSaveW = 48;
+constexpr int kFxFooterH = kFxStripH;
+// Five, not more: a row is 102 pixels, and five of them, the footer and the
+// bar put the page at 782, which fits a 900-pixel laptop screen with room for
+// a host's title bar. Six would not, and a window that does not fit the
+// display is a window whose bottom row -- the one that adds effects and loads
+// chains -- is off the screen.
+constexpr int kFxVisibleStrips = 5;
+constexpr double kFxScrollW = 6.0;
+
 // Compile-time layout checks a plugin can run over its own panel table. Kept
 // here so every plugin gets the same ones; kept constexpr so a layout mistake
 // is a build error rather than something to notice in a running window.

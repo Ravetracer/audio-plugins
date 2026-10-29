@@ -100,6 +100,20 @@ bool stepsTied(const Step &held, const Step &next);
 // The whole bank as it travels through a preset load. Flat rather than
 // two-dimensional, because every path that touches it -- the preset text, the
 // state blob, the plugin's own store -- walks it in one pass.
+// The kinds of preset, which differ in what loading one replaces.
+//
+//   Scene    everything: the sound, the pattern bank and the FX. The SCENE
+//            field, and every preset written before there were kinds.
+//   Patch    the sound and the pattern bank; the FX are left alone.
+//   FxChain  the FX alone: every slot, and the two crossovers.
+//   Effect   one FX slot -- its type, band, mix and letters -- loaded into
+//            whichever slot asked for it, which keeps its place and position.
+//
+// A file says which it is with a preset_kind line, and a file without one is
+// a Scene, so nothing written before the line existed changes meaning.
+enum class PresetKind : int { Scene = 0, Patch, FxChain, Effect };
+constexpr int kNumPresetKinds = 4;
+
 struct PatternData {
    bool present = false;
    uint16_t steps[kMaxPatterns * kMaxSteps] = {0};  // 16 kB, and it travels by
@@ -123,6 +137,12 @@ struct PatternData {
    std::string tableName;
    int tableFrames = 0;
    std::vector<int16_t> table;
+
+   // What the file is: a Scene, a Patch, an FX chain or one Effect -- see
+   // PresetKind. What makes it one is this line rather than the folder it sits
+   // in: a file copied out of its shelf, or imported inside a pack under
+   // another name, is still what it was and still loads as that.
+   PresetKind kind = PresetKind::Scene;
 
    PatternData() {
       for (int &r : chainRepeat)

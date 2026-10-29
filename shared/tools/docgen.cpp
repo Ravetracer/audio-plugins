@@ -20,10 +20,12 @@
 #include "params.h"
 
 #include <algorithm>
+#include <cstdint>
 #include <cstdio>
 #include <cstring>
 #include <dirent.h>
 #include <string>
+#include <type_traits>
 #include <vector>
 
 #ifndef PLUGINCORE_DOC_NS
@@ -31,6 +33,43 @@
 #endif
 
 namespace plugin = PLUGINCORE_DOC_NS;
+
+// Two optional hooks a plugin may define beside its parameter table, for
+// parameters whose description is not compiled in -- a runtime-typed effect
+// slot's letters, for instance:
+//
+//    bool docParamIsDynamic(uint32_t id);  // another control sets its range
+//    bool docParamIsHidden(uint32_t id);   // a repeat of a row already shown
+//
+// A dynamic parameter's row says its range and default come from elsewhere,
+// rather than printing a carrier range the host never sees. A hidden one is
+// left out, and its group says how many it left out.
+//
+// A plugin that defines neither gets every row exactly as before. The
+// fallbacks below take anything and return a type of their own, so a plugin's
+// own (uint32_t) overload wins whenever there is one, and the helpers can ask
+// which of the two was chosen. A test for whether the qualified name exists
+// would not do: naming a member a namespace does not have is an error, not a
+// substitution failure.
+namespace PLUGINCORE_DOC_NS {
+struct NoDocHook {};
+NoDocHook docParamIsDynamic(...);
+NoDocHook docParamIsHidden(...);
+} // namespace PLUGINCORE_DOC_NS
+
+template <typename T> bool paramIsDynamic(T id) {
+   if constexpr (std::is_same_v<decltype(plugin::docParamIsDynamic(id)), bool>)
+      return plugin::docParamIsDynamic(id);
+   else
+      return false;
+}
+
+template <typename T> bool paramIsHidden(T id) {
+   if constexpr (std::is_same_v<decltype(plugin::docParamIsHidden(id)), bool>)
+      return plugin::docParamIsHidden(id);
+   else
+      return false;
+}
 using plugincore::ParamDesc;
 using plugincore::ParamKind;
 
@@ -128,18 +167,30 @@ void emitParams(bool brief = false) {
       std::printf(brief ? "| Parameter | Range | Default |\n"
                         : "| Parameter | Range | Default | What it does |\n");
       std::printf(brief ? "|---|---|---|\n" : "|---|---|---|---|\n");
+      uint32_t hidden = 0;
       for (uint32_t i = 0; i < count; ++i) {
          const ParamDesc &d = table[i];
          if (m != d.module)
             continue;
+         if (paramIsHidden(d.id)) {
+            ++hidden;
+            continue;
+         }
+         const bool dynamic = paramIsDynamic(d.id);
+         const std::string span = dynamic ? std::string("set by the type") : range(d);
+         const std::string start = dynamic ? std::string("the type's") : display(d, d.def);
          if (brief)
-            std::printf("| **%s**<br>`%s` | %s | %s |\n", d.name, d.key, range(d).c_str(),
-                        display(d, d.def).c_str());
+            std::printf("| **%s**<br>`%s` | %s | %s |\n", d.name, d.key, span.c_str(),
+                        start.c_str());
          else
-            std::printf("| **%s**<br>`%s` | %s | %s | %s |\n", d.name, d.key, range(d).c_str(),
-                        display(d, d.def).c_str(), cell(d.tip).c_str());
+            std::printf("| **%s**<br>`%s` | %s | %s | %s |\n", d.name, d.key, span.c_str(),
+                        start.c_str(), cell(d.tip).c_str());
       }
       std::printf("\n");
+      if (hidden > 0)
+         std::printf("*%u more parameters in this group repeat the rows above under their own "
+                     "numbers.*\n\n",
+                     hidden);
    }
 }
 
