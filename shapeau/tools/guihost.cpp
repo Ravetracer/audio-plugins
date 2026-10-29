@@ -92,6 +92,13 @@ void *findSymbol(void *handle, const char *name) {
 int main(int argc, char **argv) {
    std::string path = argc > 1 ? argv[1] : "build/Shapeau.clap";
    double seconds = argc > 2 ? std::atof(argv[2]) : 8.0;
+   // --scale asks the editor for a GUI scale before the window is made, the way
+   // a host on a high-density screen would; screenshots for print and the web
+   // are taken at 1.5.
+   double scale = 0.0;
+   for (int i = 3; i + 1 < argc; ++i)
+      if (std::string(argv[i]) == "--scale")
+         scale = std::atof(argv[i + 1]);
 
    void *handle = openLibrary(path.c_str());
    if (!handle) {
@@ -138,6 +145,8 @@ int main(int argc, char **argv) {
       std::fprintf(stderr, "the editor could not be created\n");
       return 1;
    }
+   if (scale > 0.0)
+      gui->set_scale(plugin, scale);
    uint32_t width = 1200, height = 800;
    gui->get_size(plugin, &width, &height);
 
