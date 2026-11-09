@@ -48,7 +48,8 @@ audio-plugins/
 ├── rumpel-kiste/     RumpelKiste — a TR-909 model
 ├── aurum/            Aurum — an algorithmic reverb, NOT built on shared/
 ├── substrike/        Substrike — a kick drum designer, NOT built on shared/
-└── shapeau/          Shapeau — a multiband drawing rack, see *Shapeau* below
+├── shapeau/          Shapeau — a multiband drawing rack, see *Shapeau* below
+└── sidmidi/          SidMidi — a C64 emulator for C64 MIDI programs, GPL, see *SidMidi* below
 ```
 
 ## The plugins
@@ -60,6 +61,7 @@ audio-plugins/
 | 3 | **Aurum** | `aurum/` | 0.3.1 | Linux, Windows | CLAP, VST3 | a clean-room algorithmic reverb (FDN, allpass ring, plate) with a per-frequency decay contour; own DSP and GUI, see *Aurum* below |
 | 4 | **Substrike** | `substrike/` | 1.1.0 | Linux, Windows | CLAP, VST3 | a layered kick drum designer for every style; standalone like Aurum, see *Substrike* below |
 | 5 | **Shapeau** | `shapeau/` | 0.4.0 | Linux, Windows | CLAP, VST3 | a multiband drawing rack: a reorderable chain of shape-driven effects per band, beat-synced or triggered by MIDI or a sidechain hit, with the audio drawn behind the shape; see *Shapeau* below |
+| 6 | **SidMidi** | `sidmidi/` | 0.2.0 | Linux, Windows | CLAP, VST3 | a Commodore 64 running the original C64 MIDI programs, played from the DAW through an emulated MIDI cartridge, with up to eight reSIDfp SIDs; GPL, standalone, see *SidMidi* below |
 
 Naming follows the plugin, not a pattern: the CMake project, the installed
 artifact and the display name are CamelCase (`SaeureKiste`), the folder is
@@ -551,6 +553,63 @@ Rules specific to Shapeau:
   to show. Windows: cross-build with `-DSHAPEAU_WIN_CAIRO=<abs path>` and run
   the self-test under wine; the win32 editor can be opened with Aurum's
   `clap_gui_host.exe`, which loads any CLAP plugin.
+
+## SidMidi
+
+`sidmidi/` is a Commodore 64 emulator written for this repository, running the
+original C64 MIDI programs (Cynthcart, Station64, SID-Wizard, SID Synth) as an
+instrument. It is the third plugin **not built on `shared/`** (a C64 screen
+and a keyboard grab do not fit `WindowSpec`); the window backends and widgets
+are copied from Substrike. The *Rule for a shared change* does not cover it.
+`docs/PLAN.md` is the source of truth: four phases, 1-3 done (the machine, the
+plugin, the true 1541 + mouse/paddles + HerMIDI), 0.2.0, `NO-RELEASE` until it
+has been in a DAW and has its manual.
+
+What to know before working there:
+
+- **It is GPL-2.0-or-later, the rest of the repository MIT.** The SIDs are
+  reSIDfp (libresidfp 1.2.3, vendored unchanged in `third_party/libresidfp`,
+  its two generated headers written by hand). `sidmidi/LICENSE` says so. Do
+  not copy SidMidi code into an MIT plugin.
+- **`sidmidi/_dev_/` is gitignored** (`*/_dev_/` at the root): the C64
+  programs, their manuals and the user's Commodore ROMs (`_dev_/roms/C64`,
+  `_dev_/roms/DRIVES`, VICE's files) -- **for development and the user's
+  private use only**. Never commit, never ship, **never compile the ROMs in**.
+  The plugin reads ROMs only from its ROM folder
+  (`~/.local/share/SidMidi/ROMs`, `%APPDATA%\SidMidi\ROMs`, recognised by
+  content); tests point `SIDMIDI_ROM_DIR` at `_dev_/roms`.
+- **HerMIDI** runs Hermit's real PIC12F509 firmware
+  (`third_party/hermidi`, WTF-licensed via SID-Wizard) on `emu/Pic12F509`.
+  The 1541 (`emu/Drive1541`, `Via6522`, `Gcr`) and HerMIDI share one serial
+  bus model, `C64::iecLines()`.
+- **The emulator is ours** (`src/emu/`): one `Cpu6502<Bus>` template for the
+  C64 and a later 1541, every bus access one cycle; `Vic` after Bauer's
+  article; `Cia6526` with pipelines; `MidiCart` (6850; master-reset status
+  must read 0, Cynthcart's autodetect depends on it); `SidBank` (lazy
+  clocking, a FIFO per chip); `VirtualDrive` + `D64` (KERNAL serial traps at
+  the 901227-03 entry points, checked by ROM signature).
+  `src/engine/Engine` runs the machine per host block and is what the plugin
+  and `sidmidi-run` share.
+- **reSIDfp's 6581 filter range and old-caps settings mutate a process-wide
+  singleton** and must not be called from the plugin; only the per-chip
+  controls are exposed (filter curve, combined waveforms, DAC leakage, digi
+  offset). Per-chip range is phase 4 (a vendored patch).
+- **Threads:** structural changes under `machineLock_`, which the audio
+  thread takes with a 1.5 ms spin; keys, joystick and GUI parameter moves
+  through lock-free rings. The state is a full machine snapshot plus the
+  engine's audio state; `sidmidi-selftest` proves a round trip continues
+  within -60 dB (reSIDfp restores to within 1-2 LSB).
+- **CPU:** dormant SIDs are skipped, the VIC skips pixels with no window
+  (`Engine::videoWanted`), warp skips SID clocking. Realtime warp is budgeted
+  by the clock (half a block); offline (`CLAP_EXT_RENDER`, `sidmidi-run`) is
+  a fixed 24x, so renders and tests repeat exactly.
+- **Tests:** `./install.sh` runs Klaus Dormann's CPU test
+  (`tools/fetch-cpu-tests.sh` fetches it into `build/`, GPL-3, never commit)
+  and the plugin self-test (also once with `true1541`: a `.d64` through the
+  emulated drive and a state round trip). `sidmidi-run` boots, autostarts, plays a MIDI
+  script, writes WAV and PNG (`--sidregs` dumps SID 1). GUI shots: a private
+  Xvfb in the devbox with `sidmidi-gui-host` (`SIDMIDI_LOAD=<file>` loads a
+  program through the plugin's `de.ravetracer.sidmidi.loader/1` extension).
 
 ## Build and install
 

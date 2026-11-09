@@ -1,0 +1,6 @@
+SidMidi is in development and not ready to ship.
+
+Before the first release:
+- It has not been loaded in a DAW yet (keyboard focus in hosts, the VST3
+  wrapper's MIDI, MIDI out, resizing).
+- docs/manual.md, screenshots and demos (phase 4).

@@ -18,6 +18,7 @@ Vibe coded with Claude.
 | **[Aurum](aurum/)** | 0.3.1 | Linux, Windows | CLAP, VST3 | an algorithmic reverb with three engines (feedback delay network, allpass ring, plate), a per-frequency decay contour and a tone EQ; built on its own DSP and window rather than `shared/` |
 | **[Substrike](substrike/)** | 1.1.0 | Linux, Windows | CLAP, VST3 | a layered kick drum designer for every style, from ambient to hardcore: eight synthesised layers (body, click, noise, resonator, and bus lanes for rumble) with per-lane outputs, effect chains with reverb, delays and drive, a transient guard, a modulation matrix with LFOs, envelopes and macros, 117 factory presets with a browser, breakpoint curves and an editor with hit export by drag and drop; built on its own code rather than `shared/` |
 | **[Shapeau](shapeau/)** | 0.4.0 | Linux, Windows | CLAP, VST3 | a multiband drawing rack: a chain of effects (volume, filter, drive, crush, time, width, pan) in any order, each driven by a shape drawn per frequency band, locked to the beat or restarted by a MIDI note or a hit in the sidechain, with the audio and the sidechain drawn behind the shape as it plays |
+| **[SidMidi](sidmidi/)** | 0.2.0 (in development) | Linux, Windows | CLAP, VST3 | a Commodore 64 that runs the original C64 MIDI programs (Cynthcart, Station64, SID-Wizard, SID Synth …): DAW notes go in through an emulated MIDI cartridge, up to eight reSIDfp SID chips (6581/8580 revisions) play out, the C64's screen and keyboard are in the window; GPL, unlike the rest of the repository |
 
 ## Build
 
@@ -67,6 +68,7 @@ audio-plugins/
 ├── aurum/            Aurum
 ├── substrike/        Substrike
 ├── shapeau/          Shapeau
+├── sidmidi/          SidMidi (GPL-2.0-or-later)
 ├── release.sh         builds every plugin and packs the archives
 ├── setup-winbuild.sh  one-time Windows cross-build setup
 ├── devbox.sh          the build container; devbox/Dockerfile is its image

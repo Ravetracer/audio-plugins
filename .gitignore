@@ -49,3 +49,7 @@ _designs/website-copy.md
 # from -- the same rule as a plugin's !dev/ folder. Never commit them, never
 # ship them, and never `git add -A` without looking.
 /Documents/
+
+# A plugin's development material: third-party C64 programs, Commodore ROMs,
+# manuals. Not ours to redistribute. Never commit, never ship.
+*/_dev_/
