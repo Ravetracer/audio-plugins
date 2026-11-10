@@ -333,12 +333,80 @@ CC 121.
 - **HerMIDI's firmware stays in `third_party/hermidi`** (the user's
   decision, 2026-11-10).
 
+## Status (0.5.0, 2026-11-10)
+
+From the user's DAW use (CC renaming, Range/Caps and Fast resampling all
+confirmed working there):
+- **Disks apart from programs.** Media > Insert disk puts a .d64 into the
+  drive and changes nothing else; Media > Start from disk runs a file of it
+  (`C64::autostartDisk`, LOAD"name",8,1 and RUN typed, the name kept in
+  `autostartPrg_` so a snapshot carries it). Loading or dropping a .d64
+  inserts it and offers its files (leave it in, the first, or one by name;
+  over twenty in submenus). A cartridge and a disk can be in at once;
+  starting a .prg or a disk file takes the cartridge out (it would start
+  instead). The plugin keeps the disk (`diskFileName_/Data_/Start_`) apart
+  from the program or cartridge (`lastFileName_/Data_`): Power restarts the
+  program, the cartridge, or the disk file that was started, and leaves an
+  only inserted disk at READY; a project keeps both (three state blobs; a
+  0.4.0 project whose one file was a .d64 is migrated), and the fallback
+  restart (`restartMedia()`) restores both. Raw cartridge ROMs shorter than
+  8K/16K that start with CBM80 are padded with $FF (Cynthcart's cartridge
+  ROM is 8145 bytes). `sidmidi-selftest --media` proves a cartridge runs on
+  bit-identically with a disk inserted, both survive the state, an inserted
+  disk starts nothing and Start from disk runs the program.
+- **Symbolic keyboard** (default) beside the positional one, a Machine page
+  setting. The backends pass the layout's keysym with every raw press (X11:
+  XLookupString; Win32: ToUnicode at WM_KEYDOWN with Ctrl taken out unless
+  it is AltGr, dead keys as their character); `Keymap` resolves a key when it
+  goes down to a C64 key and a SHIFT rule (as the host's, pressed, or held
+  back), so Shift+, = ';' on a German layout reaches the C64 as ';'.
+  `sidmidi-keytest` checks the German cases; typed end to end through X11
+  and through the Windows build under wine (`PRINT "@"` with Shift+2 on a US
+  layout; Xvfb in the devbox will not load another layout).
+
+Also in 0.5.0, from the user's request for fast-loader cartridges:
+- **Freezer cartridges** (`emu/Cartridge.*`): Action Replay (CRT 1: four 8K
+  banks, 8K RAM at ROML and I/O 2, register $DE00, freeze = Ultimax + RAM +
+  NMI, as VICE's actionreplay.c), Final Cartridge III (3: four 16K banks,
+  register $DFFF -- bit 4 EXROM, bit 5 GAME, bit 6 NMI, bit 7 hide; its ROM
+  answers in I/O 1 and 2) and Final Cartridge I (13: I/O 1 access off, I/O 2
+  on); raw 32K Action Replay images, with or without a 2-byte header; raw
+  ROM images shorter than 8K/16K with CBM80. Their state is an appended
+  snapshot section (`CartFreezerState` and the RAM), so older snapshots
+  still load. Media > Freeze. All thirteen images in `_dev_/cartridges`
+  boot; freeze and restart were tried on the Action Replay.
+- **I/O sharing**: the Final Cartridges run code from I/O 1, where the Datel
+  MIDI interface sits ($DE04-$DE07). While the PC is in $DE00-$DFFF the
+  cartridge answers reads; data reads go to the MIDI interface -- an ideal
+  expander. (The FC3 hung at boot until this: its RTS at $DE04 read as the
+  ACIA's 0, a BRK.) Writes to I/O 1/2 with a freezer present are split by
+  writer (`C64::freezerWriting`): code in I/O 1/2, in the cartridge's ROM,
+  or in RAM while the cartridge is mapped in (the AR's fast loader) reaches
+  only the cartridge; anything else never does. Without it Station64's
+  interface probe (a 6850 reset, $03, to $DE04, $DE08 and $DE00) switched
+  the Action Replay into Ultimax and its freezer, and the AR's own $DE00
+  writes went to a Sequential or Namesoft ACIA, so it could not boot.
+  `tools/cart-test.sh` covers both.
+- **The serial bus timing** (`C64::endCycle`): a C64 write to $DD00 reaches
+  the drive one cycle after the write, as VICE passes CIA writes with clk+1
+  (`c64cia2.c`, `store_ciapa`). Without it the Action Replay's fast loader
+  read the first bit pair of some bytes a slot late (a sector number
+  shifted right by two bits) and looped for ever; with it both fast loaders
+  load Station64 byte for byte. A queue that held back the drive's own
+  writes was tried first and made it worse; VICE has none.
+- Loading a freezer while Drive 8 is Virtual switches it to the true 1541
+  (their fast loaders run code in the drive). `tools/cart-test.sh` (in
+  `install.sh`) loads Station64 through both fast loaders and the Action
+  Replay without one and compares the C64's memory with the .prg; with the
+  old bus timing the Action Replay case hangs and fails. The runner has
+  `--freeze`, `--dump`, `--no-disk-warp` for this. Keys held during a warped
+  boot are not seen by the FC3 (hold RUN/STOP with `--no-disk-warp`).
+
 ## Next session
 
-Where 0.4.0 was left (2026-11-10):
-- **Feedback from DAW use** goes first. Untested in a host: whether it
-  renames the CC slots live (CLAP rescan INFO; VST3 kParamTitlesChanged
-  through the wrapper), keyboard focus in the host's window, the VST3
+Where 0.5.0 was left (2026-11-10):
+- **Feedback from DAW use** goes first. Untested in a host: the symbolic
+  keyboard on a real German layout, keyboard focus in the host's window, the VST3
   wrapper's MIDI (CC, pitch bend, SysEx), MIDI out, resizing, mouse and
   paddles from the host mouse, the file chooser.
 - The ROMs are installed for the user's own tests in

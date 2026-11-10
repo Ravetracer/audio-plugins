@@ -33,12 +33,18 @@ class Editor;
 
 // A plugin-specific extension: load a program as the Load button does, and
 // count what reached the machine. For test harnesses and automation.
-inline constexpr char kExtLoader[] = "de.ravetracer.sidmidi.loader/2";
+inline constexpr char kExtLoader[] = "de.ravetracer.sidmidi.loader/3";
 struct ExtLoader
 {
     bool (*load_file)(const clap_plugin_t* plugin, const char* path);
     // MIDI messages handed to the C64 so far (notes, CCs, CC slots, ...).
     uint32_t (*midi_in_count)(const clap_plugin_t* plugin);
+    // Media > Insert disk, and Start from disk ("*" for the first file).
+    bool (*attach_disk)(const clap_plugin_t* plugin, const char* path);
+    bool (*start_from_disk)(const clap_plugin_t* plugin, const char* petscii_name);
+    // Files on the inserted disk (-1 without one), and whether a cartridge is in.
+    int (*disk_files)(const clap_plugin_t* plugin);
+    bool (*has_cartridge)(const clap_plugin_t* plugin);
 };
 
 
@@ -94,10 +100,39 @@ public:
     Engine& engine() { return engine_; }
     std::mutex& machineLock() { return machineLock_; }
 
-    // Loads a .prg, .d64, .crt or .bin by its extension and starts it.
+    // Loads a .prg, .d64, .crt or .bin by its extension and starts it (a
+    // disk's first file). A cartridge leaves the disk in the drive; a program
+    // or a disk that starts takes the cartridge out, or it would not start.
     bool loadFile(const std::string& path, std::string& error);
     bool loadData(const std::string& name, const std::vector<uint8_t>& data, std::string& error);
+
+    // ------------------------------------------------------------ the disk drive
+    // Inserts a .d64 and nothing else: the running program or cartridge goes
+    // on, and the disk is there for LOAD"$",8, the program's own disk menu,
+    // or startFromDisk().
+    bool attachDiskFile(const std::string& path, std::string& error);
+    bool attachDisk(const std::string& name, const std::vector<uint8_t>& data, std::string& error);
+    struct DiskEntry
+    {
+        std::string petscii;  // the name as on the disk, for LOAD
+        std::string display;  // the same, readable
+        std::string type;     // PRG, SEQ, USR, REL, DEL
+        int blocks = 0;
+    };
+    bool diskPresent();
+    // The inserted disk's title and files (empty without a disk).
+    std::string diskTitle();
+    std::vector<DiskEntry> diskDirectory();
+    // Switches on and loads and runs a file of the inserted disk ("*" for the
+    // first), taking a cartridge out. Power starts it again.
+    bool startFromDisk(const std::string& petsciiName, std::string& error);
     void powerCycle();   // off and on: the attached media start again
+    // The freeze button of an Action Replay or Final Cartridge.
+    void freezeButton();
+    bool cartridgeFreezable();
+    // What the last load wants the user to know besides "loaded" (empty for
+    // nothing), e.g. that Drive 8 switched to the true 1541.
+    std::string loadNotice() const { return notice_; }
     void resetButton();  // the reset button: memory survives
     void ejectDisk();
     void ejectCartridge();
@@ -170,6 +205,7 @@ private:
     void generateClock(const clap_process_t* p);
     void emitMidiOut(const clap_output_events_t* out);
     void configureMachine();
+    void restartMedia();
 
     clap_plugin_t plugin_{};
     const clap_host_t* host_;
@@ -188,8 +224,17 @@ private:
     // A project loaded before the ROMs were there: applied once they are.
     std::vector<uint8_t> pendingSnapshot_, pendingAudio_;
     std::string lastError_;
+    std::string notice_;
+    // The program or cartridge last loaded (.prg/.p00/.crt/.bin): what Power
+    // starts again, and what a project falls back to.
     std::string lastFileName_;
     std::vector<uint8_t> lastFileData_;
+    // The disk last inserted, as it was inserted (the drive holds it as the
+    // program changed it), and what starts from it on Power: "" nothing,
+    // "*" the first file, else a PETSCII file name.
+    std::string diskFileName_;
+    std::vector<uint8_t> diskFileData_;
+    std::string diskStart_;
 
     std::vector<ParamInfo> params_;
     std::unique_ptr<std::atomic<double>[]> values_;

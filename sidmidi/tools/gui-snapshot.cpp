@@ -9,6 +9,8 @@
 //     --size WxH         window size in logical pixels (default 800x622)
 //     --sids N           number of SIDs (for the machine page)
 //     --model I:NAME     SID I's model (6581, 6581R3, 6581R4, 6581R4AR, 8580R5)
+//     --open FILE        after the run, open FILE as Load does (a .d64 shows its files)
+//     --media-menu       after the run, open the Media menu
 //
 // The ROMs come from SidMidi's ROM folder or SIDMIDI_ROM_DIR, CC maps from
 // SIDMIDI_CCMAP_DIR, like the plugin. Without ROMs the window shows where
@@ -48,7 +50,8 @@ int main(int argc, char** argv)
         return 2;
     }
     const std::string out = argv[1];
-    std::string load, page = "screen";
+    std::string load, page = "screen", open;
+    bool mediaMenu = false;
     double seconds = 10.0, scale = 1.0;
     int w = 800, h = 622, sids = 0;
     std::vector<std::pair<int, std::string>> models;
@@ -65,6 +68,10 @@ int main(int argc, char** argv)
             scale = std::atof(next().c_str());
         else if (a == "--size")
             std::sscanf(next().c_str(), "%dx%d", &w, &h);
+        else if (a == "--open")
+            open = next();
+        else if (a == "--media-menu")
+            mediaMenu = true;
         else if (a == "--sids")
             sids = std::atoi(next().c_str());
         else if (a == "--model") {
@@ -146,6 +153,11 @@ int main(int argc, char** argv)
         editor.showPage(sidmidi::gui::Editor::Page::Cc);
     for (int i = 0; i < 3; ++i)
         editor.onTimer(); // pulls the frame, syncs the pages, polls the media line
+    if (!open.empty())
+        editor.openMedia(open);
+    if (mediaMenu)
+        editor.showDiskMenu();
+    editor.onTimer();
 
     const int pw = static_cast<int>(w * scale + 0.5), ph = static_cast<int>(h * scale + 0.5);
     cairo_surface_t* surface = cairo_image_surface_create(CAIRO_FORMAT_RGB24, pw, ph);

@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.21)
-project(SidMidi VERSION 0.4.0 LANGUAGES C CXX)
+project(SidMidi VERSION 0.5.0 LANGUAGES C CXX)
 
 # SidMidi builds as a CLAP and, through the clap-wrapper, as a VST3, for Linux
 # and Windows (cross-compiled with mingw-w64). Like Aurum and Substrike it does
@@ -126,6 +126,10 @@ if (SIDMIDI_BUILD_TOOLS)
 
     if (SIDMIDI_BUILD_PLUGIN AND NOT CMAKE_SYSTEM_NAME STREQUAL "Windows")
         # The built .clap loaded as a host loads it: program, notes, state round trip.
+        # The keyboard mapping, symbolic and positional.
+        add_executable(sidmidi-keytest tools/keytest.cpp)
+        target_link_libraries(sidmidi-keytest PRIVATE sidmidi-impl)
+
         # The window rendered offscreen, for the manual's screenshots.
         add_executable(sidmidi-gui-snapshot tools/gui-snapshot.cpp)
         target_link_libraries(sidmidi-gui-snapshot PRIVATE sidmidi-impl)

@@ -20,6 +20,9 @@
 //     --filter-range I:V    6581 filter range of SID I, 0..1 (after --model)
 //     --old-caps I          SID I has the 2200 pF filter caps (after --model)
 //     --fast-resampling     nearest sample instead of the sinc resampler
+//     --no-disk-warp        the true 1541 loads in real time (no warp while its motor runs)
+//     --freeze T            press the cartridge's freeze button (Action Replay, Final Cartridge)
+//     --dump T:FILE         write the C64's 64K of RAM to FILE
 //     --note T:KEY:VEL:LEN  a note on channel 1 at T seconds, LEN seconds long
 //     --cc T:CC:VAL         a controller on channel 1
 //     --bytes T:HEX..       raw MIDI bytes, e.g. 4.0:903C64
@@ -60,7 +63,7 @@ namespace {
 struct Scripted
 {
     double t;
-    int kind; // 0 midi bytes, 1 key down, 2 key up, 3 type, 4 shot, 5 SID registers, 6 paddle, 7 mouse, 8 peek
+    int kind; // 0 midi bytes, 1 key down, 2 key up, 3 type, 4 shot, 5 SID registers, 6 paddle, 7 mouse, 8 peek, 9 freeze, 10 dump
     std::vector<uint8_t> bytes;
     uint8_t key = 0;
     std::string text;
@@ -167,6 +170,7 @@ int main(int argc, char** argv)
     bool ntsc = false, trace = false;
     emu::MidiInterface iface = emu::MidiInterface::Datel;
     emu::SidBankConfig sidCfg;
+    bool noDiskWarp = false;
     emu::PortDevice portDevices[2] = {emu::PortDevice::Joystick, emu::PortDevice::Joystick};
     emu::DriveMode driveMode = emu::DriveMode::Virtual;
     bool noVideo = false;
@@ -232,6 +236,17 @@ int main(int argc, char** argv)
             sidCfg.chips[std::atoi(p[0].c_str()) - 1].tuning.filterRange = static_cast<float>(std::atof(p[1].c_str()));
         } else if (a == "--old-caps") {
             sidCfg.chips[std::atoi(next().c_str()) - 1].tuning.oldCaps = true;
+        } else if (a == "--dump") {
+            const std::string v = next();
+            const auto colon = v.find(':');
+            Scripted d{std::atof(v.substr(0, colon).c_str()), 10, {}};
+            d.text = v.substr(colon + 1);
+            script.push_back(d);
+        } else if (a == "--freeze") {
+            Scripted f{std::atof(next().c_str()), 9, {}};
+            script.push_back(f);
+        } else if (a == "--no-disk-warp") {
+            noDiskWarp = true;
         } else if (a == "--fast-resampling") {
             sidCfg.resampling = emu::SidResampling::Fast;
         } else if (a == "--note") {
@@ -327,6 +342,8 @@ int main(int argc, char** argv)
     auto enginePtr = std::make_unique<Engine>(); // large; keep it off the stack
     Engine& engine = *enginePtr;
     engine.realtime = false; // fixed warp: renders repeat exactly
+    if (noDiskWarp)
+        engine.warpOnDiskAccess = false;
     auto& c64 = engine.machine();
     c64.setRoms(roms);
     engine.setStandard(ntsc ? emu::VideoStandard::NTSC : emu::VideoStandard::PAL);
@@ -399,6 +416,13 @@ int main(int argc, char** argv)
                         e.size = static_cast<uint8_t>(std::min<size_t>(3, s.bytes.size() - k));
                         std::memcpy(e.data, &s.bytes[k], e.size);
                         events.push_back(e);
+                    }
+                    break;
+                case 9: c64.freezeButton(); break;
+                case 10:
+                    if (FILE* f = std::fopen(s.text.c_str(), "wb")) {
+                        std::fwrite(c64.m.ram.data(), 1, c64.m.ram.size(), f);
+                        std::fclose(f);
                     }
                     break;
                 case 1: c64.setKey(s.key, true); break;

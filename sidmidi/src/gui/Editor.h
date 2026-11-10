@@ -68,7 +68,7 @@ public:
     void onMouseWheel(const MouseEvent& e) override { handleWheel(e); }
     void onMouseLeave() override { handleMouseLeave(); }
     bool onKey(const KeyEvent& e) override;
-    void onRawKey(int code, bool down) override;
+    void onRawKey(int code, bool down, unsigned keysym) override;
     void onFocusLost() override;
     void onFilesDropped(const std::vector<std::string>& paths) override;
 
@@ -77,6 +77,11 @@ public:
 
     SidMidiPlugin& plugin() { return plugin_; }
     enum class Page { Screen, Machine, Cc };
+    // Opens a program or, for a .d64, inserts it and offers its files (what
+    // Load and a drop do).
+    void openMedia(const std::string& path);
+    // The Media button's menu.
+    void showDiskMenu();
     // What the Machine and CC buttons do (and the snapshot tool).
     void showPage(Page p);
     void notify(const std::string& text, bool error = false);
@@ -85,8 +90,11 @@ public:
 
 private:
     void openLoadDialog();
+    void openAttachDialog();
     void openExportDialog();
-    void showDiskMenu();
+    // The inserted disk's files to start, as menu items.
+    std::vector<MenuItem> diskStartItems();
+    void showDiskPicker();
     void toggleMachinePage();
     void toggleCcPage();
     void showPage(Widget* which);
@@ -121,7 +129,8 @@ private:
     bool keyboardToC64_ = false;
 
     std::unique_ptr<FileDialog> dialog_;
-    bool dialogIsExport_ = false;
+    enum class DialogFor { Load, Attach, Export };
+    DialogFor dialogFor_ = DialogFor::Load;
     std::string notice_;
     bool noticeError_ = false;
     double noticeUntil_ = 0.0;

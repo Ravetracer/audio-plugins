@@ -104,6 +104,30 @@ unsigned keysymFromVirtualKey(WPARAM vk, LPARAM lp)
 // The scan code of a key message as a Linux evdev code, which is what the
 // listener's raw key events carry. The main block is identical to set 1;
 // the extended (E0) keys get evdev's own numbers.
+// The keysym the layout gives a key with the modifiers held now, for the
+// C64's symbolic keyboard: what WM_CHAR would deliver, but at WM_KEYDOWN, so
+// it arrives with the key. Ctrl alone (not AltGr, which is Ctrl+Alt) is
+// taken out first, or a letter comes back as a control code. A dead key
+// gives its own character. Keys with a keysym of their own (cursor keys and
+// the like) come from keysymFromVirtualKey instead.
+unsigned layoutKeysym(WPARAM vk, LPARAM lp)
+{
+    BYTE state[256];
+    if (!GetKeyboardState(state))
+        return 0;
+    if (!(state[VK_MENU] & 0x80))
+        state[VK_CONTROL] = state[VK_LCONTROL] = state[VK_RCONTROL] = 0;
+    wchar_t buf[8] = {};
+    // Flag 4: leave the keyboard's dead-key state alone (Windows 10 1607+).
+    const int n = ToUnicode(static_cast<UINT>(vk), static_cast<UINT>((lp >> 16) & 0xff), state, buf, 8, 4);
+    if (n == 0)
+        return 0;
+    const unsigned cp = buf[0];
+    if (cp < 0x20 || cp == 0x7f || (cp >= 0xd800 && cp < 0xe000))
+        return 0;
+    return cp < 0x100 ? cp : 0x01000000u + cp;
+}
+
 int evdevFromScanCode(LPARAM lp)
 {
     const int sc = static_cast<int>((lp >> 16) & 0xff);
@@ -612,19 +636,23 @@ intptr_t Win32Window::handleMessage(void* handle, unsigned msg, uintptr_t wp, in
     case WM_KEYUP:
     case WM_SYSKEYUP:
         if (const int code = evdevFromScanCode(lp))
-            listener_->onRawKey(code, false);
+            listener_->onRawKey(code, false, 0);
         return 0;
     case WM_SYSKEYDOWN:
-        if (const int code = evdevFromScanCode(lp))
-            listener_->onRawKey(code, true);
+        if (const int code = evdevFromScanCode(lp)) {
+            const unsigned own = keysymFromVirtualKey(wp, lp);
+            listener_->onRawKey(code, true, own ? own : layoutKeysym(wp, lp));
+        }
         return 0;
     case WM_KILLFOCUS:
         listener_->onFocusLost();
         break;
     case WM_KEYDOWN:
     {
-        if (const int code = evdevFromScanCode(lp))
-            listener_->onRawKey(code, true);
+        if (const int code = evdevFromScanCode(lp)) {
+            const unsigned own = keysymFromVirtualKey(wp, lp);
+            listener_->onRawKey(code, true, own ? own : layoutKeysym(wp, lp));
+        }
         if (const unsigned sym = keysymFromVirtualKey(wp, lp))
         {
             KeyEvent k;

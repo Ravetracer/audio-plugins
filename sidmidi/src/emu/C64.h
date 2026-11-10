@@ -107,6 +107,8 @@ public:
     void midiFlush();
     // The serial bus as everybody drives it (true = line low).
     void iecLines(bool& atn, bool& clk, bool& data) const;
+    // The same with the C64's outputs as `pa` (the drive's view lags a cycle).
+    void iecLines(bool& atn, bool& clk, bool& data, uint8_t pa) const;
     void powerOn();          // cold start: RAM pattern, everything reset
     void reset();            // the reset button: RAM survives
 
@@ -117,10 +119,18 @@ public:
 
     // ---------------------------------------------------------------- media
     bool attachPrg(const std::vector<uint8_t>& prg, bool autostart, std::string& error);
+    // Inserts a disk. With `autostart`, switches the machine on and loads and
+    // runs its first file; without, nothing else changes (a running program
+    // or cartridge goes on, and the disk is there for LOAD"$",8 and the like).
     bool attachDisk(const std::vector<uint8_t>& d64, bool autostart, std::string& error);
+    // Switches on and loads and runs a file from the inserted disk by its
+    // PETSCII name ("*" for the first); LOAD"name",8,1 and RUN, typed.
+    void autostartDisk(const std::string& petsciiName);
     void ejectDisk();
     bool attachCartridge(const std::vector<uint8_t>& data, const std::string& name, std::string& error);
     void ejectCartridge();
+    // The freeze button of an Action Replay or a Final Cartridge.
+    void freezeButton();
     bool autostartPending() const { return autostart_ != Autostart::None; }
     // True from power-on until BASIC first waits for input (the KERNAL's RAM
     // test and screen setup), so the host can run it in warp. Never longer
@@ -179,6 +189,7 @@ public:
 
     enum class Autostart : uint8_t { None, Prg, Disk };
     Autostart autostart_ = Autostart::None;
+    // Prg: the program. Disk: the file's PETSCII name, empty for the first.
     std::vector<uint8_t> autostartPrg_;
     std::string pendingTyping_;
     bool booting_ = false;
@@ -192,6 +203,7 @@ private:
     uint8_t readIo(uint16_t addr);
     uint8_t peekIo(uint16_t addr) const;
     void writeIo(uint16_t addr, uint8_t v);
+    bool freezerWriting() const;
     void beginCycle() { vic.cycle(); }
     void endCycle();
     uint8_t keyboardRows(uint8_t columns) const;
@@ -206,6 +218,8 @@ private:
     Roms roms_;
     DriveMode driveMode_ = DriveMode::Virtual;
     double driveRatio_ = 1000000.0 / 985248.0;
+    uint8_t drivePa_ = 0x3f;   // CIA 2 port A as the drive sees it
+    bool iecChanged_ = false;
     std::array<Src, 16> map_{};
     bool ultimax_ = false;
 };

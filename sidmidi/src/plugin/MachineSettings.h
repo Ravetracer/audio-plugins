@@ -14,6 +14,9 @@
 namespace sidmidi {
 
 enum class JoyKeys : int { Off = 0, Numpad, Cursor };
+// Symbolic: a key types the character the host's layout prints on it.
+// Positional: a key presses the C64 key in its place on a C64's keyboard.
+enum class KeyMapping : int { Symbolic = 0, Positional };
 
 struct MachineSettings
 {
@@ -23,6 +26,7 @@ struct MachineSettings
     std::string palette = "colodore";
     int joyPort = 2;               // 1 or 2
     JoyKeys joyKeys = JoyKeys::Numpad;
+    KeyMapping keyMapping = KeyMapping::Symbolic;
     // What the host mouse drives over the screen, per control port.
     emu::PortDevice portDevice[2] = {emu::PortDevice::Joystick, emu::PortDevice::Joystick};
     bool sendClock = false;        // MIDI clock and start/stop from the host transport

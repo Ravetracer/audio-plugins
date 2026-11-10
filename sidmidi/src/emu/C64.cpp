@@ -59,9 +59,9 @@ C64::C64() : cpu(*this)
     };
     cia2.portsChanged = [this] {
         updateVicBank();
-        updateIec();
+        iecChanged_ = true; // the drive sees it from the next cycle (see endCycle)
     };
-    drive1541.readBus = [this](bool& atn, bool& clk, bool& data) { iecLines(atn, clk, data); };
+    drive1541.readBus = [this](bool& atn, bool& clk, bool& data) { iecLines(atn, clk, data, drivePa_); };
 
     SidBankConfig cfg;
     sids.configure(cfg, kPalClock, 48000.0, 0);
@@ -85,7 +85,11 @@ void C64::setRoms(const Roms& roms)
 
 void C64::iecLines(bool& atn, bool& clk, bool& data) const
 {
-    const uint8_t out = cia2.portAOut();
+    iecLines(atn, clk, data, cia2.portAOut());
+}
+
+void C64::iecLines(bool& atn, bool& clk, bool& data, uint8_t out) const
+{
     atn = out & 0x08;
     clk = out & 0x10;
     data = out & 0x20;
@@ -115,8 +119,9 @@ void C64::midiFlush()
 
 void C64::updateIec()
 {
-    const uint8_t out = cia2.portAOut();
-    drive1541.setC64Lines(out & 0x08, out & 0x10, out & 0x20);
+    drivePa_ = cia2.portAOut();
+    iecChanged_ = false;
+    drive1541.setC64Lines(drivePa_ & 0x08, drivePa_ & 0x10, drivePa_ & 0x20);
 }
 
 const D64& C64::diskImage()
@@ -255,6 +260,13 @@ void C64::endCycle()
         driveDue += driveRatio_;
         drive1541.runUntil(static_cast<uint64_t>(driveDue));
     }
+    // A write to the serial port reaches the drive one cycle after the CPU's
+    // write cycle, as VICE models it (the CIA's output settles on the next
+    // phase): the drive runs this cycle with the lines as they were. Fast
+    // loaders time their bits to the cycle; without this the drive answers
+    // a cycle early and a bit pair now and then lands in the wrong slot.
+    if (iecChanged_)
+        updateIec();
     if (midi.type == MidiInterface::HerMIDI) {
         bool atn, clk, data;
         iecLines(atn, clk, data);
@@ -276,7 +288,7 @@ bool C64::irqLine() const
 
 bool C64::nmiLine() const
 {
-    return cia2.irq() || m.restoreCycles > 0 || midi.nmiLine();
+    return cia2.irq() || m.restoreCycles > 0 || midi.nmiLine() || cart.nmiLine();
 }
 
 void C64::run(uint64_t target)
@@ -341,6 +353,14 @@ void C64::write(uint16_t addr, uint8_t v)
         case IO: writeIo(addr, v); break;
         case OPEN: break;
         case ROML:
+            // A cartridge with RAM there takes the write (the Action
+            // Replay, in any mode); the C64's own RAM underneath too unless
+            // the cartridge has the bus to itself (Ultimax).
+            if (uint8_t* r = cart.romlRam())
+                r[addr & 0x1fff] = v;
+            if (!ultimax_)
+                m.ram[addr] = v;
+            break;
         case ROMH:
             if (!ultimax_)
                 m.ram[addr] = v;
@@ -387,14 +407,33 @@ uint8_t C64::readIo(uint16_t addr)
         return cia1.read(static_cast<uint8_t>(addr));
     if (addr < 0xde00)
         return cia2.read(static_cast<uint8_t>(addr));
+    // A cartridge with code in I/O 1/2 (the Final Cartridges' bank-switching
+    // routines at $DE00) shares those pages with a MIDI interface (Datel at
+    // $DE04-$DE07). On the hardware they could not be plugged in together;
+    // here they behave as behind an ideal port expander: while the CPU runs
+    // code from these pages, the cartridge answers; data reads go to the
+    // MIDI interface's registers.
+    if ((cpu.s.pc & 0xfe00) == 0xde00 && cart.present()) {
+        uint8_t v;
+        bool changed = false;
+        if (cart.readIo(addr, v, changed)) {
+            if (changed)
+                updateMap();
+            return v;
+        }
+    }
     if (midi.decodes(addr))
         return midi.read(addr, m.clk);
     const int c = sids.chipAt(addr);
     if (c >= 0)
         return sids.read(c, static_cast<uint8_t>(addr), m.clk);
     uint8_t v;
-    if (cart.readIo(addr, v))
+    bool changed = false;
+    if (cart.readIo(addr, v, changed)) {
+        if (changed)
+            updateMap(); // the Final Cartridge I switches on reads
         return v;
+    }
     return vic.busByte();
 }
 
@@ -414,6 +453,9 @@ uint8_t C64::peekIo(uint16_t addr) const
         return cia2.peek(static_cast<uint8_t>(addr));
     if (midi.decodes(addr))
         return midi.peek(addr);
+    uint8_t v;
+    if (cart.peekIo(addr, v))
+        return v;
     return 0xff;
 }
 
@@ -441,6 +483,30 @@ void C64::writeIo(uint16_t addr, uint8_t v)
         cia2.write(static_cast<uint8_t>(addr), v);
         return;
     }
+    // A freezer cartridge (Action Replay, Final Cartridges) decodes I/O 1/2
+    // wider than its register: the Action Replay answers anywhere in
+    // $DE00-$DEFF, over every MIDI interface's registers. On the hardware a
+    // MIDI program probing each interface ($DE00, $DE04, $DE08) would switch
+    // it into Ultimax mode and land in its freezer, and the cartridge's own
+    // writes to $DE00 would reach a Sequential or Namesoft 6850. Here the
+    // writes are split by who makes them, as behind an ideal port expander:
+    // the freezer's own code reaches only the freezer, everything else never
+    // does.
+    if (cart.freezable()) {
+        if (freezerWriting()) {
+            if (cart.writeIo(addr, v))
+                updateMap();
+            return;
+        }
+        if (midi.decodes(addr)) {
+            midi.write(addr, v, m.clk);
+            return;
+        }
+        const int c = sids.chipAt(addr);
+        if (c >= 0)
+            sids.write(c, static_cast<uint8_t>(addr), v, m.clk);
+        return;
+    }
     if (midi.decodes(addr)) {
         midi.write(addr, v, m.clk);
         return;
@@ -450,6 +516,23 @@ void C64::writeIo(uint16_t addr, uint8_t v)
         sids.write(c, static_cast<uint8_t>(addr), v, m.clk);
     if (cart.writeIo(addr, v))
         updateMap();
+}
+
+// The freezer's own code: running from its ROM or RAM, from I/O 1/2 (where
+// it keeps its bank-switching routines), or from C64 RAM while the cartridge
+// is mapped in (the Action Replay's fast loader, copied to $0100-$03FF, runs
+// with its ROM switched on). A program running while the freezer is switched
+// out is not its code. The PC already points past the writing instruction,
+// so the instruction's last byte decides.
+bool C64::freezerWriting() const
+{
+    const uint16_t pc = static_cast<uint16_t>(cpu.s.pc - 1);
+    if ((pc & 0xfe00) == 0xde00)
+        return true;
+    const uint8_t src = map_[pc >> 12];
+    if (src == ROML || src == ROMH)
+        return true;
+    return cart.exrom() || cart.game();
 }
 
 // ------------------------------------------------------------------- traps
@@ -481,7 +564,10 @@ bool C64::trap(uint16_t pc)
             autostartPrg_.clear();
         } else if (autostart_ == Autostart::Disk) {
             autostart_ = Autostart::None;
-            pendingTyping_ += "LOAD\"*\",8,1\rRUN\r";
+            const std::string name = autostartPrg_.empty() ? std::string("*")
+                                                           : std::string(autostartPrg_.begin(), autostartPrg_.end());
+            autostartPrg_.clear();
+            pendingTyping_ += "LOAD\"" + name + "\",8,1\rRUN\r";
         }
         serviceKeyboardBuffer();
         return false;
@@ -594,11 +680,18 @@ bool C64::attachDisk(const std::vector<uint8_t>& d64, bool autostart, std::strin
     drive.dirty = false;
     drive.reset();
     drive1541.disk.fromD64(drive.disk);
-    if (autostart) {
-        autostart_ = Autostart::Disk;
-        powerOn();
-    }
+    if (autostart)
+        autostartDisk("*");
     return true;
+}
+
+void C64::autostartDisk(const std::string& petsciiName)
+{
+    autostart_ = Autostart::Disk;
+    autostartPrg_.clear();
+    if (petsciiName != "*")
+        autostartPrg_.assign(petsciiName.begin(), petsciiName.end());
+    powerOn();
 }
 
 void C64::ejectDisk()
@@ -615,6 +708,14 @@ bool C64::attachCartridge(const std::vector<uint8_t>& data, const std::string& n
     autostart_ = Autostart::None;
     powerOn();
     return true;
+}
+
+void C64::freezeButton()
+{
+    if (!cart.freezable())
+        return;
+    cart.freeze();
+    updateMap();
 }
 
 void C64::ejectCartridge()

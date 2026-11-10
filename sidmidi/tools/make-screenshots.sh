@@ -45,8 +45,9 @@ shot sidsynth "$roms" --load "${src}/_dev_/SID_Synth/sidsynth.d64" --seconds 10
 shot cc      "$roms" --load "${src}/_dev_/SID_Synth/sidsynth.d64" --seconds 10 --page cc
 shot machine "$roms" --load "${src}/_dev_/cynthcart/bin/cynthcart.prg" --seconds 6 --page machine \
              --sids 2 --model 2:8580R5
+shot disk    "$roms" --seconds 3 --open "${src}/_dev_/SID_Synth/sidsynth.d64"
 shot_no_roms roms --seconds 0
 
-for f in window sidsynth cc machine roms; do
+for f in window sidsynth cc machine disk roms; do
    printf '    %-16s %s\n' "${f}.png" "$(identify -format '%wx%h' "${out}/${f}.png")"
 done

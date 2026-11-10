@@ -20,6 +20,7 @@ set -e
 cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release >/dev/null
 ninja -C build
 tools/fetch-cpu-tests.sh build
+build/sidmidi-keytest
 prg="${SIDMIDI_TEST_PRG:-_dev_/cynthcart/bin/cynthcart.prg}"
 roms="${SIDMIDI_TEST_ROMS:-_dev_/roms}"
 if [ -f "$prg" ] && [ -d "$roms" ]; then
@@ -27,6 +28,19 @@ if [ -f "$prg" ] && [ -d "$roms" ]; then
     # The true 1541: a disk loaded through the emulated drive, then a state round trip.
     d64="${SIDMIDI_TEST_D64:-_dev_/Station64/sta64.d64}"
     [ -f "$d64" ] && build/sidmidi-selftest build/SidMidi.clap "$d64" 14 "$roms" true1541
+    # Media: a cartridge with a disk beside it, a disk only inserted, Start from disk.
+    cart="${SIDMIDI_TEST_CART:-_dev_/cynthcart/bin/cynthcart_cartridge_ROM.bin}"
+    disk="${SIDMIDI_TEST_DISK:-_dev_/SID-Wizard/SID-Wizard-1.93-C64-with-source/application/SID-Wizard-instruments.d64}"
+    start="${SIDMIDI_TEST_D64:-_dev_/Station64/sta64.d64}"
+    if [ -f "$cart" ] && [ -f "$disk" ] && [ -f "$start" ]; then
+        build/sidmidi-selftest build/SidMidi.clap --media "$cart" "$disk" "$start" "$roms"
+    fi
+    # Freezer cartridges: both fast loaders on the true 1541, byte for byte.
+    ar="${SIDMIDI_TEST_AR:-_dev_/cartridges/action_replay_6.crt}"
+    fc3="${SIDMIDI_TEST_FC3:-_dev_/cartridges/final cartridge iii (1988-12)(riska h&p).crt}"
+    if [ -f "$ar" ] && [ -f "$fc3" ] && [ -f "$start" ] && [ -f "${start%.d64}.prg" ]; then
+        tools/cart-test.sh "$roms" "$ar" "$fc3" "$start" "${start%.d64}.prg"
+    fi
     # Offline renders repeat exactly, across processes too.
     for i in 1 2; do
         build/sidmidi-run --roms "$roms" --prg "$prg" --seconds 6 --note 4:60:100:1 --no-video \

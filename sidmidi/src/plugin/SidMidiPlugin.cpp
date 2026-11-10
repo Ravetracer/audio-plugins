@@ -183,6 +183,30 @@ struct Glue
     {
         return self(p)->engine().midiInCount.load(std::memory_order_relaxed);
     }
+    static bool loaderAttach(const clap_plugin_t* p, const char* path)
+    {
+        std::string err;
+        const bool ok = self(p)->attachDiskFile(path, err);
+        if (!ok)
+            std::fprintf(stderr, "SidMidi: %s\n", err.c_str());
+        return ok;
+    }
+    static bool loaderStart(const clap_plugin_t* p, const char* name)
+    {
+        std::string err;
+        return self(p)->startFromDisk(name, err);
+    }
+    static int loaderDiskFiles(const clap_plugin_t* p)
+    {
+        if (!self(p)->diskPresent())
+            return -1;
+        return static_cast<int>(self(p)->diskDirectory().size());
+    }
+    static bool loaderHasCart(const clap_plugin_t* p)
+    {
+        std::lock_guard<std::mutex> lock(self(p)->machineLock());
+        return self(p)->engine().machine().cart.present();
+    }
     static const ExtLoader loader;
     // Offline bounces warp by a fixed amount, so they render the same every time.
     static bool renderHardRealtime(const clap_plugin_t*) { return false; }
@@ -194,7 +218,7 @@ struct Glue
     static const clap_plugin_render_t render;
 };
 const clap_plugin_render_t Glue::render = {renderHardRealtime, renderSetMode};
-const ExtLoader Glue::loader = {loaderLoad, loaderMidiIn};
+const ExtLoader Glue::loader = {loaderLoad, loaderMidiIn, loaderAttach, loaderStart, loaderDiskFiles, loaderHasCart};
 
 const clap_plugin_audio_ports_t Glue::audioPorts = {portsCount, portsGet};
 const clap_plugin_note_ports_t Glue::notePorts = {notePortsCount, notePortsGet};
@@ -247,6 +271,33 @@ SidMidiPlugin::SidMidiPlugin(const clap_host_t* host) : host_(host)
     rescanRoms();
 }
 
+// The media as they were attached, started again: the fallback when a
+// project's machine snapshot cannot be used. Under the machine lock.
+void SidMidiPlugin::restartMedia()
+{
+    auto& c64 = engine_.machine();
+    std::string err;
+    const std::string ext = lowerExt(lastFileName_);
+    bool cart = false;
+    if ((ext == "crt" || ext == "bin") && !lastFileData_.empty())
+        cart = c64.attachCartridge(lastFileData_, lastFileName_, err); // switches on
+    if (!diskFileData_.empty())
+        c64.attachDisk(diskFileData_, false, err);
+    if (cart) {
+        // started already
+    } else if ((ext == "prg" || ext == "p00") && !lastFileData_.empty()) {
+        std::vector<uint8_t> prg = lastFileData_;
+        if (ext == "p00" && prg.size() > 26)
+            prg.erase(prg.begin(), prg.begin() + 26);
+        c64.attachPrg(prg, true, err);
+    } else if (c64.drive.disk.present() && !diskStart_.empty()) {
+        c64.autostartDisk(diskStart_);
+    } else {
+        c64.powerOn();
+    }
+    engine_.resync();
+}
+
 bool SidMidiPlugin::rescanRoms()
 {
     if (hasRoms_)
@@ -266,17 +317,7 @@ bool SidMidiPlugin::rescanRoms()
         if (!engine_.loadAudioState(pendingAudio_))
             engine_.resync();
     } else {
-        std::string err;
-        const std::string ext = lowerExt(lastFileName_);
-        if ((ext == "prg" || ext == "p00") && !lastFileData_.empty())
-            c64.attachPrg(lastFileData_, true, err);
-        else if (ext == "d64" && !lastFileData_.empty())
-            c64.attachDisk(lastFileData_, true, err);
-        else if ((ext == "crt" || ext == "bin") && !lastFileData_.empty())
-            c64.attachCartridge(lastFileData_, lastFileName_, err);
-        else
-            c64.powerOn();
-        engine_.resync();
+        restartMedia();
     }
     pendingSnapshot_.clear();
     pendingAudio_.clear();
@@ -728,23 +769,54 @@ bool SidMidiPlugin::loadData(const std::string& name, const std::vector<uint8_t>
     std::unique_lock<std::mutex> lock(machineLock_);
     auto& c64 = engine_.machine();
     bool ok = false;
+    notice_.clear();
     if (ext == "prg" || ext == "p00") {
         std::vector<uint8_t> prg = data;
         if (ext == "p00" && prg.size() > 26)
             prg.erase(prg.begin(), prg.begin() + 26); // the PC64 header
+        c64.cart.eject(); // a cartridge would start instead
         ok = c64.attachPrg(prg, true, error);
+        if (ok) {
+            lastFileName_ = name;
+            lastFileData_ = data;
+            diskStart_.clear(); // the disk stays in, the program is what starts
+        }
     } else if (ext == "d64") {
-        ok = c64.attachDisk(data, true, error);
+        emu::D64 probe; // a bad image must not cost the cartridge
+        if (probe.load(data, error)) {
+            c64.cart.eject();
+            ok = c64.attachDisk(data, true, error);
+        }
+        if (ok) {
+            diskFileName_ = name;
+            diskFileData_ = data;
+            diskStart_ = "*";
+            lastFileName_.clear();
+            lastFileData_.clear();
+        }
     } else if (ext == "crt" || ext == "bin") {
         ok = c64.attachCartridge(data, name, error);
+        if (ok) {
+            lastFileName_ = name;
+            lastFileData_ = data;
+            diskStart_.clear(); // the cartridge starts; the disk stays in for it
+            // A freezer's fast loader runs its own code in the drive, which
+            // the virtual drive does not have: the true 1541 it is.
+            if (c64.cart.freezable() && settings_.driveMode == emu::DriveMode::Virtual) {
+                if (hasDriveRom_) {
+                    settings_.driveMode = emu::DriveMode::True1541;
+                    configureMachine();
+                    notice_ = "Drive 8 is now the True 1541: the cartridge's fast loader runs in the drive";
+                } else {
+                    notice_ = "The cartridge's fast loader needs the True 1541 (Machine page) and the 1541 DOS ROM";
+                }
+            }
+        }
     } else {
         error = "unknown file type ." + ext + " (expected .prg, .d64, .crt or .bin)";
     }
-    if (ok) {
-        lastFileName_ = name;
-        lastFileData_ = data;
+    if (ok)
         engine_.resync();
-    }
     lastError_ = ok ? std::string() : error;
     lock.unlock();
     if (ok)
@@ -752,25 +824,142 @@ bool SidMidiPlugin::loadData(const std::string& name, const std::vector<uint8_t>
     return ok;
 }
 
+void SidMidiPlugin::freezeButton()
+{
+    std::lock_guard<std::mutex> lock(machineLock_);
+    engine_.machine().freezeButton();
+}
+
+bool SidMidiPlugin::cartridgeFreezable()
+{
+    std::lock_guard<std::mutex> lock(machineLock_);
+    return engine_.machine().cart.freezable();
+}
+
 void SidMidiPlugin::powerCycle()
 {
     std::lock_guard<std::mutex> lock(machineLock_);
     auto& c64 = engine_.machine();
-    // Power on with what is attached: a disk or a .prg autostarts again.
+    // Power on with what is attached: a .prg starts again, a cartridge starts
+    // by itself, a disk that was started from starts the same file again; an
+    // inserted disk alone leaves the C64 at READY.
     std::string err;
     const std::string ext = lowerExt(lastFileName_);
-    if ((ext == "prg" || ext == "p00") && !lastFileData_.empty()) {
+    if ((ext == "prg" || ext == "p00") && !lastFileData_.empty() && !c64.cart.present()) {
         std::vector<uint8_t> prg = lastFileData_;
         if (ext == "p00" && prg.size() > 26)
             prg.erase(prg.begin(), prg.begin() + 26);
         c64.attachPrg(prg, true, err);
-    } else if (c64.drive.disk.present() && !c64.cart.present()) {
-        c64.autostart_ = emu::C64::Autostart::Disk;
-        c64.powerOn();
+    } else if (!c64.cart.present() && c64.drive.disk.present() && !diskStart_.empty()) {
+        c64.autostartDisk(diskStart_);
     } else {
         c64.powerOn();
     }
     engine_.resync();
+}
+
+// ------------------------------------------------------------------ the disk drive
+
+bool SidMidiPlugin::attachDiskFile(const std::string& path, std::string& error)
+{
+    std::vector<uint8_t> data;
+    if (!readFile(path, data)) {
+        error = "cannot read " + path;
+        return false;
+    }
+    return attachDisk(baseName(path), data, error);
+}
+
+bool SidMidiPlugin::attachDisk(const std::string& name, const std::vector<uint8_t>& data, std::string& error)
+{
+    if (!hasRoms_) {
+        error = "The C64 ROMs are missing: put them into " + romFolder();
+        return false;
+    }
+    std::lock_guard<std::mutex> lock(machineLock_);
+    if (!engine_.machine().attachDisk(data, false, error)) {
+        lastError_ = error;
+        return false;
+    }
+    diskFileName_ = name;
+    diskFileData_ = data;
+    diskStart_.clear();
+    return true;
+}
+
+namespace {
+std::string readablePetscii(const std::string& s)
+{
+    std::string out;
+    for (char ch : s) {
+        auto c = static_cast<uint8_t>(ch);
+        if (c >= 0xc1 && c <= 0xda)
+            c = static_cast<uint8_t>(c - 0x80); // shifted letters: show them as letters
+        out += (c >= 0x20 && c <= 0x7e) ? static_cast<char>(c) : '?';
+    }
+    return out;
+}
+} // namespace
+
+bool SidMidiPlugin::diskPresent()
+{
+    std::lock_guard<std::mutex> lock(machineLock_);
+    return engine_.machine().drive.disk.present();
+}
+
+std::string SidMidiPlugin::diskTitle()
+{
+    std::lock_guard<std::mutex> lock(machineLock_);
+    auto& disk = engine_.machine().drive.disk;
+    if (!disk.present())
+        return {};
+    std::string name = disk.diskName();
+    while (!name.empty() && static_cast<uint8_t>(name.back()) == 0xa0)
+        name.pop_back();
+    return readablePetscii(name);
+}
+
+std::vector<SidMidiPlugin::DiskEntry> SidMidiPlugin::diskDirectory()
+{
+    std::lock_guard<std::mutex> lock(machineLock_);
+    std::vector<DiskEntry> out;
+    auto& disk = engine_.machine().drive.disk;
+    if (!disk.present())
+        return out;
+    static const char* const kTypes[] = {"DEL", "SEQ", "PRG", "USR", "REL"};
+    for (const auto& e : disk.directory()) {
+        if (!(e.type & 0x80))
+            continue; // scratched or never closed
+        DiskEntry d;
+        d.petscii = e.name;
+        d.display = readablePetscii(e.name);
+        d.type = (e.type & 7) < 5 ? kTypes[e.type & 7] : "???";
+        d.blocks = e.blocks;
+        out.push_back(std::move(d));
+    }
+    return out;
+}
+
+bool SidMidiPlugin::startFromDisk(const std::string& petsciiName, std::string& error)
+{
+    std::string follow;
+    {
+        std::lock_guard<std::mutex> lock(machineLock_);
+        auto& c64 = engine_.machine();
+        if (!c64.drive.disk.present()) {
+            error = "no disk in the drive";
+            return false;
+        }
+        c64.cart.eject(); // it would start instead
+        c64.autostartDisk(petsciiName);
+        diskStart_ = petsciiName;
+        lastFileName_.clear();
+        lastFileData_.clear();
+        engine_.resync();
+        follow = diskFileName_ + " " + (petsciiName == "*" ? std::string() : readablePetscii(petsciiName));
+    }
+    followProgram(follow); // the disk's file name or the program's: either may name a map
+    return true;
 }
 
 void SidMidiPlugin::resetButton()
@@ -784,12 +973,20 @@ void SidMidiPlugin::ejectDisk()
 {
     std::lock_guard<std::mutex> lock(machineLock_);
     engine_.machine().ejectDisk();
+    diskFileName_.clear();
+    diskFileData_.clear();
+    diskStart_.clear();
 }
 
 void SidMidiPlugin::ejectCartridge()
 {
     std::lock_guard<std::mutex> lock(machineLock_);
     engine_.machine().ejectCartridge();
+    const std::string ext = lowerExt(lastFileName_);
+    if (ext == "crt" || ext == "bin") {
+        lastFileName_.clear();
+        lastFileData_.clear();
+    }
     engine_.resync();
 }
 
@@ -1135,6 +1332,11 @@ bool SidMidiPlugin::stateSave(const clap_ostream_t* stream)
     // The CC map in full, so the project keeps its slot names without the file.
     const std::string map = ccMap_.toText();
     putBlob(out, map.data(), map.size());
+    // The disk as inserted, apart from the program (0.5.0): a cartridge and
+    // a disk can be in at once.
+    putBlob(out, diskFileName_.data(), diskFileName_.size());
+    putBlob(out, diskFileData_.data(), diskFileData_.size());
+    putBlob(out, diskStart_.data(), diskStart_.size());
 
     size_t at = 0;
     while (at < out.size()) {
@@ -1162,13 +1364,16 @@ bool SidMidiPlugin::stateLoad(const clap_istream_t* stream)
         return false;
     size_t at = 8;
     uint32_t version;
-    std::vector<uint8_t> settings, params, snap, fileName, fileData, audio, ccMapText;
+    std::vector<uint8_t> settings, params, snap, fileName, fileData, audio, ccMapText, diskName, diskData, diskStart;
     if (!getU32(in, at, version) || !getBlob(in, at, settings) || !getBlob(in, at, params) || !getBlob(in, at, snap))
         return false;
     getBlob(in, at, fileName);
     getBlob(in, at, fileData);
     getBlob(in, at, audio);
     getBlob(in, at, ccMapText); // absent before 0.3.0: no map
+    getBlob(in, at, diskName);  // absent before 0.5.0: see below
+    getBlob(in, at, diskData);
+    getBlob(in, at, diskStart);
     setCcMap(CcMap::fromText(std::string(ccMapText.begin(), ccMapText.end())));
 
     MachineSettings s;
@@ -1199,6 +1404,17 @@ bool SidMidiPlugin::stateLoad(const clap_istream_t* stream)
     applyParamsToEngine();
     lastFileName_.assign(fileName.begin(), fileName.end());
     lastFileData_ = fileData;
+    diskFileName_.assign(diskName.begin(), diskName.end());
+    diskFileData_ = diskData;
+    diskStart_.assign(diskStart.begin(), diskStart.end());
+    if (lowerExt(lastFileName_) == "d64") {
+        // Before 0.5.0 a disk was the one loaded file, and it was started.
+        diskFileName_ = lastFileName_;
+        diskFileData_ = lastFileData_;
+        diskStart_ = "*";
+        lastFileName_.clear();
+        lastFileData_.clear();
+    }
     auto& c64 = engine_.machine();
     if (!hasRoms_) {
         pendingSnapshot_ = snap;
@@ -1210,17 +1426,7 @@ bool SidMidiPlugin::stateLoad(const clap_istream_t* stream)
             engine_.resync();
     } else {
         // A snapshot from another build: start the attached media again.
-        std::string err;
-        const std::string ext = lowerExt(lastFileName_);
-        if ((ext == "prg" || ext == "p00") && !lastFileData_.empty())
-            c64.attachPrg(lastFileData_, true, err);
-        else if (ext == "d64" && !lastFileData_.empty())
-            c64.attachDisk(lastFileData_, true, err);
-        else if ((ext == "crt" || ext == "bin") && !lastFileData_.empty())
-            c64.attachCartridge(lastFileData_, lastFileName_, err);
-        else
-            c64.powerOn();
-        engine_.resync();
+        restartMedia();
     }
     if (hostParams_)
         hostParams_->rescan(host_, CLAP_PARAM_RESCAN_VALUES);

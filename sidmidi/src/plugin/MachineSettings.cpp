@@ -15,6 +15,7 @@ std::string MachineSettings::toText() const
     o << "palette = " << palette << "\n";
     o << "joy_port = " << joyPort << "\n";
     o << "joy_keys = " << static_cast<int>(joyKeys) << "\n";
+    o << "key_mapping = " << static_cast<int>(keyMapping) << "\n";
     o << "port1_device = " << static_cast<int>(portDevice[0]) << "\n";
     o << "port2_device = " << static_cast<int>(portDevice[1]) << "\n";
     o << "send_clock = " << (sendClock ? 1 : 0) << "\n";
@@ -62,6 +63,8 @@ void MachineSettings::fromText(const std::string& text)
             palette = val;
         else if (key == "joy_port")
             joyPort = iv == 1 ? 1 : 2;
+        else if (key == "key_mapping")
+            keyMapping = iv == 1 ? KeyMapping::Positional : KeyMapping::Symbolic;
         else if (key == "joy_keys")
             joyKeys = static_cast<JoyKeys>(std::clamp(iv, 0, 2));
         else if (key == "port1_device" || key == "port2_device")

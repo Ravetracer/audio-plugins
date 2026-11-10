@@ -61,7 +61,7 @@ audio-plugins/
 | 3 | **Aurum** | `aurum/` | 0.3.1 | Linux, Windows | CLAP, VST3 | a clean-room algorithmic reverb (FDN, allpass ring, plate) with a per-frequency decay contour; own DSP and GUI, see *Aurum* below |
 | 4 | **Substrike** | `substrike/` | 1.1.0 | Linux, Windows | CLAP, VST3 | a layered kick drum designer for every style; standalone like Aurum, see *Substrike* below |
 | 5 | **Shapeau** | `shapeau/` | 0.4.0 | Linux, Windows | CLAP, VST3 | a multiband drawing rack: a reorderable chain of shape-driven effects per band, beat-synced or triggered by MIDI or a sidechain hit, with the audio drawn behind the shape; see *Shapeau* below |
-| 6 | **SidMidi** | `sidmidi/` | 0.4.0 | Linux, Windows | CLAP, VST3 | a Commodore 64 running the original C64 MIDI programs, played from the DAW through an emulated MIDI cartridge, with up to eight reSIDfp SIDs; GPL, standalone, see *SidMidi* below |
+| 6 | **SidMidi** | `sidmidi/` | 0.5.0 | Linux, Windows | CLAP, VST3 | a Commodore 64 running the original C64 MIDI programs, played from the DAW through an emulated MIDI cartridge, with up to eight reSIDfp SIDs; GPL, standalone, see *SidMidi* below |
 
 Naming follows the plugin, not a pattern: the CMake project, the installed
 artifact and the display name are CamelCase (`SaeureKiste`), the folder is
@@ -607,6 +607,21 @@ What to know before working there:
   the 901227-03 entry points, checked by ROM signature).
   `src/engine/Engine` runs the machine per host block and is what the plugin
   and `sidmidi-run` share.
+- **Media** (0.5.0): the plugin keeps the disk (`diskFileName_/Data_/Start_`)
+  apart from the program or cartridge (`lastFileName_/Data_`); a disk can be
+  only inserted, and a cartridge and a disk can be in at once. Anything that
+  restarts media goes through `restartMedia()`. `--media` mode of the
+  self-test covers it. The keyboard is **symbolic** by default (the layout's
+  keysym arrives with every raw press) or positional; `sidmidi-keytest`.
+- **Freezer cartridges and fast loaders** (0.5.0): Action Replay, Final
+  Cartridge III and I in `emu/Cartridge.*`. A C64 write to $DD00 reaches the
+  drive one cycle late (`C64::endCycle`, as VICE's `store_ciapa` clk+1) --
+  fast loaders depend on it to the cycle; `tools/cart-test.sh` proves it.
+  A cartridge with code in I/O 1 wins reads while the PC is there, the MIDI
+  interface otherwise. A freezer's I/O writes are split by writer
+  (`C64::freezerWriting`): only its own code reaches it, so a MIDI program
+  probing every interface's address cannot freeze the machine. VICE's sources are the reference for hardware
+  behaviour (read them, write our own code).
 - **Release material** comes from SidMidi's own scripts (`tools/`):
   `make-manual.sh` (own docgen; the CC map library stands in for a preset
   library), `make-screenshots.sh` (offscreen through `sidmidi-gui-snapshot`;
@@ -627,7 +642,8 @@ What to know before working there:
   emulated drive and a state round trip). `sidmidi-run` boots, autostarts, plays a MIDI
   script, writes WAV and PNG (`--sidregs` dumps SID 1). GUI shots: a private
   Xvfb in the devbox with `sidmidi-gui-host` (`SIDMIDI_LOAD=<file>` loads a
-  program through the plugin's `de.ravetracer.sidmidi.loader/2` extension).
+  program through the plugin's `de.ravetracer.sidmidi.loader/3` extension, which also inserts a disk and
+  starts from one for the tests).
 
 ## Build and install
 

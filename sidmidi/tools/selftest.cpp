@@ -22,6 +22,12 @@
 //    zero and the program must still play afterwards.
 //
 // Exit code 0 when everything passed.
+//
+//   sidmidi-selftest SidMidi.clap --media CARTRIDGE DISK START-DISK [rom-folder]
+//
+// The media: a cartridge with a disk inserted beside it (the cartridge runs
+// on untouched, both are in the state), and a disk inserted alone (nothing
+// starts) and then started from (its first file runs).
 
 #include <clap/clap.h>
 #include <dlfcn.h>
@@ -221,15 +227,84 @@ struct Buffer
 
 } // namespace
 
+int mediaTest(const clap_plugin_factory_t* factory, const char* cartPath, const char* diskPath, const char* startDisk)
+{
+    using sidmidi::ExtLoader;
+    auto loaderOf = [](const Instance& i) {
+        return static_cast<const ExtLoader*>(i.plugin->get_extension(i.plugin, sidmidi::kExtLoader));
+    };
+    const std::vector<std::pair<int, std::vector<uint8_t>>> note = {{2, {0x90, 64, 110}}, {50, {0x80, 64, 0}}};
+
+    // X and Y run the cartridge the same way; X gets a disk halfway.
+    Instance x, y;
+    x.create(factory);
+    y.create(factory);
+    const ExtLoader* lx = loaderOf(x);
+    const ExtLoader* ly = loaderOf(y);
+    check(lx && lx->load_file(x.plugin, cartPath) && ly->load_file(y.plugin, cartPath),
+          (std::string("cartridge loads: ") + cartPath).c_str());
+    x.run(400);
+    y.run(400);
+    check(lx->attach_disk(x.plugin, diskPath), (std::string("disk inserts: ") + diskPath).c_str());
+    check(lx->has_cartridge(x.plugin), "inserting a disk leaves the cartridge in");
+    const int files = lx->disk_files(x.plugin);
+    std::printf("      the disk lists %d files\n", files);
+    check(files > 0, "the inserted disk's directory reads");
+    const auto outX = x.run(80, note);
+    const auto outY = y.run(80, note);
+    double diff = 0;
+    for (size_t i = 0; i < outX.size(); ++i)
+        diff = std::max(diff, static_cast<double>(std::fabs(outX[i] - outY[i])));
+    std::printf("      the cartridge plays at %.1f dB; with the disk inserted, max difference %.3g\n", rmsDb(outX), diff);
+    check(rmsDb(outX) > -50.0 && diff == 0.0, "the cartridge runs on untouched by the disk");
+
+    // Both travel with the project.
+    auto* st = static_cast<const clap_plugin_state_t*>(x.plugin->get_extension(x.plugin, CLAP_EXT_STATE));
+    Buffer buf;
+    clap_ostream_t os{&buf, Buffer::write};
+    check(st && st->save(x.plugin, &os), "the state saves");
+    Instance z;
+    z.create(factory);
+    clap_istream_t is{&buf, Buffer::read};
+    auto* stZ = static_cast<const clap_plugin_state_t*>(z.plugin->get_extension(z.plugin, CLAP_EXT_STATE));
+    check(stZ && stZ->load(z.plugin, &is), "the state loads");
+    const ExtLoader* lz = loaderOf(z);
+    check(lz->has_cartridge(z.plugin) && lz->disk_files(z.plugin) == files,
+          "the project keeps the cartridge and the disk");
+    check(rmsDb(z.run(80, note)) > -50.0, "the restored cartridge plays");
+
+    // A disk inserted alone starts nothing; Start from disk runs its first file.
+    Instance w;
+    w.create(factory);
+    const ExtLoader* lw = loaderOf(w);
+    w.run(300); // to READY
+    check(lw->attach_disk(w.plugin, startDisk), (std::string("disk inserts: ") + startDisk).c_str());
+    w.run(1500);
+    const double idle = rmsDb(w.run(80, note));
+    check(lw->start_from_disk(w.plugin, "*"), "Start from disk");
+    w.run(1600);
+    const double started = rmsDb(w.run(80, note));
+    std::printf("      a note with the disk only inserted: %.1f dB; after starting its first file: %.1f dB\n", idle,
+                started);
+    check(idle < -60.0, "an inserted disk starts nothing");
+    check(started > -50.0, "Start from disk runs the program");
+
+    for (Instance* i : {&x, &y, &z, &w})
+        i->destroy();
+    return 0;
+}
+
 int main(int argc, char** argv)
 {
     if (argc < 3) {
         std::fprintf(stderr, "usage: sidmidi-selftest SidMidi.clap PROGRAM [seconds-until-ready]\n");
         return 2;
     }
-    const double ready = argc > 3 ? std::atof(argv[3]) : 3.0;
-    if (argc > 4)
-        setenv("SIDMIDI_ROM_DIR", argv[4], 1);
+    const bool media = std::string(argv[2]) == "--media";
+    const double ready = argc > 3 && !media ? std::atof(argv[3]) : 3.0;
+    const int romArg = media ? 6 : 4;
+    if (argc > romArg)
+        setenv("SIDMIDI_ROM_DIR", argv[romArg], 1);
     // A CC map for the program under test, in a scratch folder (this runs in
     // the build container, whose /tmp goes with it).
     std::string program = argv[2];
@@ -254,6 +329,16 @@ int main(int argc, char** argv)
     check(entry && entry->init(argv[1]), "clap_entry found and initialised");
     auto* factory = static_cast<const clap_plugin_factory_t*>(entry->get_factory(CLAP_PLUGIN_FACTORY_ID));
     check(factory && factory->get_plugin_count(factory) == 1, "one plugin in the factory");
+    if (media) {
+        if (argc < 6) {
+            std::fprintf(stderr, "usage: sidmidi-selftest SidMidi.clap --media CARTRIDGE DISK START-DISK [rom-folder]\n");
+            return 2;
+        }
+        mediaTest(factory, argv[3], argv[4], argv[5]);
+        entry->deinit();
+        std::printf("%s (%d failure%s)\n", failures ? "FAILED" : "PASSED", failures, failures == 1 ? "" : "s");
+        return failures ? 1 : 0;
+    }
 
     Instance a;
     a.create(factory);

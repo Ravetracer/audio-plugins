@@ -352,12 +352,12 @@ void X11Window::handleEvent(void* xevent)
                 }
             }
         }
-        listener_->onRawKey(static_cast<int>(ev.xkey.keycode) - 8, true);
+        listener_->onRawKey(static_cast<int>(ev.xkey.keycode) - 8, true, k.keysym);
         listener_->onKey(k);
         break;
     }
     case KeyRelease:
-        listener_->onRawKey(static_cast<int>(ev.xkey.keycode) - 8, false);
+        listener_->onRawKey(static_cast<int>(ev.xkey.keycode) - 8, false, 0);
         break;
     case FocusOut:
         listener_->onFocusLost();

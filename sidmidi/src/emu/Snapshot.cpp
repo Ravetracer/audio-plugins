@@ -100,6 +100,8 @@ public:
         return true;
     }
 
+    bool atEnd() const { return at_ >= d_.size(); }
+
 private:
     bool have(size_t n) const { return ok && at_ + n <= d_.size(); }
     const std::vector<uint8_t>& d_;
@@ -183,6 +185,10 @@ std::vector<uint8_t> saveSnapshot(const C64& c)
         w.u64(q.at);
         w.u32(q.byte);
     }
+    // Appended in 0.5.0 (a snapshot without it reads with the defaults): the
+    // freezer cartridges' register, RAM and NMI.
+    w.pod(c.cart.x);
+    w.bytes(c.cart.ram());
     return w.out;
 }
 
@@ -286,6 +292,14 @@ bool loadSnapshot(C64& c, const std::vector<uint8_t>& data)
     }
     if (!r.ok)
         return false;
+    CartFreezerState freezer;
+    std::vector<uint8_t> cartRam;
+    if (!r.atEnd()) {
+        r.pod(freezer);
+        cartRam = r.bytes();
+        if (!r.ok)
+            return false;
+    }
 
     // Commit.
     if (c.standard() != std)
@@ -298,6 +312,9 @@ bool loadSnapshot(C64& c, const std::vector<uint8_t>& data)
         c.cart.eject();
     }
     c.cart.s = cartState;
+    c.cart.x = freezer;
+    if (cartRam.size() == c.cart.ram().size())
+        c.cart.ram() = cartRam;
     if (!disk.empty()) {
         if (!c.drive.disk.load(disk, err))
             return false;

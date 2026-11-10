@@ -105,18 +105,42 @@ are in place.
 ## 4. The window
 
 **Load** opens a file chooser for a program: a `.prg` (a C64 program file),
-a `.d64` (a disk image), a `.crt` (a cartridge image) or a `.bin` (a raw 8K
-or 16K cartridge). You can also **drop** a file onto the window. The program
-starts by itself: a `.prg` is loaded and run, a disk's first program is
+a `.d64` (a disk image), a `.crt` (a cartridge image) or a `.bin` (a raw
+cartridge ROM). You can also **drop** a file onto the window. A `.prg` is
 loaded and run, a cartridge starts as the C64 is switched on. Starting runs
 in warp, muted, so you do not wait for the C64.
 
-**Media** exports the disk — with everything the program saved on it — as a
-`.d64` file, and ejects the disk or the cartridge.
+A **disk** goes into the drive first, and SidMidi shows its files: leave it
+in the drive, run its first file, or pick the file to run. A disk often
+holds more than the program — instruments, songs, a second program — and the
+first file is not always the one to start.
+
+![After loading a disk: leave it in the drive, run the first file, or pick one.](images/disk.png)
+
+**Media** holds the rest of what a C64 user does with disks and cartridges:
+
+- **Insert disk…** puts a disk into the drive and does nothing else: the
+  program or cartridge that is running goes on. Load from it on the C64 —
+  `LOAD"$",8` and `LIST` show its directory, `LOAD"NAME",8,1` loads a file —
+  or from the running program's own disk menu.
+- **Start from disk** runs a file of the inserted disk: the C64 is switched
+  on and the file is loaded and run.
+- **Export disk image…** saves the disk — with everything the program saved
+  on it — as a `.d64` file.
+- **Freeze** presses the freeze button of an Action Replay or a Final
+  Cartridge (chapter 5).
+- **Eject disk**, **Eject cartridge**.
+
+A cartridge and a disk can be in at the same time: load a cartridge, then
+insert a disk with your sounds or songs, and load them from the cartridge's
+program. Starting a `.prg` or a file from the disk takes the cartridge out,
+because a C64 with a cartridge starts the cartridge instead.
 
 **Reset** presses the C64's reset button: the program restarts its machine,
-the memory survives. **Power** switches the C64 off and on: the attached
-program starts again from scratch.
+the memory survives. **Power** switches the C64 off and on: the program
+or cartridge starts again from scratch, a file started from the disk is
+started again, and a disk that was only inserted leaves the C64 at READY
+with the disk in the drive.
 
 **Warp** runs the machine as fast as it can, muted. Some programs unpack
 themselves for a while after loading; Station64, for example, needs about
@@ -139,18 +163,38 @@ The window can be resized; the screen keeps its proportions.
 
 **Click into the screen** to give the C64 your keyboard. From then on, keys
 go to the C64 until you click outside the screen or the window loses focus.
-The keys sit where a C64 has them, whatever your keyboard's layout:
+
+How keys become C64 keys is set on the machine page, under **Keyboard**:
+
+- **Symbolic** (the default): a key types the character your keyboard
+  prints on it. Type a `;` the way your layout types it — on a German
+  keyboard Shift and the comma — and the C64 gets its `;`. SHIFT is pressed
+  or held back for the C64 as the character needs. Characters a C64 does
+  not have, such as `ä`, do nothing. `^` types the C64's ↑, `_` its ←,
+  `\` its £.
+- **Positional**: a key is the C64 key in the same place on a C64's
+  keyboard, whatever your layout prints on it. Programs that use keys for
+  their place rather than their letter — a row of keys as a piano keyboard,
+  say — may be easier this way.
+
+Keys without a character work the same in both, and some C64 keys have no
+place of their own on a PC keyboard:
 
 | Your key | C64 | Your key | C64 |
 |---|---|---|---|
 | Esc | RUN/STOP | Tab | CTRL |
-| Left Ctrl | C= | ` (grave) | ← |
-| - = | + - | [ ] | @ * |
-| ; ' | : ; | \ or # | = |
-| Home | CLR/HOME | Insert | INST |
-| Delete, Backspace | DEL | End, <> | £ |
+| Left Ctrl | C= | Home | CLR/HOME |
+| Insert | INST | Delete, Backspace | DEL |
 | Page Down | ↑ | Page Up | RESTORE |
 | F1–F8 | F1–F8 (even = shifted) | Cursor keys | the C64's cursor keys |
+
+In **Positional** mode the keys around the letters are, on a US keyboard:
+
+| Your key | C64 | Your key | C64 |
+|---|---|---|---|
+| ` (grave) | ← | - = | + - |
+| [ ] | @ * | ; ' | : ; |
+| \ or # | = | End, <> | £ |
 
 ### Joystick, mouse and paddles
 
@@ -193,6 +237,39 @@ the synthesizer.
 Most C64 MIDI programs need two things to agree: the **MIDI** interface in
 SidMidi's top bar, and the interface the program itself is set to. When a
 program says it cannot find an interface, the two do not match.
+
+### Freezer and fast-loader cartridges
+
+Besides program cartridges, SidMidi takes the utility cartridges C64 users
+kept plugged in: the **Action Replay** (versions 4.2 to 7.5 and their
+variants, as `.crt` or as a raw 32K `.bin`), the **Final Cartridge III** and
+the **Final Cartridge** (I). Load one like any cartridge; it starts with its
+own menu or screen. Insert a disk beside it (**Media → Insert disk**) and
+load from the cartridge — that is what their fast loaders are for.
+
+- **Their fast loaders need the True 1541.** They run their own code inside
+  the drive, which the virtual drive does not have. When you load such a
+  cartridge while Drive 8 is *Virtual*, SidMidi switches it to *True 1541*
+  and says so (it needs the 1541 DOS ROM, chapter 3). A load on the true
+  drive runs in warp, so you wait for neither the C64 nor the drive.
+- **Freeze**: **Media → Freeze** presses the cartridge's freeze button. The
+  running program stops and the cartridge's freeze menu appears — the
+  monitor, pokes, sprite killer and so on; its *restart* entry continues the
+  program where it stopped.
+- **Action Replay**: at its start menu, F7 installs the fast loader, F3
+  starts BASIC without it (then even the virtual drive loads, through the
+  KERNAL).
+- **Final Cartridge III** starts in its desktop, worked with the mouse or a
+  joystick; hold **RUN/STOP** (Esc) while it starts to go straight to BASIC
+  with its fast loader.
+
+A cartridge and a MIDI interface share the C64's expansion port. SidMidi
+lets both work, as if through an ideal expansion board, including
+combinations that clash on a real C64: an Action Replay's register sits
+where the *Sequential*, *Namesoft* and *Moog* interfaces have theirs, and a
+MIDI program looking for its interface would switch a real Action Replay
+into its freeze menu. Here the cartridge hears only its own code, so every
+MIDI interface works beside every freezer cartridge.
 
 ## 6. MIDI
 
@@ -239,6 +316,8 @@ with it the SID's pitch: a program made for one standard plays slightly out
 of tune on the other.
 
 **Palette** — the screen's colours.
+
+**Keyboard** — Symbolic or Positional (chapter 4).
 
 **MIDI clock** — off, or from the host's transport (chapter 6).
 
@@ -310,6 +389,8 @@ program currently has: a program's own settings are not read back.
 SID-Wizard and SID Synth, at the end of this manual) and your own. With
 **Follow program** on, loading a program picks the map made for it by its
 file name — load SID Synth, and the slots become SID Synth's controllers.
+A file started from a disk is matched by the disk's file name and by the
+program's own name on the disk.
 Your own map for a program is preferred over the built-in one.
 
 When the map changes, the slots are renamed in your DAW. Automation stays on
@@ -366,8 +447,8 @@ Which outputs your DAW offers, and how they are routed, is set in the DAW.
 ## 10. Projects
 
 Saving a project saves the whole C64: memory, every chip, the disk with what
-the program saved on it, the cartridge, the machine page's settings, the CC
-map and the slots. Reopening the project puts the program back exactly where
+the program saved on it, the cartridge (both at once, if both are in), the
+machine page's settings, the CC map and the slots. Reopening the project puts the program back exactly where
 it was, mid-note, with all your edits — nothing needs to be loaded again.
 
 To keep a disk outside the project, use **Media → Export disk**.
@@ -397,6 +478,8 @@ pace, so two renders of the same project are identical.
   **Power** to start it fresh.
 - **The window shows the ROM page.** The ROMs are missing or incomplete
   (chapter 3). The page lists what is still needed.
+- **The wrong program starts from a disk.** Load the disk again and pick the
+  file, or use **Media → Start from disk**.
 - **A program does not load from the disk.** It may use its own fast loader:
   set **Drive 8** to **True 1541** (this needs the drive's DOS ROM) and load
   it again.

@@ -390,7 +390,7 @@ int main(int argc, char** argv)
     if (const char* load = std::getenv("SIDMIDI_LOAD"))
     {
         struct Loader { bool (*load_file)(const clap_plugin_t*, const char*); };
-        auto* loader = static_cast<const Loader*>(g_plugin->get_extension(g_plugin, "de.ravetracer.sidmidi.loader/2"));
+        auto* loader = static_cast<const Loader*>(g_plugin->get_extension(g_plugin, "de.ravetracer.sidmidi.loader/3"));
         std::printf("load %s: %s\n", load, loader && loader->load_file(g_plugin, load) ? "ok" : "FAILED");
     }
 

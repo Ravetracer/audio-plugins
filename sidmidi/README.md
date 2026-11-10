@@ -10,7 +10,7 @@ cartridge arrives in the DAW as MIDI.
 It is not a SID synthesizer with a C64 skin. The instrument is the C64
 program; SidMidi is the computer it runs on.
 
-**Status: 0.4.0.** Released for Linux and Windows, CLAP and VST3. The manual
+**Status: 0.5.0.** Released for Linux and Windows, CLAP and VST3. The manual
 is `docs/manual.md` (the PDF ships in the release archive); the plan and its
 phases are in [docs/PLAN.md](docs/PLAN.md).
 
@@ -47,17 +47,28 @@ phases are in [docs/PLAN.md](docs/PLAN.md).
   (on the host mouse over the screen), with the SID's POT lines switched
   between the ports as on the real machine.
 - **Cartridges** — `.crt` (normal 8K/16K/Ultimax, Ocean, Magic Desk, Fun Play,
-  Super Games, EasyFlash, Simons' BASIC) and raw 8K/16K `.bin`.
+  Super Games, EasyFlash, Simons' BASIC) and raw 8K/16K `.bin` (shorter ROM
+  images with the CBM80 signature are padded); the freezers Action Replay
+  4.2-7.5 (also as a raw 32K `.bin`), Final Cartridge III and Final
+  Cartridge I with their RAM, banking and freeze button. Their fast loaders
+  run on the true 1541; loading one switches Drive 8 to it.
 
 ## Using it
 
 - **Load** a `.prg`, `.d64`, `.crt` or `.bin`, or drop it on the window. It
-  starts by itself (booting runs in warp, muted).
+  starts by itself (booting runs in warp, muted); a disk goes into the drive
+  and offers its files: leave it in, run the first, or pick one.
+- **Media** inserts a disk without starting anything (a cartridge and a disk
+  can be in at once), starts a file from the inserted disk, exports the disk
+  and ejects disk or cartridge.
 - Pick the **MIDI** interface the program expects (Datel is the most common,
   and the one Kerberos and TeensyROM emulate). Many programs need MIDI
   switched on in their own menu, too.
-- **Click into the screen** to type on the C64. The keys sit where a C64 has
-  them, whatever the host's layout:
+- **Click into the screen** to type on the C64. *Keyboard* on the Machine
+  page is **Symbolic** (default: a key types the character the host's layout
+  prints on it, with SHIFT pressed or held back as the C64 needs) or
+  **Positional** (a key is the C64 key in its place, whatever the layout).
+  Keys without a character, and the positional layout:
 
   | Host | C64 | Host | C64 |
   |---|---|---|---|

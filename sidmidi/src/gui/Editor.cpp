@@ -338,6 +338,11 @@ public:
         add<Choice>("SID chips", counts, [&pl] { return pl.settings().sids.count - 1; },
                     [edit](int i) { edit([i](MachineSettings& s) { s.sids.count = i + 1; }); })
             ->setTooltip("How many SIDs the machine has. Programs find the extra ones at their addresses.");
+        add<Choice>("Keyboard", std::vector<std::string>{"Symbolic", "Positional"},
+                    [&pl] { return static_cast<int>(pl.settings().keyMapping); },
+                    [edit](int i) { edit([i](MachineSettings& s) { s.keyMapping = static_cast<KeyMapping>(i); }); })
+            ->setTooltip("Symbolic: a key types the character your layout prints on it. Positional: a key is the C64 "
+                         "key in its place on a C64's keyboard.");
         add<Choice>("Resampling", std::vector<std::string>{"Sinc (best)", "Fast"},
                     [&pl] { return static_cast<int>(pl.settings().sids.resampling); },
                     [edit](int i) { edit([i](MachineSettings& s) { s.sids.resampling = static_cast<emu::SidResampling>(i); }); })
@@ -436,9 +441,12 @@ public:
         const float cw = (w - 3 * gap) / 4;
         for (int i = 0; i < 4 && k < ch.size(); ++i, ++k)
             ch[k]->setBounds({x0 + i * (cw + gap), y0, cw, rowH});
-        // Second row: the two control ports, the SID count, the resampling.
+        // Second row: the two control ports, the SID count, the keyboard;
+        // third: the resampling.
         for (int i = 0; i < 4 && k < ch.size(); ++i, ++k)
             ch[k]->setBounds({x0 + i * (cw + gap), y0 + rowH + gap, cw, rowH});
+        if (k < ch.size())
+            ch[k++]->setBounds({x0, y0 + 2 * (rowH + gap), cw, rowH});
         // The SID table.
         constexpr int nc = 9;
         const float cols[nc] = {0.07f, 0.08f, 0.13f, 0.13f, 0.11f, 0.10f, 0.11f, 0.14f, 0.13f};
@@ -449,7 +457,7 @@ public:
             cwid[c] = cols[c] * w - 6;
             acc += cols[c] * w;
         }
-        float y = y0 + 2 * (rowH + gap) + 6;
+        float y = y0 + 3 * (rowH + gap) + 6;
         for (int c = 0; c < nc && k < ch.size(); ++c, ++k)
             ch[k]->setBounds({cx[c], y, cwid[c], 16});
         y += 20;
@@ -741,7 +749,8 @@ Editor::Editor(SidMidiPlugin& plugin) : plugin_(plugin), window_(this)
     loadButton_ = add<Button>("Load", [this] { openLoadDialog(); });
     loadButton_->setTooltip("Load a .prg, .d64, .crt or .bin and start it (or drop the file on the window)");
     diskButton_ = add<Button>("Media", [this] { showDiskMenu(); });
-    diskButton_->setTooltip("Export the disk with what the program saved, eject disk or cartridge");
+    diskButton_->setTooltip("Insert a disk without starting it, start a file from the disk, export the disk "
+                            "with what the program saved, press a freezer cartridge's button, eject");
     resetButton_ = add<Button>("Reset", [this] { plugin_.resetButton(); });
     resetButton_->setTooltip("The reset button: the program restarts its machine, memory survives");
     powerButton_ = add<Button>("Power", [this] { plugin_.powerCycle(); });
@@ -919,7 +928,7 @@ void Editor::sendKeyState()
     }
 }
 
-void Editor::onRawKey(int code, bool down)
+void Editor::onRawKey(int code, bool down, unsigned keysym)
 {
     if (!keyboardToC64_ || hasOverlay())
         return;
@@ -928,8 +937,9 @@ void Editor::onRawKey(int code, bool down)
             plugin_.restoreKey();
         return;
     }
+    keymap_.mapping = plugin_.settings().keyMapping;
     if (down)
-        keymap_.press(code);
+        keymap_.press(code, keysym);
     else
         keymap_.release(code);
     sendKeyState();
@@ -959,13 +969,95 @@ void Editor::onMouseDown(const MouseEvent& e)
 
 void Editor::onFilesDropped(const std::vector<std::string>& paths)
 {
-    if (paths.empty())
-        return;
+    if (!paths.empty())
+        openMedia(paths.front());
+}
+
+namespace {
+std::string fileNameOf(const std::string& path) { return path.substr(path.find_last_of("/\\") + 1); }
+bool isD64(const std::string& path)
+{
+    const std::string n = fileNameOf(path);
+    return n.size() > 4 && (n.substr(n.size() - 4) == ".d64" || n.substr(n.size() - 4) == ".D64");
+}
+} // namespace
+
+void Editor::openMedia(const std::string& path)
+{
     std::string err;
-    if (plugin_.loadFile(paths.front(), err))
-        notify("Loaded " + paths.front().substr(paths.front().find_last_of("/\\") + 1));
-    else
+    if (isD64(path)) {
+        // In the drive first, without touching the machine; then which file.
+        if (!plugin_.attachDiskFile(path, err)) {
+            notify(err, true);
+            return;
+        }
+        notify("Disk inserted: " + fileNameOf(path));
+        showDiskPicker();
+        return;
+    }
+    if (plugin_.loadFile(path, err)) {
+        const std::string notice = plugin_.loadNotice();
+        notify(notice.empty() ? "Loaded " + fileNameOf(path) : notice);
+    } else {
         notify(err, true);
+    }
+}
+
+std::vector<MenuItem> Editor::diskStartItems()
+{
+    std::vector<MenuItem> items;
+    const auto files = plugin_.diskDirectory();
+    auto start = [this](std::string petscii, std::string label) {
+        return [this, petscii, label] {
+            std::string err;
+            if (plugin_.startFromDisk(petscii, err))
+                notify("Starting " + label);
+            else
+                notify(err, true);
+        };
+    };
+    items.push_back({"Run the first file", start("*", "the first file")});
+    std::vector<MenuItem> runnable;
+    for (const auto& f : files) {
+        if (f.type != "PRG")
+            continue;
+        const std::string label = f.display + "   (" + std::to_string(f.blocks) + (f.blocks == 1 ? " block)" : " blocks)");
+        runnable.push_back({label, start(f.petscii, "\"" + f.display + "\"")});
+    }
+    if (runnable.empty())
+        return items;
+    MenuItem sep;
+    sep.separator = true;
+    items.push_back(sep);
+    constexpr size_t kPerMenu = 20; // what fits in the window
+    if (runnable.size() <= kPerMenu) {
+        items.insert(items.end(), runnable.begin(), runnable.end());
+    } else {
+        for (size_t i = 0; i < runnable.size(); i += kPerMenu) {
+            MenuItem group;
+            const size_t end = std::min(runnable.size(), i + kPerMenu);
+            group.label = "Files " + std::to_string(i + 1) + " to " + std::to_string(end);
+            group.submenu.assign(runnable.begin() + static_cast<long>(i), runnable.begin() + static_cast<long>(end));
+            items.push_back(std::move(group));
+        }
+    }
+    return items;
+}
+
+// After a disk is loaded: leave it inserted, or start a file from it.
+void Editor::showDiskPicker()
+{
+    std::vector<MenuItem> items;
+    MenuItem title;
+    const std::string t = plugin_.diskTitle();
+    title.label = "Disk: " + (t.empty() ? std::string("(no title)") : t);
+    title.enabled = false;
+    items.push_back(title);
+    items.push_back({"Leave it in the drive", [] {}});
+    for (auto& it : diskStartItems())
+        items.push_back(std::move(it));
+    giveKeyboardToC64(false);
+    showMenu(this, std::move(items), bounds_.w * 0.5f - 130, kBarH + 30);
 }
 
 void Editor::openLoadDialog()
@@ -973,9 +1065,21 @@ void Editor::openLoadDialog()
     if (dialog_)
         return;
     dialog_ = std::make_unique<FileDialog>();
-    dialogIsExport_ = false;
+    dialogFor_ = DialogFor::Load;
     if (!dialog_->start(FileDialog::Mode::OpenFile, "Load a C64 program",
                         "C64 programs | *.prg *.PRG *.d64 *.D64 *.crt *.CRT *.bin *.BIN *.p00 *.P00")) {
+        dialog_.reset();
+        notify("No file chooser available (install zenity or kdialog); drop the file on the window instead", true);
+    }
+}
+
+void Editor::openAttachDialog()
+{
+    if (dialog_)
+        return;
+    dialog_ = std::make_unique<FileDialog>();
+    dialogFor_ = DialogFor::Attach;
+    if (!dialog_->start(FileDialog::Mode::OpenFile, "Insert a disk", "Disk images | *.d64 *.D64")) {
         dialog_.reset();
         notify("No file chooser available (install zenity or kdialog); drop the file on the window instead", true);
     }
@@ -986,7 +1090,7 @@ void Editor::openExportDialog()
     if (dialog_)
         return;
     dialog_ = std::make_unique<FileDialog>();
-    dialogIsExport_ = true;
+    dialogFor_ = DialogFor::Export;
     if (!dialog_->start(FileDialog::Mode::SaveFile, "Export the disk image", "Disk images | *.d64")) {
         dialog_.reset();
         notify("No file chooser available (install zenity or kdialog)", true);
@@ -996,12 +1100,27 @@ void Editor::openExportDialog()
 void Editor::showDiskMenu()
 {
     std::vector<MenuItem> items;
+    const bool disk = plugin_.diskPresent();
     items.push_back({"Load...", [this] { openLoadDialog(); }});
-    items.push_back({"Export disk image...", [this] { openExportDialog(); }});
+    items.push_back({"Insert disk...", [this] { openAttachDialog(); }});
+    MenuItem startMenu;
+    startMenu.label = "Start from disk";
+    startMenu.enabled = disk;
+    if (disk)
+        startMenu.submenu = diskStartItems();
+    items.push_back(std::move(startMenu));
     MenuItem sep;
     sep.separator = true;
     items.push_back(sep);
-    items.push_back({"Eject disk", [this] { plugin_.ejectDisk(); }});
+    MenuItem exportItem{"Export disk image...", [this] { openExportDialog(); }};
+    exportItem.enabled = disk;
+    items.push_back(exportItem);
+    MenuItem ejectDisk{"Eject disk", [this] { plugin_.ejectDisk(); }};
+    ejectDisk.enabled = disk;
+    items.push_back(ejectDisk);
+    MenuItem freeze{"Freeze (cartridge button)", [this] { plugin_.freezeButton(); }};
+    freeze.enabled = plugin_.cartridgeFreezable();
+    items.push_back(freeze);
     items.push_back({"Eject cartridge", [this] { plugin_.ejectCartridge(); }});
     const Rect b = diskButton_->bounds();
     showMenu(this, std::move(items), b.x, b.bottom());
@@ -1130,21 +1249,24 @@ void Editor::onTimer()
     if (dialog_) {
         std::string result;
         if (dialog_->poll(result)) {
-            const bool exporting = dialogIsExport_;
+            const DialogFor purpose = dialogFor_;
             dialog_.reset();
             if (!result.empty()) {
                 std::string err;
-                if (exporting) {
+                if (purpose == DialogFor::Attach) {
+                    if (plugin_.attachDiskFile(result, err))
+                        notify("Disk inserted: " + fileNameOf(result));
+                    else
+                        notify(err, true);
+                } else if (purpose == DialogFor::Load) {
+                    openMedia(result);
+                } else {
                     if (result.size() < 4 || (result.substr(result.size() - 4) != ".d64" && result.substr(result.size() - 4) != ".D64"))
                         result += ".d64";
                     if (plugin_.exportDisk(result, err))
-                        notify("Saved " + result.substr(result.find_last_of("/\\") + 1));
+                        notify("Saved " + fileNameOf(result));
                     else
                         notify(err, true);
-                } else if (plugin_.loadFile(result, err)) {
-                    notify("Loaded " + result.substr(result.find_last_of("/\\") + 1));
-                } else {
-                    notify(err, true);
                 }
             }
         }
