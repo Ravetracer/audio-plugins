@@ -17,6 +17,9 @@
 //     --sids N              number of SIDs (addresses $D400, $D420, $D440, ...)
 //     --sid-addr I:HEX      address of SID I (2..8)
 //     --model I:NAME        6581|6581R3|6581R4|6581R4AR|8580R5
+//     --filter-range I:V    6581 filter range of SID I, 0..1 (after --model)
+//     --old-caps I          SID I has the 2200 pF filter caps (after --model)
+//     --fast-resampling     nearest sample instead of the sinc resampler
 //     --note T:KEY:VEL:LEN  a note on channel 1 at T seconds, LEN seconds long
 //     --cc T:CC:VAL         a controller on channel 1
 //     --bytes T:HEX..       raw MIDI bytes, e.g. 4.0:903C64
@@ -224,6 +227,13 @@ int main(int argc, char** argv)
             auto& c = sidCfg.chips[std::atoi(p[0].c_str()) - 1];
             c.variant = variantByName(p[1]);
             c.tuning = emu::sidVariantTuning(c.variant);
+        } else if (a == "--filter-range") {
+            const auto p = split(next());
+            sidCfg.chips[std::atoi(p[0].c_str()) - 1].tuning.filterRange = static_cast<float>(std::atof(p[1].c_str()));
+        } else if (a == "--old-caps") {
+            sidCfg.chips[std::atoi(next().c_str()) - 1].tuning.oldCaps = true;
+        } else if (a == "--fast-resampling") {
+            sidCfg.resampling = emu::SidResampling::Fast;
         } else if (a == "--note") {
             const auto p = split(next());
             const double t = std::atof(p[0].c_str());

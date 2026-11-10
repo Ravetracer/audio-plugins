@@ -61,7 +61,7 @@ audio-plugins/
 | 3 | **Aurum** | `aurum/` | 0.3.1 | Linux, Windows | CLAP, VST3 | a clean-room algorithmic reverb (FDN, allpass ring, plate) with a per-frequency decay contour; own DSP and GUI, see *Aurum* below |
 | 4 | **Substrike** | `substrike/` | 1.1.0 | Linux, Windows | CLAP, VST3 | a layered kick drum designer for every style; standalone like Aurum, see *Substrike* below |
 | 5 | **Shapeau** | `shapeau/` | 0.4.0 | Linux, Windows | CLAP, VST3 | a multiband drawing rack: a reorderable chain of shape-driven effects per band, beat-synced or triggered by MIDI or a sidechain hit, with the audio drawn behind the shape; see *Shapeau* below |
-| 6 | **SidMidi** | `sidmidi/` | 0.3.0 | Linux, Windows | CLAP, VST3 | a Commodore 64 running the original C64 MIDI programs, played from the DAW through an emulated MIDI cartridge, with up to eight reSIDfp SIDs; GPL, standalone, see *SidMidi* below |
+| 6 | **SidMidi** | `sidmidi/` | 0.4.0 | Linux, Windows | CLAP, VST3 | a Commodore 64 running the original C64 MIDI programs, played from the DAW through an emulated MIDI cartridge, with up to eight reSIDfp SIDs; GPL, standalone, see *SidMidi* below |
 
 Naming follows the plugin, not a pattern: the CMake project, the installed
 artifact and the display name are CamelCase (`SaeureKiste`), the folder is
@@ -561,9 +561,9 @@ original C64 MIDI programs (Cynthcart, Station64, SID-Wizard, SID Synth) as an
 instrument. It is the third plugin **not built on `shared/`** (a C64 screen
 and a keyboard grab do not fit `WindowSpec`); the window backends and widgets
 are copied from Substrike. The *Rule for a shared change* does not cover it.
-`docs/PLAN.md` is the source of truth: four phases, 1-3 done (the machine, the
-plugin, the true 1541 + mouse/paddles + HerMIDI), 0.3.0, `NO-RELEASE` until it
-has been in a DAW and has its manual.
+`docs/PLAN.md` is the source of truth: four phases, all done (the machine, the
+plugin, the true 1541 + mouse/paddles + HerMIDI, polish), released at 0.4.0
+with its manual, screenshots and demos.
 
 What to know before working there:
 
@@ -572,6 +572,11 @@ What to know before working there:
   generated headers written by hand, with our patches applied and kept in
   `third_party/patches/`, listed in `third_party/README.md`). `sidmidi/LICENSE`
   says so. Do not copy SidMidi code into an MIT plugin.
+- **reSIDfp's 6581 filter range and caps are per chip** (patch 0002, 0.4.0),
+  and `Params` have defaults: upstream they were uninitialised and a chip
+  state restore applied them to the process-wide 6581 model, so opening a
+  project changed every other instance's filter. Never call anything that
+  writes `FilterModelConfig6581::getInstance()`.
 - **reSIDfp's filter dither is per chip** (patch 0001, 0.2.1): upstream
   shares one noise index across the process, which made renders differ run
   to run and let instances move each other. Offline renders are now
@@ -602,10 +607,11 @@ What to know before working there:
   the 901227-03 entry points, checked by ROM signature).
   `src/engine/Engine` runs the machine per host block and is what the plugin
   and `sidmidi-run` share.
-- **reSIDfp's 6581 filter range and old-caps settings mutate a process-wide
-  singleton** and must not be called from the plugin; only the per-chip
-  controls are exposed (filter curve, combined waveforms, DAC leakage, digi
-  offset). Per-chip range is phase 4 (a vendored patch).
+- **Release material** comes from SidMidi's own scripts (`tools/`):
+  `make-manual.sh` (own docgen; the CC map library stands in for a preset
+  library), `make-screenshots.sh` (offscreen through `sidmidi-gui-snapshot`;
+  the ROM page is shot with HOME=/home/user so no developer path shows),
+  `make-demos.sh` (Cynthcart, SID Synth, Station64 from `_dev_`).
 - **Threads:** structural changes under `machineLock_`, which the audio
   thread takes with a 1.5 ms spin; keys, joystick and GUI parameter moves
   through lock-free rings. The state is a full machine snapshot plus the

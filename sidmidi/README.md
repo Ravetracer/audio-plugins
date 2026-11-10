@@ -10,8 +10,9 @@ cartridge arrives in the DAW as MIDI.
 It is not a SID synthesizer with a C64 skin. The instrument is the C64
 program; SidMidi is the computer it runs on.
 
-**Status: 0.3.0, in development.** Not part of a release yet (see
-`NO-RELEASE`). The plan and its phases are in [docs/PLAN.md](docs/PLAN.md).
+**Status: 0.4.0.** Released for Linux and Windows, CLAP and VST3. The manual
+is `docs/manual.md` (the PDF ships in the release archive); the plan and its
+phases are in [docs/PLAN.md](docs/PLAN.md).
 
 ## What is emulated
 
@@ -26,8 +27,9 @@ program; SidMidi is the computer it runs on.
   the serial register, keyboard matrix and joysticks.
 - **Up to eight SIDs** — reSIDfp, each chip with its own address (`$D400`,
   `$D420` … `$D7E0`, `$DE00` … `$DFE0`) and its own model: 6581, 6581R3,
-  6581R4, 6581R4AR, 8580R5, with filter curve and combined-waveform strength
-  adjustable per chip.
+  6581R4, 6581R4AR, 8580R5, with filter curve, 6581 filter range, the early
+  2200 pF filter caps and combined-waveform strength adjustable per chip,
+  and a choice of sinc (default) or fast resampling.
 - **MIDI cartridges** (6850 ACIA) — Datel/Kerberos/TeensyROM, Sequential,
   Passport/Syntech, Namesoft (NMI), Maplin, Moog Song Producer. The receive
   line runs at the cable's 31250 baud.
@@ -136,7 +138,14 @@ The ROMs are never part of the build. The tests take them from `_dev_/roms/`
 Tools in `build/`: `sidmidi-run` (the machine without a host: autostart a
 program, play it a MIDI script, write a WAV and screenshots), `sidmidi-selftest`
 (the built `.clap` loaded like a host loads it, with a state round trip),
-`sidmidi-cputest` and `sidmidi-gui-host`.
+`sidmidi-cputest`, `sidmidi-gui-host` and `sidmidi-gui-snapshot` (the
+window rendered offscreen into a PNG).
+
+Release material, all run in the devbox and writing only into `build/` and
+`dist/`: `tools/make-manual.sh` (the PDF manual, with its own
+`tools/docgen.cpp`; `release.sh` calls it), `tools/make-screenshots.sh`
+(`docs/images/`, offscreen) and `tools/make-demos.sh` (MP3s into
+`dist/demos/SidMidi/`, from the programs in `_dev_`).
 
 ## Licence
 

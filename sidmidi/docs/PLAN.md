@@ -184,8 +184,8 @@ graphite tinted towards it.
    the other standalone plugins.
 3. **The 1541** -- true drive emulation with the IEC bus, drive mode switch,
    HerMIDI. Mouse and paddles.
-4. **Polish** -- per-chip 6581 filter range (a reSIDfp patch: one filter
-   model per range value, shared read-only), manual, screenshots, demos.
+4. **Polish** -- per-chip 6581 filter range (a reSIDfp patch), manual,
+   screenshots, demos. Done in 0.4.0; see its status.
 
 ## Status (0.1.0, 2026-11-09)
 
@@ -298,24 +298,52 @@ channels 1-3 and treats CC 64-127 as 0-63 (so a host's CC 121 "reset all
 controllers" switches its LP filter off); SID-Wizard stops its tune on
 CC 121.
 
+## Status (0.4.0, 2026-11-10)
+
+**Phase 4 is done, and SidMidi is released** (no `NO-RELEASE` any more).
+- **Per-chip 6581 filter range and caps** (reSIDfp patch 0002). The range
+  and the 2200 pF caps only change two numbers of the shared 6581 model
+  (the integrators' current factor and the VCR multiplier), so each
+  `Integrator6581` carries its own pair and the tables stay shared -- not
+  one model per range value, as planned. The default (19/39 = reSIDfp's
+  uCox of 20e-6) renders bit-identically to 0.3.0. On the machine page per
+  chip as Range and Caps; in the settings text as two more fields of the
+  `sidN` line. After a snapshot restore SidBank applies the settings' range
+  and caps again (the chip state carries its own); not the curve, whose
+  re-application recomputes a cutoff voltage the state restored exactly.
+- **A bug the patch also fixes**: reSIDfp's `Params` were never
+  initialised, and restoring a chip state applied their `filterRange6581`
+  and `old6581caps` to the shared model -- so opening a project changed
+  the 6581 filters of every SidMidi in the process. The round-trip test
+  could not see it (both instances shared the change); it now records A's
+  phrase before B loads, and a C with another range and a D with the
+  original state prove the chips independent (0.262 max difference before
+  the patch, 0 after).
+- **Resampling: Sinc (default) or Fast** (reSIDfp DECIMATE), a machine
+  setting. Measured with eight playing SIDs from BASIC: 37.8 % vs 33.7 %
+  of a core at 48 kHz, 41 % vs 34 % at 96 kHz, no difference at 192 kHz;
+  one SID's clocking is most of its cost, so Fast saves a tenth to a fifth.
+- **Manual** (`docs/manual.md`, `tools/make-manual.sh` with its own
+  `tools/docgen.cpp`: the parameter table from `plugin/Params.cpp`, the CC
+  map library from `ccmaps/` in place of a preset library), **screenshots**
+  (`tools/make-screenshots.sh` on `sidmidi-gui-snapshot`, the window
+  rendered offscreen; the ROM page shot runs with HOME=/home/user so no
+  developer path appears), **demos** (`tools/make-demos.sh`: Cynthcart, SID
+  Synth and Station64 playing a phrase, to dist/demos/SidMidi).
+- **HerMIDI's firmware stays in `third_party/hermidi`** (the user's
+  decision, 2026-11-10).
+
 ## Next session
 
-Where 0.3.0 was left (2026-11-10):
-- **The user tests it in a DAW** (VST3 on this machine, CLAP on the other).
-  Whatever comes back goes first. New in 0.3.0 and untested in a host:
-  whether the host renames the CC slots live when the map changes (CLAP
-  rescan INFO; VST3 kParamTitlesChanged through the wrapper). Untested so far: keyboard focus in the
-  host's window, the VST3 wrapper's MIDI (CC, pitch bend, SysEx), MIDI out,
-  resizing, mouse and paddles from the host mouse, the file chooser.
+Where 0.4.0 was left (2026-11-10):
+- **Feedback from DAW use** goes first. Untested in a host: whether it
+  renames the CC slots live (CLAP rescan INFO; VST3 kParamTitlesChanged
+  through the wrapper), keyboard focus in the host's window, the VST3
+  wrapper's MIDI (CC, pitch bend, SysEx), MIDI out, resizing, mouse and
+  paddles from the host mouse, the file chooser.
 - The ROMs are installed for the user's own tests in
   `~/.local/share/SidMidi/ROMs` (copied from `_dev_/roms`, private use).
 - Maybe: make the virtual drive allocation-free (fixed buffers for its
   channels, names and directory) so a program loading a file mid-song
   cannot allocate in the audio thread either.
-- The user has not yet confirmed that HerMIDI's firmware may stay in
-  `third_party/hermidi` (no licence of its own; SID-Wizard declares itself
-  WTF-licensed).
-- Phase 4: per-chip 6581 filter range (a second reSIDfp patch), the manual
-  (`docs/manual.md` and SidMidi's own make-manual, the ROM instructions in
-  it), screenshots, demos; then drop `NO-RELEASE`.
-- Maybe: a cheaper resampling option for many active SIDs.
+- Maybe: a SID-Wizard demo (needs its MIDI set up in its menu first).

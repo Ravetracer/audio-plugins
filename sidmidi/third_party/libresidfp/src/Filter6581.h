@@ -330,6 +330,10 @@ private:
 
     const uint16_t* f0_dac;
 
+    // SidMidi: this chip's filter range and caps.
+    double range = 19.0 / 39.0;
+    bool oldCaps = false;
+
 protected:
     /**
      * Set filter cutoff frequency.
@@ -368,22 +372,31 @@ public:
     /**
      * Set filter offset and range based on single parameter.
      *
+     * SidMidi: for this chip only. Upstream changed the model shared by every
+     * 6581 in the process.
+     *
      * @param adjustment 0 .. 1, where 0 sets center frequency low ("dark"), 1 sets it high ("bright").
-     *                   This also affects the range. Default is 0.5
+     *                   This also affects the range. 19/39 is the model's default.
      */
-    static void setFilterRange(double adjustment)
+    void setFilterRange(double adjustment)
     {
-        FilterModelConfig6581::getInstance()->setFilterRange(adjustment);
+        range = adjustment;
+        hpIntegrator.setRange(range, oldCaps);
+        bpIntegrator.setRange(range, oldCaps);
     }
 
     /**
      * Enable/disable old caps for 6581 model.
      *
+     * SidMidi: for this chip only, as setFilterRange.
+     *
      * @param enable true to enable old 2200pF caps, false to use new 470pF caps.
      */
-    static void enableOldCaps(bool enable)
+    void enableOldCaps(bool enable)
     {
-        FilterModelConfig6581::getInstance()->enableOldCaps(enable);
+        oldCaps = enable;
+        hpIntegrator.setRange(range, oldCaps);
+        bpIntegrator.setRange(range, oldCaps);
     }
 };
 

@@ -32,14 +32,17 @@ namespace reSIDfp
 
 class SID;
 
+// SidMidi: every field has a value. They were left uninitialised by
+// `new Params`, and State::restoreState applies filterRange6581 and
+// old6581caps, so restoring a chip applied whatever the heap held.
 struct Params
 {
-    SamplingMethod method;
-    double samplingFrequency;
-    double filterCurve6581;
-    double filterRange6581;
-    double filterCurve8580;
-    bool   old6581caps;
+    SamplingMethod method = RESAMPLE;
+    double samplingFrequency = 48000.0;
+    double filterCurve6581 = 0.5;
+    double filterRange6581 = 19.0 / 39.0; // uCox = 20e-6, the model's own default
+    double filterCurve8580 = 0.5;
+    bool   old6581caps = false;
 };
 
 struct State

@@ -21,3 +21,14 @@ means unpacking the new release and applying them again.
   output. Now the table builders each use their own sequence, the
   integrators' constants use a fixed draw, and each `Filter` keeps its own
   index, which `State` saves and restores.
+- `patches/0002-residfp-per-chip-6581-range.patch` -- the 6581 filter range
+  and the old 2200 pF caps are per chip. Upstream both changed the shared
+  model (its uCox), so setting them on one chip changed every 6581 in the
+  process. They only affect two numbers (the integrators' current factor
+  and the VCR multiplier), so each `Integrator6581` now carries its own pair
+  and the big tables stay shared. Also: `Params` had no initial values, and
+  `State::restoreState` applies its `filterRange6581` and `old6581caps`, so
+  restoring a chip applied whatever the heap held -- to the shared model,
+  which changed the filters of every other instance when a project loaded.
+  The fields now have defaults (the range's is 19/39, reSIDfp's own uCox of
+  20e-6, so the default sound is bit-identical to before).

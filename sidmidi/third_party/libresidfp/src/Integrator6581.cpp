@@ -46,7 +46,7 @@ int32_t Integrator6581::solve(int32_t vi) const
     const uint32_t Vgdt_2 = Vgdt * Vgdt;
 
     // "Snake" current, scaled by (1/m)*2^13*m*2^16*m*2^16*2^-15 = m*2^30
-    const int32_t n_I_snake = fmc.getNormalizedCurrentFactor<13>(wlSnake) * (static_cast<int32_t>(Vgst_2 - Vgdt_2) >> 15);
+    const int32_t n_I_snake = nSnake * (static_cast<int32_t>(Vgst_2 - Vgdt_2) >> 15);
 
     // VCR gate voltage.       // Scaled by m*2^16
     // Vg = Vddt - sqrt(((Vddt - Vw)^2 + Vgdt^2)/2)
@@ -65,8 +65,8 @@ int32_t Integrator6581::solve(int32_t vi) const
     assert((kVgt_Vd >= 0) && (kVgt_Vd <= UINT16_MAX));
 
     // VCR current, scaled by m*2^15*2^15 = m*2^30
-    const uint32_t If = static_cast<uint32_t>(fmc.getVcr_n_Ids_term(kVgt_Vs)) << 15;
-    const uint32_t Ir = static_cast<uint32_t>(fmc.getVcr_n_Ids_term(kVgt_Vd)) << 15;
+    const uint32_t If = static_cast<uint32_t>(fmc.getVcr_n_Ids_term(kVgt_Vs, vcrMult)) << 15;
+    const uint32_t Ir = static_cast<uint32_t>(fmc.getVcr_n_Ids_term(kVgt_Vd, vcrMult)) << 15;
 #ifdef SLOPE_FACTOR
     const double iVcr = static_cast<double>(If - Ir);
     const int32_t n_I_vcr = static_cast<int32_t>(iVcr * n);

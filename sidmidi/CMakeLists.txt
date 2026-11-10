@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.21)
-project(SidMidi VERSION 0.3.0 LANGUAGES C CXX)
+project(SidMidi VERSION 0.4.0 LANGUAGES C CXX)
 
 # SidMidi builds as a CLAP and, through the clap-wrapper, as a VST3, for Linux
 # and Windows (cross-compiled with mingw-w64). Like Aurum and Substrike it does
@@ -46,7 +46,7 @@ find_package(Threads REQUIRED)
 
 # ---------------------------------------------------------------- reSIDfp
 #
-# libresidfp 1.2.3, vendored with one patch (third_party/patches/, see
+# libresidfp 1.2.3, vendored with our patches (third_party/patches/, see
 # third_party/README.md). Its two generated headers (siddefs-fp.h,
 # residfp/sidversion.h) are written out in the tree.
 file(GLOB RESIDFP_SOURCES
@@ -126,6 +126,10 @@ if (SIDMIDI_BUILD_TOOLS)
 
     if (SIDMIDI_BUILD_PLUGIN AND NOT CMAKE_SYSTEM_NAME STREQUAL "Windows")
         # The built .clap loaded as a host loads it: program, notes, state round trip.
+        # The window rendered offscreen, for the manual's screenshots.
+        add_executable(sidmidi-gui-snapshot tools/gui-snapshot.cpp)
+        target_link_libraries(sidmidi-gui-snapshot PRIVATE sidmidi-impl)
+
         add_executable(sidmidi-selftest tools/selftest.cpp)
         target_include_directories(sidmidi-selftest PRIVATE src)
         target_link_libraries(sidmidi-selftest PRIVATE clap ${CMAKE_DL_LIBS})

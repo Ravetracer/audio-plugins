@@ -225,14 +225,7 @@ SidMidiPlugin::SidMidiPlugin(const clap_host_t* host) : host_(host)
     plugin_.get_extension = Glue::getExtension;
     plugin_.on_main_thread = Glue::onMainThread;
 
-    params_.push_back({pid::Master, "Output", "Volume", -60.0, 12.0, 0.0});
-    for (int i = 0; i < 8; ++i)
-        params_.push_back({pid::Level + i, "SIDs", "SID " + std::to_string(i + 1) + " Level", -60.0, 12.0, 0.0});
-    for (int i = 0; i < 8; ++i)
-        params_.push_back({pid::Pan + i, "SIDs", "SID " + std::to_string(i + 1) + " Pan", -1.0, 1.0,
-                           static_cast<double>(engine_.mix[static_cast<size_t>(i)].pan)});
-    for (int i = 0; i < kCcSlots; ++i)
-        params_.push_back({pid::CcSlot + static_cast<uint32_t>(i), "CC", ccMap_.slotName(i), 0.0, 127.0, 0.0, true});
+    params_ = parameterTable();
     for (auto& r : ccRoute_)
         r.store(-1);
     ccSent_.fill(-1);
@@ -473,19 +466,10 @@ bool SidMidiPlugin::paramsToText(clap_id id, double v, char* display, uint32_t s
                       ccMap_.valueText(static_cast<int>(id - pid::CcSlot), static_cast<int>(std::lround(v))).c_str());
         return true;
     }
-    if (id >= pid::Pan && id < pid::Pan + 8) {
-        if (std::fabs(v) < 0.005)
-            std::snprintf(display, size, "C");
-        else
-            std::snprintf(display, size, "%d%% %s", static_cast<int>(std::lround(std::fabs(v) * 100)), v < 0 ? "L" : "R");
-        return true;
-    }
-    if (paramIndex(id) < 0)
+    std::string text;
+    if (!paramValueText(id, v, text))
         return false;
-    if (v <= -59.9)
-        std::snprintf(display, size, "-inf dB");
-    else
-        std::snprintf(display, size, "%+.1f dB", v);
+    std::snprintf(display, size, "%s", text.c_str());
     return true;
 }
 

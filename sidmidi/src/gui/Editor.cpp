@@ -338,8 +338,12 @@ public:
         add<Choice>("SID chips", counts, [&pl] { return pl.settings().sids.count - 1; },
                     [edit](int i) { edit([i](MachineSettings& s) { s.sids.count = i + 1; }); })
             ->setTooltip("How many SIDs the machine has. Programs find the extra ones at their addresses.");
+        add<Choice>("Resampling", std::vector<std::string>{"Sinc (best)", "Fast"},
+                    [&pl] { return static_cast<int>(pl.settings().sids.resampling); },
+                    [edit](int i) { edit([i](MachineSettings& s) { s.sids.resampling = static_cast<emu::SidResampling>(i); }); })
+            ->setTooltip("Sinc: clean, the reference. Fast: much cheaper with many SIDs, but it aliases (harsh highs).");
 
-        for (const char* h : {"", "Address", "Model", "Filter", "Combined", "Level", "Pan"})
+        for (const char* h : {"", "Address", "Model", "Curve", "Range", "Caps", "Combined", "Level", "Pan"})
             add<Label>(h, 10.0f, Align::Left, theme::textFaint);
 
         std::vector<std::string> models;
@@ -371,6 +375,25 @@ public:
                             return std::string(b);
                         })
                 ->setTooltip("Filter curve: how dark (left) or bright (right) this chip's filter is. 6581s vary a lot.");
+            add<Slider>("", 0.0, 1.0, 19.0 / 39.0,
+                        [&pl, ci] { return static_cast<double>(pl.settings().sids.chips[ci].tuning.filterRange); },
+                        [edit, ci](double v) {
+                            edit([v, ci](MachineSettings& s) { s.sids.chips[ci].tuning.filterRange = static_cast<float>(v); });
+                        },
+                        [&pl, ci](double v) {
+                            if (emu::sidVariantIs8580(pl.settings().sids.chips[ci].variant))
+                                return std::string("-");
+                            char b[16];
+                            std::snprintf(b, sizeof(b), "%.0f%%", v * 100);
+                            return std::string(b);
+                        })
+                ->setTooltip("6581 only: the filter's range and offset, dark (left) to bright (right). "
+                             "Double click for the default.");
+            add<Choice>("", std::vector<std::string>{"470 pF", "2200 pF"},
+                        [&pl, ci] { return pl.settings().sids.chips[ci].tuning.oldCaps ? 1 : 0; },
+                        [edit, ci](int v) { edit([v, ci](MachineSettings& s) { s.sids.chips[ci].tuning.oldCaps = v == 1; }); })
+                ->setTooltip("6581 only: the filter capacitors. 2200 pF were fitted to early boards (ASSY 326298): "
+                             "a much darker filter.");
             add<Choice>("", std::vector<std::string>{"Average", "Weak", "Strong"},
                         [&pl, ci] { return static_cast<int>(pl.settings().sids.chips[ci].tuning.combined); },
                         [edit, ci](int v) {
@@ -393,7 +416,7 @@ public:
                                    [&pl](double v) { pl.guiSetParam(pid::Master, v); }, dbText);
         master->onBegin = [&pl] { pl.guiBeginParam(pid::Master); };
         master->onEnd = [&pl] { pl.guiEndParam(pid::Master); };
-        add<Label>("Model sets a starting point for Filter and Combined; tune them by ear to your chip.", 10.0f,
+        add<Label>("Model sets a starting point for Curve and Combined; tune Curve, Range and Caps by ear to your chip.", 10.0f,
                    Align::Left, theme::textFaint);
         layout();
         if (root())
@@ -413,25 +436,26 @@ public:
         const float cw = (w - 3 * gap) / 4;
         for (int i = 0; i < 4 && k < ch.size(); ++i, ++k)
             ch[k]->setBounds({x0 + i * (cw + gap), y0, cw, rowH});
-        // Second row: the two control ports, the SID count.
-        for (int i = 0; i < 3 && k < ch.size(); ++i, ++k)
+        // Second row: the two control ports, the SID count, the resampling.
+        for (int i = 0; i < 4 && k < ch.size(); ++i, ++k)
             ch[k]->setBounds({x0 + i * (cw + gap), y0 + rowH + gap, cw, rowH});
         // The SID table.
-        const float cols[7] = {0.08f, 0.10f, 0.14f, 0.20f, 0.14f, 0.18f, 0.16f};
-        float cx[7], cwid[7];
+        constexpr int nc = 9;
+        const float cols[nc] = {0.07f, 0.08f, 0.13f, 0.13f, 0.11f, 0.10f, 0.11f, 0.14f, 0.13f};
+        float cx[nc], cwid[nc];
         float acc = x0;
-        for (int c = 0; c < 7; ++c) {
+        for (int c = 0; c < nc; ++c) {
             cx[c] = acc;
             cwid[c] = cols[c] * w - 6;
             acc += cols[c] * w;
         }
         float y = y0 + 2 * (rowH + gap) + 6;
-        for (int c = 0; c < 7 && k < ch.size(); ++c, ++k)
+        for (int c = 0; c < nc && k < ch.size(); ++c, ++k)
             ch[k]->setBounds({cx[c], y, cwid[c], 16});
         y += 20;
         const float sidRow = std::min(rowH, std::max(18.0f, (bounds_.bottom() - y - 80) / std::max(1, builtCount_) - 4));
         for (int i = 0; i < builtCount_; ++i) {
-            for (int c = 0; c < 7 && k < ch.size(); ++c, ++k)
+            for (int c = 0; c < nc && k < ch.size(); ++c, ++k)
                 ch[k]->setBounds({cx[c], y, cwid[c], sidRow});
             y += sidRow + 4;
         }
@@ -986,6 +1010,11 @@ void Editor::showDiskMenu()
 void Editor::toggleMachinePage()
 {
     showPage(page_->isVisible() ? nullptr : page_);
+}
+
+void Editor::showPage(Page p)
+{
+    showPage(p == Page::Machine ? static_cast<Widget*>(page_) : p == Page::Cc ? static_cast<Widget*>(ccPage_) : nullptr);
 }
 
 void Editor::toggleCcPage()

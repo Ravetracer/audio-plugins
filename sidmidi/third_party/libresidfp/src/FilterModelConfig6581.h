@@ -83,16 +83,12 @@ private:
     double vcr_n_Ids_term[1 << 16];
     //@}
 
-    double vcr_mult;
-    bool m_oldCaps;
 
     // Voice DC offset LUT
     double voiceDC[256];
 
 private:
     double getDacZero(double adjustment) const { return dac_zero + 2. * adjustment - 1.; }
-
-    void updateParams();
 
     FilterModelConfig6581();
     ~FilterModelConfig6581() = default;
@@ -110,9 +106,17 @@ protected:
 public:
     static FilterModelConfig6581* getInstance();
 
-    void setFilterRange(double adjustment);
-
-    void enableOldCaps(bool enable);
+    /**
+     * SidMidi: the two values the filter range and the old caps change,
+     * for one chip. The model itself is shared by every chip in the process
+     * and is no longer changed by them; each filter keeps its own pair.
+     *
+     * @param adjustment 0 .. 1, see Filter6581::setFilterRange
+     * @param oldCaps the 2200pF caps of ASSY 326298
+     * @param currFactorCoeff the integrators' current factor coefficient
+     * @param vcrMult the multiplier of the VCR current table
+     */
+    void rangeParams(double adjustment, bool oldCaps, double& currFactorCoeff, double& vcrMult) const;
 
     /**
      * Construct an 11 bit cutoff frequency DAC output voltage table.
@@ -127,9 +131,9 @@ public:
     inline double getWL_snake() const { return WL_snake; }
 
     inline uint16_t getVcr_nVg(int i) const { return vcr_nVg[i]; }
-    inline uint16_t getVcr_n_Ids_term(int i) const
+    inline uint16_t getVcr_n_Ids_term(int i, double mult) const
     {
-        return to_uint16(vcr_n_Ids_term[i] * vcr_mult);
+        return to_uint16(vcr_n_Ids_term[i] * mult);
     }
     // only used if SLOPE_FACTOR is defined
     static inline constexpr double getUt() { return Ut; }

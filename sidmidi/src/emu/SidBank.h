@@ -44,7 +44,17 @@ struct SidTuning
     float dacLeakage = 1.0f;   // 0 none .. 1 standard
     float digiOffset = 1.0f;   // 6581 only: 0 average digis .. 1 loud
     bool filterEnabled = true;
+    // 6581 only, per chip (vendored reSIDfp patch 0002): the filter's range,
+    // 0 dark .. 1 bright (19/39 is reSIDfp's own default), and the 2200 pF
+    // filter caps of the early ASSY 326298 boards.
+    float filterRange = 19.0f / 39.0f;
+    bool oldCaps = false;
 };
+
+// How each chip's output gets from the SID clock to the host rate. Sinc is
+// reSIDfp's two-pass sinc resampler, the reference; Fast takes the nearest
+// sample (no anti-aliasing), much cheaper with many SIDs, and it aliases.
+enum class SidResampling : uint8_t { Sinc = 0, Fast };
 
 SidTuning sidVariantTuning(SidVariant v);
 
@@ -58,6 +68,7 @@ struct SidChipConfig
 struct SidBankConfig
 {
     int count = 1;
+    SidResampling resampling = SidResampling::Sinc;
     std::array<SidChipConfig, 8> chips{};
     // $D400, $D420, $D440 ... -- SID-Wizard's defaults for its 2/3/4SID builds.
     SidBankConfig()

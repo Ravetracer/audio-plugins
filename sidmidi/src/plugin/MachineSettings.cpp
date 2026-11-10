@@ -23,12 +23,14 @@ std::string MachineSettings::toText() const
     o << "screen_scale = " << screenScale << "\n";
     o << "cc_follow = " << (ccFollowProgram ? 1 : 0) << "\n";
     o << "sid_count = " << sids.count << "\n";
+    o << "resampling = " << static_cast<int>(sids.resampling) << "\n";
     for (int i = 0; i < 8; ++i) {
         const auto& c = sids.chips[static_cast<size_t>(i)];
         char buf[256];
-        std::snprintf(buf, sizeof(buf), "sid%d = %04X %d %.4f %d %.4f %.4f %d\n", i + 1, c.address,
+        std::snprintf(buf, sizeof(buf), "sid%d = %04X %d %.4f %d %.4f %.4f %d %.6f %d\n", i + 1, c.address,
                       static_cast<int>(c.variant), c.tuning.filterCurve, static_cast<int>(c.tuning.combined),
-                      c.tuning.dacLeakage, c.tuning.digiOffset, c.tuning.filterEnabled ? 1 : 0);
+                      c.tuning.dacLeakage, c.tuning.digiOffset, c.tuning.filterEnabled ? 1 : 0,
+                      c.tuning.filterRange, c.tuning.oldCaps ? 1 : 0);
         o << buf;
     }
     return o.str();
@@ -78,13 +80,15 @@ void MachineSettings::fromText(const std::string& text)
             ccFollowProgram = iv != 0;
         else if (key == "sid_count")
             sids.count = std::clamp(iv, 1, 8);
+        else if (key == "resampling")
+            sids.resampling = iv == 1 ? emu::SidResampling::Fast : emu::SidResampling::Sinc;
         else if (key.size() == 4 && key.rfind("sid", 0) == 0 && key[3] >= '1' && key[3] <= '8') {
             auto& c = sids.chips[static_cast<size_t>(key[3] - '1')];
             unsigned addr = 0xd400;
-            int variant = 0, combined = 0, filter = 1;
-            float curve = 0.5f, leak = 1.0f, offset = 1.0f;
-            if (std::sscanf(val.c_str(), "%x %d %f %d %f %f %d", &addr, &variant, &curve, &combined, &leak, &offset,
-                            &filter) >= 2) {
+            int variant = 0, combined = 0, filter = 1, caps = 0;
+            float curve = 0.5f, leak = 1.0f, offset = 1.0f, range = 19.0f / 39.0f;
+            if (std::sscanf(val.c_str(), "%x %d %f %d %f %f %d %f %d", &addr, &variant, &curve, &combined, &leak,
+                            &offset, &filter, &range, &caps) >= 2) {
                 c.address = static_cast<uint16_t>(addr & 0xffe0);
                 c.variant = static_cast<emu::SidVariant>(std::clamp(variant, 0, static_cast<int>(emu::SidVariant::Count) - 1));
                 c.tuning.filterCurve = std::clamp(curve, 0.0f, 1.0f);
@@ -92,6 +96,8 @@ void MachineSettings::fromText(const std::string& text)
                 c.tuning.dacLeakage = std::clamp(leak, 0.0f, 1.0f);
                 c.tuning.digiOffset = std::clamp(offset, 0.0f, 1.0f);
                 c.tuning.filterEnabled = filter != 0;
+                c.tuning.filterRange = std::clamp(range, 0.0f, 1.0f);
+                c.tuning.oldCaps = caps != 0;
             }
         }
     }

@@ -353,6 +353,12 @@ int main(int argc, char** argv)
     clap_ostream_t os{&buf, Buffer::write};
     check(state && state->save(a.plugin, &os), "state saves");
     std::printf("      state: %zu bytes\n", buf.data.size());
+    // A plays on first, then B loads the state: loading a project must not
+    // change how any other instance sounds (reSIDfp's 6581 model is shared
+    // by every chip in the process).
+    const std::vector<std::pair<int, std::vector<uint8_t>>> phrase = {
+        {2, {0x90, 64, 110}}, {30, {0x80, 64, 0}}, {35, {0x90, 67, 90}}, {70, {0x80, 67, 0}}};
+    const auto outA = a.run(100, phrase);
     Instance b;
     b.create(factory);
     clap_istream_t is{&buf, Buffer::read};
@@ -369,9 +375,6 @@ int main(int argc, char** argv)
         check(named && paramsB->get_value(b.plugin, 1000, &v) && v == 100.0,
               "the CC map and the slot values travel with the state");
     }
-    const std::vector<std::pair<int, std::vector<uint8_t>>> phrase = {
-        {2, {0x90, 64, 110}}, {30, {0x80, 64, 0}}, {35, {0x90, 67, 90}}, {70, {0x80, 67, 0}}};
-    const auto outA = a.run(100, phrase);
     const auto outB = b.run(100, phrase);
     double maxDiff = 0;
     for (size_t i = 0; i < outA.size(); ++i)
@@ -388,6 +391,41 @@ int main(int argc, char** argv)
     // process one after the other, so this also proves that one instance's
     // chips do not move the other's.
     check(maxDiff == 0.0 && rmsDb(outB) > -50.0, "the restored machine plays on exactly like the original");
+
+    // The 6581 filter range is per chip: C gets SID 1 dark (in the
+    // settings, "range" is the eighth field of the sid1 line), D the
+    // original state again. C sounds different; D still plays exactly like
+    // A, with C in the same process.
+    {
+        Buffer darkBuf = buf, origBuf = buf;
+        darkBuf.at = origBuf.at = 0;
+        const std::string from = " 0.487179 ", to = " 0.100000 ";
+        auto it = std::search(darkBuf.data.begin(), darkBuf.data.end(), from.begin(), from.end());
+        check(it != darkBuf.data.end(), "the settings carry SID 1's filter range");
+        if (it != darkBuf.data.end())
+            std::copy(to.begin(), to.end(), it);
+        Instance c, d;
+        c.create(factory);
+        clap_istream_t isC{&darkBuf, Buffer::read};
+        auto* stC = static_cast<const clap_plugin_state_t*>(c.plugin->get_extension(c.plugin, CLAP_EXT_STATE));
+        check(stC && stC->load(c.plugin, &isC), "a state with another filter range loads");
+        d.create(factory);
+        clap_istream_t isD{&origBuf, Buffer::read};
+        auto* stD = static_cast<const clap_plugin_state_t*>(d.plugin->get_extension(d.plugin, CLAP_EXT_STATE));
+        check(stD && stD->load(d.plugin, &isD), "the original state loads once more");
+        const auto outC = c.run(100, phrase);
+        const auto outD = d.run(100, phrase);
+        double diffC = 0, diffD = 0;
+        for (size_t i = 0; i < outA.size(); ++i) {
+            diffC = std::max(diffC, static_cast<double>(std::fabs(outA[i] - outC[i])));
+            diffD = std::max(diffD, static_cast<double>(std::fabs(outA[i] - outD[i])));
+        }
+        std::printf("      SID 1 range 0.1: max difference %.3g; the original beside it: %.3g\n", diffC, diffD);
+        check(diffC > 1e-3, "the filter range changes the sound");
+        check(diffD == 0.0, "another instance's filter range leaves this one untouched");
+        c.destroy();
+        d.destroy();
+    }
 
     a.destroy();
     b.destroy();

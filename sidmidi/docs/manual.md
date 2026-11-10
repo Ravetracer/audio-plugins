@@ -1,0 +1,435 @@
+---
+accent: #7C70DA
+tagline: A Commodore 64 that plays its MIDI programs from your DAW
+subtitle: CLAP and VST3 instrument for Linux and Windows
+---
+
+# {{PLUGIN}} — manual
+
+*The original C64 MIDI programs as an instrument: a complete Commodore 64
+with up to eight SID chips, a MIDI cartridge in its expansion port, and
+your DAW at the other end of the cable. Linux and Windows, CLAP and VST3.*
+
+Version {{VERSION}}
+
+---
+
+[TOC]
+
+## 1. What it is
+
+![SidMidi running Cynthcart. The buttons at the top load programs and set up the machine; the C64's screen fills the window; the bottom line shows what is loaded and the drive and MIDI lights.](images/window.png)
+
+In the 1980s, musicians plugged a MIDI cartridge into a Commodore 64 and
+turned it into a synthesizer with programs written for the purpose. SidMidi
+is that setup inside your DAW. It is not a SID synthesizer of its own: it is
+a whole C64 — processor, video chip, timers, disk drive and SID sound chips —
+and it runs the **original C64 programs**, unchanged. You play them from
+your DAW's notes, and they answer exactly as they did on the real machine,
+with their own screens, menus, patches and quirks.
+
+What you get:
+
+- A C64, PAL or NTSC, with a **MIDI cartridge** of the common kinds (Datel,
+  Sequential, Passport, Namesoft, Maplin, Moog Song Producer) or the
+  **HerMIDI** interface on the serial port.
+- **Up to eight SID chips**, each a 6581 or 8580 of a chosen revision, with
+  its own filter character, level and pan, and its own output.
+- A **disk drive** that loads instantly, or a complete emulated **1541** for
+  programs with their own fast loaders. Whatever a program saves goes into
+  the disk, which is kept in your project.
+- The C64's **keyboard** on your computer keyboard, a **joystick**, and a
+  **mouse** or **paddles** on your mouse.
+- **CC maps**: the controllers a program listens to, as named, automatable
+  parameters in your DAW (chapter 8).
+- Your project keeps the **whole machine**: reopen it and the program is
+  back exactly where you left it, with every patch you edited on the C64.
+
+SidMidi contains no Commodore software. You need the C64's ROMs (chapter 3)
+and the programs you want to play (chapter 5).
+
+## 2. Installing
+
+Copy the plugin into your host's plugin folder — the `SidMidi` folder with
+the `.clap` inside, or the `SidMidi.vst3` bundle:
+
+| | CLAP | VST3 |
+|---|---|---|
+| Linux | `~/.clap/` | `~/.vst3/` |
+| Windows | `C:\Program Files\Common Files\CLAP\` | `C:\Program Files\Common Files\VST3\` |
+
+Then let the host rescan its plugins. SidMidi is an instrument: put it on an
+instrument track and play it with notes. The CLAP and the VST3 are the same
+plugin; use whichever your host prefers. A `.vst3` is a folder — copy it
+whole.
+
+SidMidi needs a processor with **AVX2 and FMA**: any Intel Core from the 4th
+generation (2013) on and any AMD Ryzen. On processors without them the host
+refuses to load the plugin.
+
+SidMidi keeps its own files in `~/.local/share/SidMidi` on Linux and in
+`%APPDATA%\SidMidi` on Windows: the ROM folder and your CC maps.
+
+## 3. The ROMs
+
+![Without the ROMs, the window says what is needed and where it goes.](images/roms.png)
+
+A C64 cannot start without its operating system, which lives in three ROM
+chips: the **KERNAL**, **BASIC** and the **character set**. The emulated
+1541 drive needs a fourth, its **DOS**. These ROMs are copyrighted and do
+not come with SidMidi.
+
+The first time it runs, SidMidi creates its **ROM folder** and puts a short
+README into it:
+
+- Linux: `~/.local/share/SidMidi/ROMs`
+- Windows: `%APPDATA%\SidMidi\ROMs`
+
+Copy the ROM files into that folder. The **VICE** emulator includes them in
+its data folders `C64` and `DRIVES` (`kernal-901227-03.bin`,
+`basic-901226-01.bin`, `chargen-901225-01.bin`, and
+`dos1541ii-251968-03.bin` for the drive); you can also read them out of
+your own C64. The names do not matter: SidMidi recognises each file by its
+content, so whatever the files are called, and whether they sit in the
+folder itself or in subfolders named `C64` and `DRIVES`, they are found.
+
+The window shows what is still missing and has a button that opens the
+folder. SidMidi looks again every two seconds; once the KERNAL, BASIC and
+character set are there, the C64 starts by itself. The drive's DOS is only
+needed for the **True 1541** drive mode (chapter 7).
+
+A project saved on one computer and opened on another without the ROMs waits
+for them: the machine is kept as it was saved and starts as soon as the ROMs
+are in place.
+
+## 4. The window
+
+**Load** opens a file chooser for a program: a `.prg` (a C64 program file),
+a `.d64` (a disk image), a `.crt` (a cartridge image) or a `.bin` (a raw 8K
+or 16K cartridge). You can also **drop** a file onto the window. The program
+starts by itself: a `.prg` is loaded and run, a disk's first program is
+loaded and run, a cartridge starts as the C64 is switched on. Starting runs
+in warp, muted, so you do not wait for the C64.
+
+**Media** exports the disk — with everything the program saved on it — as a
+`.d64` file, and ejects the disk or the cartridge.
+
+**Reset** presses the C64's reset button: the program restarts its machine,
+the memory survives. **Power** switches the C64 off and on: the attached
+program starts again from scratch.
+
+**Warp** runs the machine as fast as it can, muted. Some programs unpack
+themselves for a while after loading; Station64, for example, needs about
+twelve seconds.
+
+**MIDI** is the interface in the C64's expansion port (chapter 6). **Joy**
+puts a joystick on your keyboard, **Port** chooses the control port it is
+plugged into.
+
+**CC** opens the CC map page (chapter 8), **Machine** the machine page
+(chapter 7). Click the button again to return to the screen.
+
+The line at the bottom shows what is loaded, messages, and four lights:
+**Drive** (the disk is being read or written), **In** and **Out** (MIDI
+going to and coming from the C64), and **Warp**.
+
+The window can be resized; the screen keeps its proportions.
+
+### Typing on the C64
+
+**Click into the screen** to give the C64 your keyboard. From then on, keys
+go to the C64 until you click outside the screen or the window loses focus.
+The keys sit where a C64 has them, whatever your keyboard's layout:
+
+| Your key | C64 | Your key | C64 |
+|---|---|---|---|
+| Esc | RUN/STOP | Tab | CTRL |
+| Left Ctrl | C= | ` (grave) | ← |
+| - = | + - | [ ] | @ * |
+| ; ' | : ; | \ or # | = |
+| Home | CLR/HOME | Insert | INST |
+| Delete, Backspace | DEL | End, <> | £ |
+| Page Down | ↑ | Page Up | RESTORE |
+| F1–F8 | F1–F8 (even = shifted) | Cursor keys | the C64's cursor keys |
+
+### Joystick, mouse and paddles
+
+**Joy** puts a joystick on the **numpad** (the digits around 5 are the
+directions, 0 or 5 is fire) or on the **cursor keys** (right Ctrl is fire),
+plugged into port 1 or 2.
+
+On the machine page, either control port can hold a **1351 mouse** or a pair
+of **paddles** instead. Your mouse over the C64's screen then moves it: for
+the mouse as a mouse, for paddles the pointer's X and Y are the two knobs;
+the left and right buttons are the buttons.
+
+## 5. Programs to play
+
+SidMidi runs any C64 program, but the ones it is made for are the C64's
+MIDI synthesizers. They are not included; get them from their authors.
+Four have been tried throughout:
+
+**Cynthcart** — a synthesizer with presets, arpeggios and modulation. It
+finds the Datel cartridge by itself and answers on every MIDI channel at
+once. At its default octave, notes sound an octave lower than they are
+played.
+
+**Station64** — a three-oscillator synthesizer with a deep sound engine. It
+listens on MIDI channels 1 to 3. It unpacks itself for about twelve seconds
+after loading; press **Warp** to skip the wait.
+
+**SID-Wizard** — a music editor (tracker) that can be played and sequenced
+over MIDI. Its MIDI input is off when it starts: set it to OMNI or to a
+channel in its menu. It works with the cartridges and with HerMIDI.
+
+**SID Synth** — a polyphonic synthesizer with arpeggiator, a bank of 54
+instruments and a full CC setup. **Its MIDI is off when it starts:** press
+RUN/STOP (Esc) for its menu, choose item 01, and press RETURN until it says
+**DATEL** (or the interface you chose in SidMidi). Then RUN/STOP returns to
+the synthesizer.
+
+![SID Synth after loading. Its menu (RUN/STOP) switches its MIDI on.](images/sidsynth.png)
+
+Most C64 MIDI programs need two things to agree: the **MIDI** interface in
+SidMidi's top bar, and the interface the program itself is set to. When a
+program says it cannot find an interface, the two do not match.
+
+## 6. MIDI
+
+Notes, controllers, pitch bend, program changes, aftertouch and SysEx from
+your DAW go to the C64 as MIDI bytes through the interface chosen in
+**MIDI**, at the speed of a real MIDI cable. A program that is too slow to
+read them loses bytes, as it would on the hardware.
+
+The interfaces:
+
+| Interface | Notes |
+|---|---|
+| Datel / Kerberos | The most common one, and the one Kerberos and TeensyROM imitate. Start here. |
+| Sequential | Sequential Circuits' cartridge. |
+| Passport / Syntech | |
+| Namesoft | Signals the C64 by NMI rather than IRQ. |
+| Maplin | |
+| Moog Song Producer | |
+| HerMIDI | An interface on the serial port instead of the expansion port, used by SID-Wizard and Station64. |
+| None | No interface. |
+
+**MIDI out**: whatever the program sends — a sequencer's notes, MIDI clock,
+patch dumps — comes out of SidMidi as MIDI, so your DAW can record it or send
+it on.
+
+**MIDI clock**: on the machine page, *MIDI clock* set to *From the host*
+sends MIDI clock, start, stop, continue and song position from your DAW's
+transport to the C64, for programs that follow a sequencer (SID Synth's
+arpeggiator, SID-Wizard's playback).
+
+A note on controllers: some programs read only part of the controller
+number. Cynthcart treats controllers 16 to 31 as 0 to 15; Station64 treats
+64 to 127 as 0 to 63, so a DAW's "reset all controllers" (CC 121) switches
+Station64's low-pass filter off, and SID-Wizard stops its tune on it. If a
+sound changes when you press stop in your DAW, look for a reset message in
+the DAW's MIDI settings.
+
+## 7. The machine page
+
+![The machine page, with a second SID, an 8580, added.](images/machine.png)
+
+**Video** — PAL (6569) or NTSC (6567R8). It also sets the C64's clock, and
+with it the SID's pitch: a program made for one standard plays slightly out
+of tune on the other.
+
+**Palette** — the screen's colours.
+
+**MIDI clock** — off, or from the host's transport (chapter 6).
+
+**Drive 8** — **Virtual**: instant loading and saving for every program that
+uses the C64's normal disk routines. **True 1541**: a complete 1541 drive,
+for programs with their own fast loaders; it needs the drive's DOS ROM, and
+loading runs in warp. **None**: no drive.
+
+**Port 1, Port 2** — joystick, 1351 mouse or paddles (chapter 4).
+
+**SID chips** — how many SIDs the C64 has, one to eight. Programs that use
+more than one find the others at their addresses: click a chip's **Address**
+to change it.
+
+**Resampling** — how the SIDs' output becomes your project's sample rate.
+**Sinc (best)** is clean and is the one to use. **Fast** saves roughly a
+tenth to a fifth of the processing time of each SID that is playing,
+because it skips the filter that keeps high notes clean; the price is
+aliasing, a harsh, metallic edge on bright sounds. Try it when many SIDs
+play at once and your computer struggles.
+
+### Each SID
+
+**Model** — 6581 (a generic one), 6581R3, 6581R4, 6581R4AR or 8580R5. The
+6581, in the first C64s, has a warm, dirty, very individual filter; the
+8580, in later ones, is cleaner and more even. Choosing a model also sets a
+starting point for Curve and Combined.
+
+**Curve** — how dark (left) or bright (right) the filter is. Real 6581s
+differ a lot from chip to chip; this is how you match the one you remember.
+
+**Range** — 6581 only: the filter's range and offset, from dark to bright.
+Together with Curve it covers the spread of real chips. Double click for the
+default.
+
+**Caps** — 6581 only: the filter capacitors. The earliest C64 boards had
+2200 pF capacitors instead of 470 pF, which makes the filter much darker.
+
+**Combined** — how loud combined waveforms (for example sawtooth and
+triangle at once) come out: weak, average or strong. Real chips differ here
+too.
+
+**Level** and **Pan** — the chip's level and place in the stereo output.
+**Volume** under the table is the overall level. These are also parameters
+your DAW can automate.
+
+Each chip is set on its own: two 6581s in one C64, or in two SidMidi
+instances, can have different filters.
+
+## 8. CC maps
+
+![The CC page with SID Synth's map: 36 of the 64 slots are its controllers.](images/cc.png)
+
+C64 MIDI programs listen to MIDI controllers (CC) for their sound: cutoff,
+resonance, envelope, waveform. Which controller does what is different in
+every program. A **CC map** says it for one program, and SidMidi turns it
+into **parameters**: 64 slots, which your DAW shows by the names in the map —
+*Cutoff*, *Resonance*, *Attack* — and can automate, map to a hardware
+controller, or put on a macro.
+
+Moving a slot sends its controller to the C64 at that exact moment. A slot
+only sends when its value changes, and nothing is sent when a project is
+opened or a map is chosen. The slots show what was last sent, not what the
+program currently has: a program's own settings are not read back.
+
+### Choosing a map
+
+**Map** lists the maps that come with SidMidi (for Cynthcart, Station64,
+SID-Wizard and SID Synth, at the end of this manual) and your own. With
+**Follow program** on, loading a program picks the map made for it by its
+file name — load SID Synth, and the slots become SID Synth's controllers.
+Your own map for a program is preferred over the built-in one.
+
+When the map changes, the slots are renamed in your DAW. Automation stays on
+the slot it was recorded on: slot 1 is slot 1 in every map. Most DAWs show
+the new names at once; a few only after the plugin's window or the track is
+reopened.
+
+The map in use is saved in your project, so a project keeps its names even
+on a computer without your map file.
+
+### Editing a map
+
+**Channel** is the MIDI channel the slots send on.
+
+Click a slot's **controller number** to change it. Type the number (`74`),
+or the number and a channel (`74@2`) for a slot that sends on its own
+channel. An empty entry clears the slot.
+
+Click a slot's **name** to rename it. Value names go after a `|`, each with
+the value it starts at: `Vib On | 0 Off, 64 On` shows *Off* from 0 to 63 and
+*On* from 64 up. Your DAW then shows those names, and you can type them.
+
+**Save as** stores the map in your CC map folder under a name you choose;
+**Folder** opens that folder:
+
+- Linux: `~/.local/share/SidMidi/CC Maps`
+- Windows: `%APPDATA%\SidMidi\CC Maps`
+
+A map is a plain text file, one line per slot:
+
+```
+name = My SID Synth
+programs = sidsynth
+channel = 1
+1 = 74 Cutoff
+2 = 71 Resonance
+3 = 85 Filter Mode | 0 Off, 32 LP, 64 BP, 96 HP
+4 = 28@2 Waveform
+```
+
+`programs` lists words that, found in a loaded file's name, make *Follow
+program* pick this map. Lines starting with `#` are comments. Edit maps in
+any text editor; SidMidi reads the folder again whenever the CC page opens.
+
+SID Synth lets you reassign its controllers in its own MIDI CC SETUP screen.
+If you do, change the map to match and save it as your own.
+
+## 9. Outputs
+
+A stereo **main output** with every SID at its level and pan, and **one mono
+output per SID**, for a separate mixer channel or effect chain per chip.
+Which outputs your DAW offers, and how they are routed, is set in the DAW.
+
+## 10. Projects
+
+Saving a project saves the whole C64: memory, every chip, the disk with what
+the program saved on it, the cartridge, the machine page's settings, the CC
+map and the slots. Reopening the project puts the program back exactly where
+it was, mid-note, with all your edits — nothing needs to be loaded again.
+
+To keep a disk outside the project, use **Media → Export disk**.
+
+Each SidMidi in a project is a separate C64: settings in one never change
+another.
+
+## 11. Processor load
+
+The C64 itself costs about a tenth of one processor core, a little more
+while its window is open (the screen is only drawn then). Each SID that
+plays adds a few percent; SIDs that a
+program never touches cost nothing. With all eight SIDs playing, expect
+around a third to two fifths of a core; *Fast* resampling (chapter 7) brings
+that down a little.
+
+When your DAW renders a project offline, SidMidi runs the C64 at a fixed
+pace, so two renders of the same project are identical.
+
+## 12. When something does not work
+
+- **No sound when playing notes.** Is the MIDI light **In** flashing? If it
+  is, the program has not been told about the interface: set its MIDI on in
+  its own menu and check that it matches **MIDI** in the top bar (chapter 5).
+- **The program says it finds no MIDI interface.** Choose another interface
+  in **MIDI** — Datel first — and tell the program to look again, or press
+  **Power** to start it fresh.
+- **The window shows the ROM page.** The ROMs are missing or incomplete
+  (chapter 3). The page lists what is still needed.
+- **A program does not load from the disk.** It may use its own fast loader:
+  set **Drive 8** to **True 1541** (this needs the drive's DOS ROM) and load
+  it again.
+- **Keys do nothing on the C64.** Click into the screen first; the window
+  has to have the keyboard.
+- **The sound changes when the DAW stops.** The DAW sends "reset all
+  controllers" on stop, which some programs take as a sound change
+  (chapter 6).
+- **A slot's name did not change in the DAW.** Reopen the plugin's window or
+  the track; some DAWs only read parameter names then.
+
+## 13. Licence and credits
+
+SidMidi is free software under the **GNU General Public License, version 2
+or later**. Its SID emulation is **reSIDfp** (libresidfp) by Dag Lem,
+Antti S. Lankila and Leandro Nini, under the same licence, with two changes
+of SidMidi's own: each SID has its own filter state (range, capacitors and
+the filter's dither), so chips and instances never affect each other. The
+screen palettes come from the VICE project (GPL). The HerMIDI interface runs
+the original HerMIDI firmware by Mihaly Horvath (Hermit), from the
+SID-Wizard package.
+
+Commodore 64, C64, SID, 1541 and the names of the MIDI interfaces are
+names of products of their respective owners. SidMidi is not affiliated
+with or endorsed by any of them, and contains no Commodore software.
+
+## Appendix A. The CC maps that come with SidMidi
+
+The values column gives the value names a slot shows; a slot without them
+sends the number as it is.
+
+{{PRESET_LIBRARY}}
+
+## Appendix B. Every parameter
+
+{{PARAMETER_SUMMARY}}

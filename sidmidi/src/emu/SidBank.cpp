@@ -108,13 +108,18 @@ void SidBank::applyTuning(int i, bool force)
         sid.setOffset6581(std::clamp<double>(cc.tuning.digiOffset, 0.0, 1.0));
     if (modelChanged || was.tuning.filterEnabled != cc.tuning.filterEnabled)
         sid.enableFilter(cc.tuning.filterEnabled);
+    if (modelChanged || was.tuning.filterRange != cc.tuning.filterRange)
+        sid.setFilter6581Range(std::clamp<double>(cc.tuning.filterRange, 0.0, 1.0));
+    if (modelChanged || was.tuning.oldCaps != cc.tuning.oldCaps)
+        sid.enableOld6581caps(cc.tuning.oldCaps);
     applied_[i] = cc;
     appliedValid_[i] = true;
 }
 
 void SidBank::configure(const SidBankConfig& cfg, double clockHz, double sampleRate, uint64_t clk)
 {
-    const bool rateChanged = clockHz != clockHz_ || sampleRate != sampleRate_;
+    const bool rateChanged = clockHz != clockHz_ || sampleRate != sampleRate_ ||
+                             (chips_[0].sid && cfg.resampling != cfg_.resampling);
     const int oldCount = chips_[0].sid ? cfg_.count : 0;
     cfg_ = cfg;
     cfg_.count = std::clamp(cfg_.count, 1, kMaxChips);
@@ -129,7 +134,9 @@ void SidBank::configure(const SidBankConfig& cfg, double clockHz, double sampleR
         }
         applyTuning(i, fresh);
         if (fresh || rateChanged)
-            c.sid->setSamplingParameters(clockHz_, reSIDfp::RESAMPLE, sampleRate_);
+            c.sid->setSamplingParameters(clockHz_,
+                                         cfg_.resampling == SidResampling::Fast ? reSIDfp::DECIMATE : reSIDfp::RESAMPLE,
+                                         sampleRate_);
         if (fresh || rateChanged || i >= oldCount) {
             // A chip that was not running starts at the machine's time.
             c.clk = clk;
@@ -345,6 +352,17 @@ bool SidBank::restoreState(const std::vector<char>& data, uint64_t clk)
             return false;
         std::vector<char> buf(data.begin() + static_cast<long>(at), data.begin() + static_cast<long>(at + n));
         c.sid->restoreState(buf.data(), n);
+        // The chip's saved state carries its 6581 range and caps too; the
+        // machine's settings are the authority (they were applied before
+        // this). Not the curve: setting it recomputes the cutoff voltage the
+        // state just restored, which need not equal its formula at that
+        // moment, and the restore already brings back the curve the
+        // settings name.
+        const auto& t = cfg_.chips[static_cast<size_t>(i)].tuning;
+        if (!sidVariantIs8580(cfg_.chips[static_cast<size_t>(i)].variant)) {
+            c.sid->setFilter6581Range(std::clamp<double>(t.filterRange, 0.0, 1.0));
+            c.sid->enableOld6581caps(t.oldCaps);
+        }
         at += static_cast<size_t>(n);
         c.clk = clk;
         c.rd = c.wr = 0;

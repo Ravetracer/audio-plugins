@@ -22,6 +22,7 @@
 #include "engine/Engine.h"
 #include "plugin/CcMap.h"
 #include "plugin/MachineSettings.h"
+#include "plugin/Params.h"
 #include "plugin/SpscRing.h"
 
 namespace sidmidi {
@@ -40,22 +41,6 @@ struct ExtLoader
     uint32_t (*midi_in_count)(const clap_plugin_t* plugin);
 };
 
-namespace pid {
-// CcSlot + i is CC slot i (0..kCcSlots-1): ids never change, the map only
-// renames them.
-enum : uint32_t { Master = 1, Level = 100, Pan = 200, CcSlot = 1000 };
-constexpr int kCount = 1 + 2 * 8 + kCcSlots;
-inline bool isCcSlot(uint32_t id) { return id >= CcSlot && id < CcSlot + kCcSlots; }
-} // namespace pid
-
-struct ParamInfo
-{
-    uint32_t id;
-    const char* module;
-    std::string name;
-    double lo, hi, def;
-    bool stepped = false;
-};
 
 class SidMidiPlugin
 {

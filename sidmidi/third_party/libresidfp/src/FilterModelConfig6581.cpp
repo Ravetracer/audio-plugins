@@ -97,45 +97,22 @@ FilterModelConfig6581* FilterModelConfig6581::getInstance()
     return instance.get();
 }
 
-void FilterModelConfig6581::setFilterRange(double adjustment)
+void FilterModelConfig6581::rangeParams(double adjustment, bool oldCaps, double& cfc, double& vm) const
 {
-    // clamp into allowed range
-#ifdef HAVE_CXX17
-     adjustment = std::clamp(adjustment, 0.0, 1.0);
-#else
-     adjustment = std::max(std::min(adjustment, 1.0), 0.);
-#endif
+    adjustment = std::max(std::min(adjustment, 1.0), 0.);
 
-     // Get the new uCox value, in the range [1,40]
-     const double new_uCox = (1. + 39. * adjustment) * 1e-6;
+    // The uCox value, in the range [1,40] (1e-6)
+    const double chipUCox = (1. + 39. * adjustment) * 1e-6;
 
-    // Ignore small changes
-    if (std::abs(uCox - new_uCox) < 1e-12)
-        return;
+    // As calcCurrFactorCoeff() for this uCox.
+    cfc = denorm * (chipUCox / 2. * 1.0e-6 / C);
+    vm = chipUCox;
 
-    uCox = new_uCox;
-    updateParams();
-}
-
-void FilterModelConfig6581::enableOldCaps(bool enable)
-{
-    if (m_oldCaps == enable)
-        return;
-
-    m_oldCaps = enable;
-    updateParams();
-}
-
-void FilterModelConfig6581::updateParams()
-{
-    calcCurrFactorCoeff();
-    vcr_mult = uCox;
-
-    if (m_oldCaps)
+    if (oldCaps)
     {
         constexpr double caps_mult = CAPS_NEW/CAPS_OLD;
-        currFactorCoeff *= caps_mult;
-        vcr_mult *= caps_mult;
+        cfc *= caps_mult;
+        vm *= caps_mult;
     }
 }
 
@@ -153,10 +130,8 @@ FilterModelConfig6581::FilterModelConfig6581() :
     WL_snake(1.0 / 115.0),
     dac_zero(7.15),
     dac_scale(2.63),
-    dac(DAC_BITS),
-    m_oldCaps(false)
+    dac(DAC_BITS)
 {
-    updateParams();
 
     dac.kinkedDac(MOS6581);
 

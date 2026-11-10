@@ -183,6 +183,11 @@ private:
 
     FilterModelConfig6581& fmc;
 
+    // SidMidi: this chip's filter range and caps, as the snake current factor
+    // and the VCR multiplier (see FilterModelConfig6581::rangeParams).
+    uint16_t nSnake = 0;
+    double vcrMult = 0.;
+
     // SidMidi: a fixed draw from the dither sequence (the n-th value), so
     // the constants do not depend on what was converted before.
     static uint16_t normalized(FilterModelConfig6581& fmc, double v, unsigned int n)
@@ -201,7 +206,19 @@ public:
         nVddt(normalized(new_fmc, new_fmc.getVddt(), 1)),
         nVt(normalized(new_fmc, new_fmc.getVth(), 2)),
         nVmin(new_fmc.getNVmin()),
-        fmc(new_fmc) {}
+        fmc(new_fmc)
+    {
+        setRange(19.0 / 39.0, false);
+    }
+
+    // SidMidi: the filter range (0 .. 1) and caps of this chip.
+    void setRange(double adjustment, bool oldCaps)
+    {
+        double cfc;
+        fmc.rangeParams(adjustment, oldCaps, cfc, vcrMult);
+        // As FilterModelConfig::getNormalizedCurrentFactor<13> (to_uint16).
+        nSnake = static_cast<uint16_t>(static_cast<int>((1 << 13) * cfc * wlSnake + 0.5));
+    }
 
     void setVw(uint16_t Vw) { nVddt_Vw_2 = ((nVddt - Vw) * (nVddt - Vw)) >> 1; }
 

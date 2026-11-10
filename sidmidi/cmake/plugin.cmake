@@ -34,6 +34,7 @@ add_library(sidmidi-impl STATIC
     src/emu/Snapshot.cpp
     src/plugin/MachineSettings.cpp
     src/plugin/CcMap.cpp
+    src/plugin/Params.cpp
     src/plugin/SidMidiPlugin.cpp
     src/gui/Widget.cpp
     src/gui/Widgets.cpp

@@ -76,6 +76,9 @@ public:
     void paint(cairo_t* cr) override;
 
     SidMidiPlugin& plugin() { return plugin_; }
+    enum class Page { Screen, Machine, Cc };
+    // What the Machine and CC buttons do (and the snapshot tool).
+    void showPage(Page p);
     void notify(const std::string& text, bool error = false);
     bool c64HasKeyboard() const { return keyboardToC64_; }
     void giveKeyboardToC64(bool on);

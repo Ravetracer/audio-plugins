@@ -1,0 +1,268 @@
+diff --git a/sidmidi/third_party/libresidfp/src/Filter6581.h b/sidmidi/third_party/libresidfp/src/Filter6581.h
+index b068e6e..896c67f 100644
+--- a/sidmidi/third_party/libresidfp/src/Filter6581.h
++++ b/sidmidi/third_party/libresidfp/src/Filter6581.h
+@@ -330,6 +330,10 @@ private:
+ 
+     const uint16_t* f0_dac;
+ 
++    // SidMidi: this chip's filter range and caps.
++    double range = 19.0 / 39.0;
++    bool oldCaps = false;
++
+ protected:
+     /**
+      * Set filter cutoff frequency.
+@@ -368,22 +372,31 @@ public:
+     /**
+      * Set filter offset and range based on single parameter.
+      *
++     * SidMidi: for this chip only. Upstream changed the model shared by every
++     * 6581 in the process.
++     *
+      * @param adjustment 0 .. 1, where 0 sets center frequency low ("dark"), 1 sets it high ("bright").
+-     *                   This also affects the range. Default is 0.5
++     *                   This also affects the range. 19/39 is the model's default.
+      */
+-    static void setFilterRange(double adjustment)
++    void setFilterRange(double adjustment)
+     {
+-        FilterModelConfig6581::getInstance()->setFilterRange(adjustment);
++        range = adjustment;
++        hpIntegrator.setRange(range, oldCaps);
++        bpIntegrator.setRange(range, oldCaps);
+     }
+ 
+     /**
+      * Enable/disable old caps for 6581 model.
+      *
++     * SidMidi: for this chip only, as setFilterRange.
++     *
+      * @param enable true to enable old 2200pF caps, false to use new 470pF caps.
+      */
+-    static void enableOldCaps(bool enable)
++    void enableOldCaps(bool enable)
+     {
+-        FilterModelConfig6581::getInstance()->enableOldCaps(enable);
++        oldCaps = enable;
++        hpIntegrator.setRange(range, oldCaps);
++        bpIntegrator.setRange(range, oldCaps);
+     }
+ };
+ 
+diff --git a/sidmidi/third_party/libresidfp/src/FilterModelConfig6581.cpp b/sidmidi/third_party/libresidfp/src/FilterModelConfig6581.cpp
+index 5b3d9b8..09fe647 100644
+--- a/sidmidi/third_party/libresidfp/src/FilterModelConfig6581.cpp
++++ b/sidmidi/third_party/libresidfp/src/FilterModelConfig6581.cpp
+@@ -97,45 +97,22 @@ FilterModelConfig6581* FilterModelConfig6581::getInstance()
+     return instance.get();
+ }
+ 
+-void FilterModelConfig6581::setFilterRange(double adjustment)
++void FilterModelConfig6581::rangeParams(double adjustment, bool oldCaps, double& cfc, double& vm) const
+ {
+-    // clamp into allowed range
+-#ifdef HAVE_CXX17
+-     adjustment = std::clamp(adjustment, 0.0, 1.0);
+-#else
+-     adjustment = std::max(std::min(adjustment, 1.0), 0.);
+-#endif
+-
+-     // Get the new uCox value, in the range [1,40]
+-     const double new_uCox = (1. + 39. * adjustment) * 1e-6;
+-
+-    // Ignore small changes
+-    if (std::abs(uCox - new_uCox) < 1e-12)
+-        return;
+-
+-    uCox = new_uCox;
+-    updateParams();
+-}
++    adjustment = std::max(std::min(adjustment, 1.0), 0.);
+ 
+-void FilterModelConfig6581::enableOldCaps(bool enable)
+-{
+-    if (m_oldCaps == enable)
+-        return;
++    // The uCox value, in the range [1,40] (1e-6)
++    const double chipUCox = (1. + 39. * adjustment) * 1e-6;
+ 
+-    m_oldCaps = enable;
+-    updateParams();
+-}
+-
+-void FilterModelConfig6581::updateParams()
+-{
+-    calcCurrFactorCoeff();
+-    vcr_mult = uCox;
++    // As calcCurrFactorCoeff() for this uCox.
++    cfc = denorm * (chipUCox / 2. * 1.0e-6 / C);
++    vm = chipUCox;
+ 
+-    if (m_oldCaps)
++    if (oldCaps)
+     {
+         constexpr double caps_mult = CAPS_NEW/CAPS_OLD;
+-        currFactorCoeff *= caps_mult;
+-        vcr_mult *= caps_mult;
++        cfc *= caps_mult;
++        vm *= caps_mult;
+     }
+ }
+ 
+@@ -153,10 +130,8 @@ FilterModelConfig6581::FilterModelConfig6581() :
+     WL_snake(1.0 / 115.0),
+     dac_zero(7.15),
+     dac_scale(2.63),
+-    dac(DAC_BITS),
+-    m_oldCaps(false)
++    dac(DAC_BITS)
+ {
+-    updateParams();
+ 
+     dac.kinkedDac(MOS6581);
+ 
+diff --git a/sidmidi/third_party/libresidfp/src/FilterModelConfig6581.h b/sidmidi/third_party/libresidfp/src/FilterModelConfig6581.h
+index fa419c0..2e7ec37 100644
+--- a/sidmidi/third_party/libresidfp/src/FilterModelConfig6581.h
++++ b/sidmidi/third_party/libresidfp/src/FilterModelConfig6581.h
+@@ -83,8 +83,6 @@ private:
+     double vcr_n_Ids_term[1 << 16];
+     //@}
+ 
+-    double vcr_mult;
+-    bool m_oldCaps;
+ 
+     // Voice DC offset LUT
+     double voiceDC[256];
+@@ -92,8 +90,6 @@ private:
+ private:
+     double getDacZero(double adjustment) const { return dac_zero + 2. * adjustment - 1.; }
+ 
+-    void updateParams();
+-
+     FilterModelConfig6581();
+     ~FilterModelConfig6581() = default;
+ 
+@@ -110,9 +106,17 @@ protected:
+ public:
+     static FilterModelConfig6581* getInstance();
+ 
+-    void setFilterRange(double adjustment);
+-
+-    void enableOldCaps(bool enable);
++    /**
++     * SidMidi: the two values the filter range and the old caps change,
++     * for one chip. The model itself is shared by every chip in the process
++     * and is no longer changed by them; each filter keeps its own pair.
++     *
++     * @param adjustment 0 .. 1, see Filter6581::setFilterRange
++     * @param oldCaps the 2200pF caps of ASSY 326298
++     * @param currFactorCoeff the integrators' current factor coefficient
++     * @param vcrMult the multiplier of the VCR current table
++     */
++    void rangeParams(double adjustment, bool oldCaps, double& currFactorCoeff, double& vcrMult) const;
+ 
+     /**
+      * Construct an 11 bit cutoff frequency DAC output voltage table.
+@@ -127,9 +131,9 @@ public:
+     inline double getWL_snake() const { return WL_snake; }
+ 
+     inline uint16_t getVcr_nVg(int i) const { return vcr_nVg[i]; }
+-    inline uint16_t getVcr_n_Ids_term(int i) const
++    inline uint16_t getVcr_n_Ids_term(int i, double mult) const
+     {
+-        return to_uint16(vcr_n_Ids_term[i] * vcr_mult);
++        return to_uint16(vcr_n_Ids_term[i] * mult);
+     }
+     // only used if SLOPE_FACTOR is defined
+     static inline constexpr double getUt() { return Ut; }
+diff --git a/sidmidi/third_party/libresidfp/src/Integrator6581.cpp b/sidmidi/third_party/libresidfp/src/Integrator6581.cpp
+index 7173005..c4bee12 100644
+--- a/sidmidi/third_party/libresidfp/src/Integrator6581.cpp
++++ b/sidmidi/third_party/libresidfp/src/Integrator6581.cpp
+@@ -46,7 +46,7 @@ int32_t Integrator6581::solve(int32_t vi) const
+     const uint32_t Vgdt_2 = Vgdt * Vgdt;
+ 
+     // "Snake" current, scaled by (1/m)*2^13*m*2^16*m*2^16*2^-15 = m*2^30
+-    const int32_t n_I_snake = fmc.getNormalizedCurrentFactor<13>(wlSnake) * (static_cast<int32_t>(Vgst_2 - Vgdt_2) >> 15);
++    const int32_t n_I_snake = nSnake * (static_cast<int32_t>(Vgst_2 - Vgdt_2) >> 15);
+ 
+     // VCR gate voltage.       // Scaled by m*2^16
+     // Vg = Vddt - sqrt(((Vddt - Vw)^2 + Vgdt^2)/2)
+@@ -65,8 +65,8 @@ int32_t Integrator6581::solve(int32_t vi) const
+     assert((kVgt_Vd >= 0) && (kVgt_Vd <= UINT16_MAX));
+ 
+     // VCR current, scaled by m*2^15*2^15 = m*2^30
+-    const uint32_t If = static_cast<uint32_t>(fmc.getVcr_n_Ids_term(kVgt_Vs)) << 15;
+-    const uint32_t Ir = static_cast<uint32_t>(fmc.getVcr_n_Ids_term(kVgt_Vd)) << 15;
++    const uint32_t If = static_cast<uint32_t>(fmc.getVcr_n_Ids_term(kVgt_Vs, vcrMult)) << 15;
++    const uint32_t Ir = static_cast<uint32_t>(fmc.getVcr_n_Ids_term(kVgt_Vd, vcrMult)) << 15;
+ #ifdef SLOPE_FACTOR
+     const double iVcr = static_cast<double>(If - Ir);
+     const int32_t n_I_vcr = static_cast<int32_t>(iVcr * n);
+diff --git a/sidmidi/third_party/libresidfp/src/Integrator6581.h b/sidmidi/third_party/libresidfp/src/Integrator6581.h
+index 99305ff..470278a 100644
+--- a/sidmidi/third_party/libresidfp/src/Integrator6581.h
++++ b/sidmidi/third_party/libresidfp/src/Integrator6581.h
+@@ -183,6 +183,11 @@ private:
+ 
+     FilterModelConfig6581& fmc;
+ 
++    // SidMidi: this chip's filter range and caps, as the snake current factor
++    // and the VCR multiplier (see FilterModelConfig6581::rangeParams).
++    uint16_t nSnake = 0;
++    double vcrMult = 0.;
++
+     // SidMidi: a fixed draw from the dither sequence (the n-th value), so
+     // the constants do not depend on what was converted before.
+     static uint16_t normalized(FilterModelConfig6581& fmc, double v, unsigned int n)
+@@ -201,7 +206,19 @@ public:
+         nVddt(normalized(new_fmc, new_fmc.getVddt(), 1)),
+         nVt(normalized(new_fmc, new_fmc.getVth(), 2)),
+         nVmin(new_fmc.getNVmin()),
+-        fmc(new_fmc) {}
++        fmc(new_fmc)
++    {
++        setRange(19.0 / 39.0, false);
++    }
++
++    // SidMidi: the filter range (0 .. 1) and caps of this chip.
++    void setRange(double adjustment, bool oldCaps)
++    {
++        double cfc;
++        fmc.rangeParams(adjustment, oldCaps, cfc, vcrMult);
++        // As FilterModelConfig::getNormalizedCurrentFactor<13> (to_uint16).
++        nSnake = static_cast<uint16_t>(static_cast<int>((1 << 13) * cfc * wlSnake + 0.5));
++    }
+ 
+     void setVw(uint16_t Vw) { nVddt_Vw_2 = ((nVddt - Vw) * (nVddt - Vw)) >> 1; }
+ 
+diff --git a/sidmidi/third_party/libresidfp/src/State.h b/sidmidi/third_party/libresidfp/src/State.h
+index 4f41fbd..d1babbf 100644
+--- a/sidmidi/third_party/libresidfp/src/State.h
++++ b/sidmidi/third_party/libresidfp/src/State.h
+@@ -32,14 +32,17 @@ namespace reSIDfp
+ 
+ class SID;
+ 
++// SidMidi: every field has a value. They were left uninitialised by
++// `new Params`, and State::restoreState applies filterRange6581 and
++// old6581caps, so restoring a chip applied whatever the heap held.
+ struct Params
+ {
+-    SamplingMethod method;
+-    double samplingFrequency;
+-    double filterCurve6581;
+-    double filterRange6581;
+-    double filterCurve8580;
+-    bool   old6581caps;
++    SamplingMethod method = RESAMPLE;
++    double samplingFrequency = 48000.0;
++    double filterCurve6581 = 0.5;
++    double filterRange6581 = 19.0 / 39.0; // uCox = 20e-6, the model's own default
++    double filterCurve8580 = 0.5;
++    bool   old6581caps = false;
+ };
+ 
+ struct State
