@@ -150,6 +150,11 @@ void residfp::enableFilter(bool enable)
     sid.enableFilter(enable);
 }
 
+void residfp::setVoiceMask(unsigned char mask)
+{
+    sid.setVoiceMask(mask);
+}
+
 void residfp::enableOld6581caps(bool enable)
 {
     sid.enableOld6581caps(enable);

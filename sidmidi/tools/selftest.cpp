@@ -17,7 +17,11 @@
 //    none; the map travels with the state.
 // 5. Warp: a start warps on its own, the Warp button stops it (and only that
 //    one), and the Auto warp setting switches it off.
-// 6. Counts heap allocations inside process() once the program is running --
+// 6. Voice outputs: switched on, the main output stays bit-identical, the
+//    three voices of SID 1 together come close to SID 1's own output, nothing
+//    allocates, and the voices survive a state round trip exactly. Off, the
+//    voice ports are silent.
+// 7. Counts heap allocations inside process() once the program is running --
 //    this executable's operator new replaces the one the plugin's libstdc++
 //    would use -- through notes, and while a flood
 //    of MIDI, more than the cable queue holds, goes in; the count must stay
@@ -117,7 +121,8 @@ struct Instance
 {
     const clap_plugin_t* plugin = nullptr;
     std::vector<float> l, r;
-    std::vector<std::vector<float>> aux;
+    std::vector<std::vector<float>> aux;          // SID 1-8, then SID 1 voice 1 ... SID 8 voice 3
+    std::vector<std::vector<float>> auxAll;       // everything the last run() wrote to them
     OutList out;
 
     void create(const clap_plugin_factory_t* f)
@@ -131,7 +136,7 @@ struct Instance
         plugin->start_processing(plugin);
         l.resize(512);
         r.resize(512);
-        aux.assign(8, std::vector<float>(512));
+        aux.assign(8 + 24, std::vector<float>(512));
     }
     // Runs `blocks` of 512 frames; `notes` adds MIDI at given block numbers,
     // `params` parameter values (id, value) in the first block.
@@ -139,6 +144,7 @@ struct Instance
                            const std::vector<std::pair<clap_id, double>>& params = {})
     {
         std::vector<float> all;
+        auxAll.assign(aux.size(), {});
         for (int b = 0; b < blocks; ++b) {
             EventList ev;
             for (const auto& pv : params) {
@@ -164,11 +170,11 @@ struct Instance
             clap_input_events_t in{&ev, EventList::size, EventList::get};
             clap_output_events_t outEv{&out, OutList::push};
             float* main[2] = {l.data(), r.data()};
-            clap_audio_buffer_t bufs[9]{};
+            clap_audio_buffer_t bufs[1 + 8 + 24]{};
             bufs[0].data32 = main;
             bufs[0].channel_count = 2;
-            float* auxPtr[8];
-            for (int i = 0; i < 8; ++i) {
+            float* auxPtr[8 + 24];
+            for (int i = 0; i < 8 + 24; ++i) {
                 auxPtr[i] = aux[static_cast<size_t>(i)].data();
                 bufs[i + 1].data32 = &auxPtr[i];
                 bufs[i + 1].channel_count = 1;
@@ -176,7 +182,7 @@ struct Instance
             clap_process_t p{};
             p.frames_count = 512;
             p.audio_outputs = bufs;
-            p.audio_outputs_count = 9;
+            p.audio_outputs_count = 1 + 8 + 24;
             p.in_events = &in;
             p.out_events = &outEv;
             p.steady_time = -1;
@@ -184,6 +190,8 @@ struct Instance
             plugin->process(plugin, &p);
             counting = false;
             all.insert(all.end(), l.begin(), l.end());
+            for (size_t i = 0; i < aux.size(); ++i)
+                auxAll[i].insert(auxAll[i].end(), aux[i].begin(), aux[i].end());
         }
         return all;
     }
@@ -549,6 +557,82 @@ int main(int argc, char** argv)
         e.run(2);
         check(!le->warping(e.plugin), "with Auto warp off a load runs in real time");
         e.destroy();
+    }
+
+    // Voice outputs.
+    {
+        auto withVoices = [&](Instance& i, bool on) {
+            i.create(factory);
+            auto* st = static_cast<const clap_plugin_state_t*>(i.plugin->get_extension(i.plugin, CLAP_EXT_STATE));
+            Buffer sb;
+            clap_ostream_t so{&sb, Buffer::write};
+            st->save(i.plugin, &so);
+            const std::string from = "voice_outputs = 0", to = "voice_outputs = 1";
+            auto it = std::search(sb.data.begin(), sb.data.end(), from.begin(), from.end());
+            check(it != sb.data.end(), "the settings carry voice_outputs");
+            if (on && it != sb.data.end())
+                std::copy(to.begin(), to.end(), it);
+            clap_istream_t si{&sb, Buffer::read};
+            st->load(i.plugin, &si);
+            auto* li = static_cast<const sidmidi::ExtLoader*>(i.plugin->get_extension(i.plugin, sidmidi::kExtLoader));
+            li->load_file(i.plugin, argv[2]);
+            i.run(readyBlocks);
+        };
+        Instance on, off;
+        withVoices(on, true);
+        withVoices(off, false);
+        const size_t before = allocations;
+        const auto mainOn = on.run(100, phrase);
+        const auto onAux = on.auxAll;
+        check(allocations == before, "voice outputs allocate nothing in process()");
+        const auto mainOff = off.run(100, phrase);
+        double dMain = 0, offVoices = 0;
+        for (size_t k = 0; k < mainOn.size(); ++k)
+            dMain = std::max(dMain, static_cast<double>(std::fabs(mainOn[k] - mainOff[k])));
+        for (size_t v = 8; v < off.auxAll.size(); ++v)
+            for (float x : off.auxAll[v])
+                offVoices = std::max(offVoices, static_cast<double>(std::fabs(x)));
+        check(dMain == 0.0, "voice outputs leave the main output bit-identical");
+        check(offVoices == 0.0, "with voice outputs off the voice ports are silent");
+
+        const auto& sid1 = onAux[0];
+        std::vector<float> sum(sid1.size(), 0.0f);
+        double voiceDb[3];
+        for (int v = 0; v < 3; ++v) {
+            const auto& vo = onAux[8 + static_cast<size_t>(v)];
+            for (size_t k = 0; k < sum.size(); ++k)
+                sum[k] += vo[k];
+            voiceDb[v] = rmsDb(vo);
+        }
+        std::vector<float> resid(sum.size());
+        for (size_t k = 0; k < sum.size(); ++k)
+            resid[k] = sum[k] - sid1[k];
+        std::printf("      SID 1 %.1f dB; voices %.1f / %.1f / %.1f dB; their sum %.1f dB, minus SID 1 %.1f dB\n",
+                    rmsDb(sid1), voiceDb[0], voiceDb[1], voiceDb[2], rmsDb(sum), rmsDb(resid));
+        check(std::max({voiceDb[0], voiceDb[1], voiceDb[2]}) > -50.0, "a played note comes out of a voice output");
+        check(rmsDb(resid) < rmsDb(sid1) - 10.0, "the three voices together come close to their SID's output");
+
+        // The voices travel with the state, exactly.
+        auto* stOn = static_cast<const clap_plugin_state_t*>(on.plugin->get_extension(on.plugin, CLAP_EXT_STATE));
+        Buffer vb;
+        clap_ostream_t vo{&vb, Buffer::write};
+        stOn->save(on.plugin, &vo);
+        Instance again;
+        again.create(factory);
+        clap_istream_t vi{&vb, Buffer::read};
+        auto* stAgain = static_cast<const clap_plugin_state_t*>(again.plugin->get_extension(again.plugin, CLAP_EXT_STATE));
+        check(stAgain->load(again.plugin, &vi), "a state with voice outputs loads");
+        on.run(100, phrase);
+        again.run(100, phrase);
+        double dVoice = 0;
+        for (size_t v = 8; v < 11; ++v)
+            for (size_t k = 0; k < on.auxAll[v].size(); ++k)
+                dVoice = std::max(dVoice, static_cast<double>(std::fabs(on.auxAll[v][k] - again.auxAll[v][k])));
+        std::printf("      voices after the round trip: max difference %.3g\n", dVoice);
+        check(dVoice == 0.0, "the voices play on exactly after a state round trip");
+        on.destroy();
+        off.destroy();
+        again.destroy();
     }
 
     a.destroy();

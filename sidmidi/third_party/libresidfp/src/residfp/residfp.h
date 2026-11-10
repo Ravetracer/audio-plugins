@@ -234,6 +234,13 @@ public:
     void enableFilter(bool enable);
 
     /**
+     * Voices heard (SidMidi): bit 0-2 voice 1-3, bit 3 EXT IN. A chip that
+     * renders one voice for a separate output hears only that one. Not part
+     * of the saved state.
+     */
+    void setVoiceMask(unsigned char mask);
+
+    /**
      * Enable/disable old caps for 6581 model.
      * When enabled the filter cutoff is lower.
      *

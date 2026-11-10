@@ -61,7 +61,7 @@ audio-plugins/
 | 3 | **Aurum** | `aurum/` | 0.3.1 | Linux, Windows | CLAP, VST3 | a clean-room algorithmic reverb (FDN, allpass ring, plate) with a per-frequency decay contour; own DSP and GUI, see *Aurum* below |
 | 4 | **Substrike** | `substrike/` | 1.1.0 | Linux, Windows | CLAP, VST3 | a layered kick drum designer for every style; standalone like Aurum, see *Substrike* below |
 | 5 | **Shapeau** | `shapeau/` | 0.4.0 | Linux, Windows | CLAP, VST3 | a multiband drawing rack: a reorderable chain of shape-driven effects per band, beat-synced or triggered by MIDI or a sidechain hit, with the audio drawn behind the shape; see *Shapeau* below |
-| 6 | **SidMidi** | `sidmidi/` | 0.6.0 | Linux, Windows | CLAP, VST3 | a Commodore 64 running the original C64 MIDI programs, played from the DAW through an emulated MIDI cartridge, with up to eight reSIDfp SIDs; GPL, standalone, see *SidMidi* below |
+| 6 | **SidMidi** | `sidmidi/` | 0.7.0 | Linux, Windows | CLAP, VST3 | a Commodore 64 running the original C64 MIDI programs, played from the DAW through an emulated MIDI cartridge, with up to eight reSIDfp SIDs; GPL, standalone, see *SidMidi* below |
 
 Naming follows the plugin, not a pattern: the CMake project, the installed
 artifact and the display name are CamelCase (`SaeureKiste`), the folder is
@@ -583,6 +583,15 @@ What to know before working there:
   bit-identical (`install.sh` checks it) and the state round trip is exact;
   keep both true. The self-test also counts allocations in `process()` while
   playing -- it must stay 0.
+- **Voice outputs** (0.7.0): ports are Main, SID 1-8, then SID 1 Voice 1 ...
+  SID 8 Voice 3 (ids 9-32) -- new ports only ever go at the end. With the
+  setting on, `SidBank` gives each chip three tap instances that get every
+  register write and hear one voice (patch 0003, `setVoiceMask`: a masked
+  voice is fed as a closed envelope, never left out of the sums, or reSIDfp
+  picks op-amp tables for the wrong input count and a lone voice comes out
+  as DC). Taps are in the snapshot and their queues in the audio state,
+  appended so older builds read on; the main output is bit-identical with
+  taps on or off (the self-test checks both). About 4x per SID in use.
 - **CC maps** (0.3.0, `src/plugin/CcMap.*`, factory maps in `ccmaps/`): 64
   parameter slots, ids 1000-1063, fixed range 0..127, renamed per program by
   a map (`CLAP_PARAM_RESCAN_INFO`; VST3 can rename but never change ranges,

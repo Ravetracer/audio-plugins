@@ -420,14 +420,16 @@ void SidMidiPlugin::onMainThread() {}
 
 // ------------------------------------------------------------------ ports
 
+// Main, one per SID, then one per voice (SID 1 voice 1-3, SID 2 voice 1-3, ...).
+// New ports go at the end: hosts keep connections by index.
 uint32_t SidMidiPlugin::audioPortsCount(bool isInput) const
 {
-    return isInput ? 0 : 1 + 8;
+    return isInput ? 0 : kVoicePort0 + 8 * 3;
 }
 
 bool SidMidiPlugin::audioPortsGet(uint32_t index, bool isInput, clap_audio_port_info_t* info) const
 {
-    if (isInput || index > 8)
+    if (isInput || index >= audioPortsCount(false))
         return false;
     std::memset(info, 0, sizeof(*info));
     info->in_place_pair = CLAP_INVALID_ID;
@@ -437,9 +439,15 @@ bool SidMidiPlugin::audioPortsGet(uint32_t index, bool isInput, clap_audio_port_
         info->flags = CLAP_AUDIO_PORT_IS_MAIN;
         info->channel_count = 2;
         info->port_type = CLAP_PORT_STEREO;
-    } else {
+    } else if (index < kVoicePort0) {
         info->id = index;
         std::snprintf(info->name, sizeof(info->name), "SID %u", index);
+        info->channel_count = 1;
+        info->port_type = CLAP_PORT_MONO;
+    } else {
+        const uint32_t k = index - kVoicePort0;
+        info->id = index;
+        std::snprintf(info->name, sizeof(info->name), "SID %u Voice %u", k / 3 + 1, k % 3 + 1);
         info->channel_count = 1;
         info->port_type = CLAP_PORT_MONO;
     }
@@ -1285,8 +1293,11 @@ clap_process_status SidMidiPlugin::process(const clap_process_t* p)
     };
     outs.left = port(0, 0);
     outs.right = port(0, 1);
-    for (int i = 0; i < 8; ++i)
+    for (int i = 0; i < 8; ++i) {
         outs.sid[i] = port(static_cast<uint32_t>(i + 1), 0);
+        for (int v = 0; v < 3; ++v)
+            outs.voice[i][v] = port(static_cast<uint32_t>(kVoicePort0 + i * 3 + v), 0);
+    }
 
     if (!lock.owns_lock() || !hasRoms_) {
         for (uint32_t i = 0; i < p->audio_outputs_count; ++i)

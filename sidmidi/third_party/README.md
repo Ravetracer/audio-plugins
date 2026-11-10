@@ -32,3 +32,13 @@ means unpacking the new release and applying them again.
   which changed the filters of every other instance when a project loaded.
   The fields now have defaults (the range's is 19/39, reSIDfp's own uCox of
   20e-6, so the default sound is bit-identical to before).
+- `patches/0003-residfp-voice-mask.patch` -- a voice mask per chip
+  (`residfp::setVoiceMask`, bit 0-2 voice 1-3, bit 3 EXT IN), for SidMidi's
+  voice outputs: three more instances per SID, each hearing one voice. A
+  masked voice reaches the filter as if its envelope were closed (signal 0,
+  the envelope-0 DC), so the summer and mixer still see the real chip's
+  number of inputs. Leaving it out of the sums instead picks reSIDfp's
+  op-amp tables for the wrong input count and a single voice comes out as
+  DC. The mask is not part of the saved state; all on is the unpatched
+  sound, bit for bit. Unlike 0001 and 0002 this one is the diff against the
+  tree with them applied (all three touch `Filter.h`).

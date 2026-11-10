@@ -26,6 +26,7 @@ std::string MachineSettings::toText() const
     o << "cc_follow = " << (ccFollowProgram ? 1 : 0) << "\n";
     o << "sid_count = " << sids.count << "\n";
     o << "resampling = " << static_cast<int>(sids.resampling) << "\n";
+    o << "voice_outputs = " << (sids.voiceOutputs ? 1 : 0) << "\n";
     for (int i = 0; i < 8; ++i) {
         const auto& c = sids.chips[static_cast<size_t>(i)];
         char buf[256];
@@ -86,6 +87,8 @@ void MachineSettings::fromText(const std::string& text)
             ccFollowProgram = iv != 0;
         else if (key == "sid_count")
             sids.count = std::clamp(iv, 1, 8);
+        else if (key == "voice_outputs")
+            sids.voiceOutputs = iv != 0;
         else if (key == "resampling")
             sids.resampling = iv == 1 ? emu::SidResampling::Fast : emu::SidResampling::Sinc;
         else if (key.size() == 4 && key.rfind("sid", 0) == 0 && key[3] >= '1' && key[3] <= '8') {

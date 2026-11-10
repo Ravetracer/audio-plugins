@@ -74,6 +74,8 @@ public:
         float* left = nullptr;
         float* right = nullptr;
         float* sid[emu::SidBank::kMaxChips] = {}; // optional, mono per SID
+        // Optional, mono per voice; silent unless voice outputs are on.
+        float* voice[emu::SidBank::kMaxChips][emu::SidBank::kVoices] = {};
     };
 
     // `events` sorted by offset.

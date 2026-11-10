@@ -9,6 +9,14 @@
 // chip writes into its own FIFO; the resamplers do not land on exactly the
 // same sample count every block, so the FIFOs are read with a little latency
 // and nobody hears the difference.
+//
+// Voice outputs: a SID mixes its three voices through one analogue filter, so
+// there is no single voice to tap after it. With voice outputs on, each chip
+// gets three more reSIDfp instances (taps) that see every register write but
+// hear only one voice each (the vendored voice mask, patch 0003): each voice
+// goes through its own filter, mixer and volume. On a 6581, whose filter
+// distorts the sum, the three together are close to the chip's output but
+// not equal to it. A chip with taps costs about four times as much.
 
 #include <array>
 #include <cstdint>
@@ -69,6 +77,7 @@ struct SidBankConfig
 {
     int count = 1;
     SidResampling resampling = SidResampling::Sinc;
+    bool voiceOutputs = false; // three taps per chip, one per voice
     std::array<SidChipConfig, 8> chips{};
     // $D400, $D420, $D440 ... -- SID-Wizard's defaults for its 2/3/4SID builds.
     SidBankConfig()
@@ -82,6 +91,7 @@ class SidBank
 {
 public:
     static constexpr int kMaxChips = 8;
+    static constexpr int kVoices = 3;
     static constexpr size_t kFifoSize = 8192;
 
     SidBank();
@@ -120,22 +130,49 @@ public:
     // Discards everything produced so far (warp, mute).
     void discard();
     // Samples a chip has ready.
-    size_t available(int chip) const;
+    size_t available(int chip) const { return chips_[chip].fifo.available(); }
     // Pops `n` samples of a chip as floats (-1..1); pads with silence.
-    void pop(int chip, float* out, size_t n);
+    void pop(int chip, float* out, size_t n) { chips_[chip].fifo.pop(out, n); }
+    // The same for one voice's tap, while voice outputs are on.
+    bool hasVoices(int chip) const { return chips_[chip].taps[0] != nullptr; }
+    size_t availableVoice(int chip, int v) const { return chips_[chip].voiceFifo[v].available(); }
+    void popVoice(int chip, int v, float* out, size_t n) { chips_[chip].voiceFifo[v].pop(out, n); }
 
     // The samples waiting in a chip's FIFO, and putting them back (state).
+    // setPending also fills the chip's voice queues with as much silence;
+    // setPendingVoice then puts back what they held.
     std::vector<int16_t> pending(int chip) const;
     void setPending(int chip, const std::vector<int16_t>& samples);
+    std::vector<int16_t> pendingVoice(int chip, int v) const;
+    void setPendingVoice(int chip, int v, const std::vector<int16_t>& samples);
 
     // Snapshot of the chips' internal state (not portable across builds).
     std::vector<char> saveState() const;
     bool restoreState(const std::vector<char>& data, uint64_t clk);
 
 private:
+    struct Fifo
+    {
+        std::vector<int16_t> buf;
+        size_t rd = 0, wr = 0;
+        void push(int16_t s)
+        {
+            const size_t next = (wr + 1) % kFifoSize;
+            if (next == rd)
+                rd = (rd + 1) % kFifoSize; // overflow: drop the oldest
+            buf[wr] = s;
+            wr = next;
+        }
+        size_t available() const { return (wr + kFifoSize - rd) % kFifoSize; }
+        void pop(float* out, size_t n);
+        void clear() { rd = wr = 0; }
+    };
     struct Chip
     {
         std::unique_ptr<reSIDfp::residfp> sid;
+        // Voice outputs: one chip per voice, hearing only that voice.
+        std::array<std::unique_ptr<reSIDfp::residfp>, kVoices> taps;
+        std::array<Fifo, kVoices> voiceFifo;
         uint64_t clk = 0;
         // A chip nobody has written to since its reset is dormant once its
         // output has settled: it is not clocked at all, it produces silence.
@@ -144,12 +181,14 @@ private:
         bool written = false;
         uint64_t resetClk = 0;
         double silentFrac = 0.0;
-        std::vector<int16_t> fifo;
-        size_t rd = 0, wr = 0;
+        Fifo fifo;
     };
     void catchUp(Chip& c, uint64_t clk);
     void pushSilence(Chip& c, uint64_t cycles);
     void applyTuning(int i, bool force);
+    void setSampling(reSIDfp::residfp& sid) const;
+    // Builds a chip's taps as copies of the chip, each hearing one voice.
+    void createTaps(int i);
 
     SidBankConfig cfg_;
     std::array<SidChipConfig, kMaxChips> applied_{};

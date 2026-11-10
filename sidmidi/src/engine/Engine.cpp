@@ -72,6 +72,17 @@ std::vector<uint8_t> Engine::saveAudioState() const
         put(&k, 4);
         put(p.data(), p.size() * sizeof(int16_t));
     }
+    // The voice outputs' queues after them (older builds stop reading before).
+    for (int i = 0; i < c64_.sids.count(); ++i) {
+        if (!c64_.sids.hasVoices(i))
+            continue;
+        for (int v = 0; v < emu::SidBank::kVoices; ++v) {
+            const auto p = c64_.sids.pendingVoice(i, v);
+            const uint32_t k = static_cast<uint32_t>(p.size());
+            put(&k, 4);
+            put(p.data(), p.size() * sizeof(int16_t));
+        }
+    }
     return out;
 }
 
@@ -104,6 +115,21 @@ bool Engine::loadAudioState(const std::vector<uint8_t>& data)
     wasWarping_ = warm != 0;
     for (uint32_t i = 0; i < n; ++i)
         c64_.sids.setPending(static_cast<int>(i), fifos[i]);
+    // Voice queues, when the project has them; else setPending's silence stays.
+    std::vector<int16_t> q;
+    for (uint32_t i = 0; i < n; ++i) {
+        if (!c64_.sids.hasVoices(static_cast<int>(i)))
+            continue;
+        for (int v = 0; v < emu::SidBank::kVoices; ++v) {
+            uint32_t k = 0;
+            if (!get(&k, 4) || k > emu::SidBank::kFifoSize)
+                return true;
+            q.resize(k);
+            if (!get(q.data(), k * sizeof(int16_t)))
+                return true;
+            c64_.sids.setPendingVoice(static_cast<int>(i), v, q);
+        }
+    }
     return true;
 }
 
@@ -169,9 +195,13 @@ void Engine::process(uint32_t frames, const MidiEvent* events, size_t numEvents,
             std::fill(out.left, out.left + frames, 0.0f);
         if (out.right)
             std::fill(out.right, out.right + frames, 0.0f);
-        for (int i = 0; i < emu::SidBank::kMaxChips; ++i)
+        for (int i = 0; i < emu::SidBank::kMaxChips; ++i) {
             if (out.sid[i])
                 std::fill(out.sid[i], out.sid[i] + frames, 0.0f);
+            for (float* v : out.voice[i])
+                if (v)
+                    std::fill(v, v + frames, 0.0f);
+        }
         wasWarping_ = true;
         driveLed.store(c64_.drive.busy() || (c64_.trueDriveActive() && c64_.drive1541.ledOn()), std::memory_order_relaxed);
         return;
@@ -216,30 +246,43 @@ void Engine::process(uint32_t frames, const MidiEvent* events, size_t numEvents,
         std::fill(out.right, out.right + frames, 0.0f);
     if (scratch_.size() < frames)
         scratch_.resize(frames);
-    for (int i = 0; i < emu::SidBank::kMaxChips; ++i) {
-        float* buf = scratch_.data();
-        if (i >= nSids) {
-            if (out.sid[i])
-                std::fill(out.sid[i], out.sid[i] + frames, 0.0f);
-            continue;
-        }
-        const size_t avail = c64_.sids.available(i);
+    // Takes `frames` samples from a FIFO into `buf`, keeping kSidLatency queued.
+    auto drain = [&](size_t avail, auto pop, float* buf) {
         if (avail < frames + kSidLatency) {
             // Not enough yet (just primed): pad at the front.
             const size_t have = avail > kSidLatency ? avail - kSidLatency : 0;
             const size_t pad = frames - std::min<size_t>(frames, have);
             std::fill(buf, buf + pad, 0.0f);
-            c64_.sids.pop(i, buf + pad, frames - pad);
+            pop(buf + pad, frames - pad);
         } else {
             // More than needed (should not happen): drop the excess first.
             const size_t excess = avail - frames - kSidLatency;
             for (size_t left = excess > 4 ? excess : 0; left;) {
                 const size_t n = std::min<size_t>(left, frames);
-                c64_.sids.pop(i, buf, n);
+                pop(buf, n);
                 left -= n;
             }
-            c64_.sids.pop(i, buf, frames);
+            pop(buf, frames);
         }
+    };
+    for (int i = 0; i < emu::SidBank::kMaxChips; ++i) {
+        float* buf = scratch_.data();
+        const bool voices = i < nSids && c64_.sids.hasVoices(i);
+        for (int v = 0; v < emu::SidBank::kVoices; ++v) {
+            float* dst = out.voice[i][v];
+            if (voices && dst)
+                drain(c64_.sids.availableVoice(i, v), [&](float* b, size_t n) { c64_.sids.popVoice(i, v, b, n); }, dst);
+            else if (voices) // nobody listens: keep the queue at its latency
+                drain(c64_.sids.availableVoice(i, v), [&](float* b, size_t n) { c64_.sids.popVoice(i, v, b, n); }, buf);
+            else if (dst)
+                std::fill(dst, dst + frames, 0.0f);
+        }
+        if (i >= nSids) {
+            if (out.sid[i])
+                std::fill(out.sid[i], out.sid[i] + frames, 0.0f);
+            continue;
+        }
+        drain(c64_.sids.available(i), [&](float* b, size_t n) { c64_.sids.pop(i, b, n); }, buf);
         if (out.sid[i])
             std::memcpy(out.sid[i], buf, frames * sizeof(float));
         const float g = mix[i].level * masterGain;

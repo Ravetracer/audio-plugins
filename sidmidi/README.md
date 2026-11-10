@@ -10,7 +10,7 @@ cartridge arrives in the DAW as MIDI.
 It is not a SID synthesizer with a C64 skin. The instrument is the C64
 program; SidMidi is the computer it runs on.
 
-**Status: 0.6.0.** Released for Linux and Windows, CLAP and VST3. The manual
+**Status: 0.7.0.** Released for Linux and Windows, CLAP and VST3. The manual
 is `docs/manual.md` (the PDF ships in the release archive); the plan and its
 phases are in [docs/PLAN.md](docs/PLAN.md).
 
@@ -110,6 +110,10 @@ phases are in [docs/PLAN.md](docs/PLAN.md).
 ### Outputs
 
 A stereo main output with every SID panned in, and one mono output per SID.
+With **Voice outputs** on (machine page), each voice of every SID also has an
+output of its own, 24 in all: three more reSIDfp instances per SID, each
+hearing one voice, so every voice keeps the chip's filter. It costs about
+four times the processing per SID in use.
 
 ## The ROMs
 
@@ -163,7 +167,7 @@ Release material, all run in the devbox and writing only into `build/` and
 **GPL-2.0-or-later** — this folder only. The SID emulation is reSIDfp from
 [libresidfp](https://github.com/libsidplayfp/libresidfp) 1.2.3 (Dag Lem,
 Antti S. Lankila, Leandro Nini), vendored in `third_party/libresidfp` with
-one patch of ours (`third_party/patches/`), under the GPL, which makes SidMidi as a whole GPL. The palettes in `palettes/`
+three patches of ours (`third_party/patches/`), under the GPL, which makes SidMidi as a whole GPL. The palettes in `palettes/`
 are VICE's (GPL). HerMIDI's firmware in `third_party/hermidi` is Mihaly
 Horvath's, from the WTF-licensed SID-Wizard package. The rest of this
 repository is MIT.

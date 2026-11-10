@@ -438,6 +438,33 @@ button only cleared its own flag.
 - The status bar shows "SidMidi <version>" left of the indicators, so the
   user can tell which build a host has loaded.
 
+## Status (0.7.0, 2026-11-10)
+
+The user asked for every SID voice on its own DAW track.
+- **Voice outputs** (Machine page, `voice_outputs`; off by default): 24 more
+  mono ports after Main and SID 1-8. A SID mixes its voices in one analogue
+  filter, so nothing can be tapped after it; instead each chip gets three
+  more reSIDfp instances (`SidBank` taps) that get every register write and
+  hear one voice each (patch 0003). Built and seeded from the chip's state
+  in `configure()`, off the audio thread.
+- The mask first left the other voices out of the sums: reSIDfp then picks
+  the op-amp tables for fewer inputs and a lone voice was pure DC (two
+  together sounded). Feeding a muted voice as a closed envelope fixed it.
+- Cost, `sidmidi-run --voices` (prints process time now), Cynthcart on one
+  SID: 9.5 % of a core without, 26 % with; Fast resampling 24 %, so the
+  filters cost, not the resamplers. Unused SIDs stay dormant. A deeper
+  reSIDfp patch (one chip, four outputs) would share only oscillators and
+  envelopes -- judged not worth it.
+- Separation (`sidmidi-run --voices --wav`, a three-note chord): the three
+  voices summed minus the SID's output is -17 dB against -22 dB on a 6581,
+  -30 dB against -21 dB on an 8580, at lag 0 -- the filter and mixer
+  saturate on the sum, which no separation can split; one voice alone
+  matches to -71 dB. The manual says so.
+- Snapshot: tap states appended after the chips; audio state: their queues
+  appended. `sidmidi-selftest`: main bit-identical with taps on, voice ports
+  silent when off, no allocation, a note lands on one voice, a round trip is
+  exact for the voices too.
+
 ## Next session
 
 Where 0.5.0 was left (2026-11-10):

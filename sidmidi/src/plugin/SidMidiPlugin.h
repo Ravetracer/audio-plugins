@@ -72,6 +72,7 @@ public:
     const void* getExtension(const char* id);
     void onMainThread();
 
+    static constexpr uint32_t kVoicePort0 = 9; // the first voice output
     uint32_t audioPortsCount(bool isInput) const;
     bool audioPortsGet(uint32_t index, bool isInput, clap_audio_port_info_t* info) const;
     uint32_t notePortsCount(bool isInput) const { return 1; }

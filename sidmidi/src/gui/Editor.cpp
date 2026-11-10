@@ -361,6 +361,11 @@ public:
                     })
             ->setTooltip("When the machine warps on its own (muted): while a program starts, and while the "
                          "True 1541's motor runs. The Warp button stops a running one.");
+        add<Choice>("Voice outputs", std::vector<std::string>{"Off", "On"},
+                    [&pl] { return pl.settings().sids.voiceOutputs ? 1 : 0; },
+                    [edit](int i) { edit([i](MachineSettings& s) { s.sids.voiceOutputs = i == 1; }); })
+            ->setTooltip("Each SID voice on its own output (SID 1 Voice 1 ... SID 8 Voice 3), with its own filter. "
+                         "About four times the processing per SID in use.");
 
         for (const char* h : {"", "Address", "Model", "Curve", "Range", "Caps", "Combined", "Level", "Pan"})
             add<Label>(h, 10.0f, Align::Left, theme::textFaint);
@@ -456,10 +461,10 @@ public:
         for (int i = 0; i < 4 && k < ch.size(); ++i, ++k)
             ch[k]->setBounds({x0 + i * (cw + gap), y0, cw, rowH});
         // Second row: the two control ports, the SID count, the keyboard;
-        // third: the resampling, the automatic warp.
+        // third: the resampling, the automatic warp, the voice outputs.
         for (int i = 0; i < 4 && k < ch.size(); ++i, ++k)
             ch[k]->setBounds({x0 + i * (cw + gap), y0 + rowH + gap, cw, rowH});
-        for (int i = 0; i < 2 && k < ch.size(); ++i, ++k)
+        for (int i = 0; i < 3 && k < ch.size(); ++i, ++k)
             ch[k]->setBounds({x0 + i * (cw + gap), y0 + 2 * (rowH + gap), cw, rowH});
         // The SID table.
         constexpr int nc = 9;

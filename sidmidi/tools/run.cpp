@@ -20,6 +20,8 @@
 //     --filter-range I:V    6581 filter range of SID I, 0..1 (after --model)
 //     --old-caps I          SID I has the 2200 pF filter caps (after --model)
 //     --fast-resampling     nearest sample instead of the sinc resampler
+//     --voices              voice outputs on; with --wav, each voice of each SID is
+//                           written beside it as <wav>-sid<N>-v<V>.wav (mono)
 //     --no-disk-warp        the true 1541 loads in real time (no warp while its motor runs)
 //     --freeze T            press the cartridge's freeze button (Action Replay, Final Cartridge)
 //     --dump T:FILE         write the C64's 64K of RAM to FILE
@@ -44,6 +46,7 @@
 #include <cairo/cairo.h>
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
@@ -119,7 +122,7 @@ bool writePng(const std::string& path, const uint8_t* frame, const Palette& pal)
     return ok;
 }
 
-bool writeWav(const std::string& path, const std::vector<float>& lr, int rate)
+bool writeWav(const std::string& path, const std::vector<float>& lr, int rate, uint16_t channels = 2)
 {
     FILE* f = std::fopen(path.c_str(), "wb");
     if (!f)
@@ -132,10 +135,10 @@ bool writeWav(const std::string& path, const std::vector<float>& lr, int rate)
     std::fwrite("WAVEfmt ", 1, 8, f);
     u32(16);
     u16(3); // float
-    u16(2);
+    u16(channels);
     u32(static_cast<uint32_t>(rate));
-    u32(static_cast<uint32_t>(rate * 8));
-    u16(8);
+    u32(static_cast<uint32_t>(rate * 4 * channels));
+    u16(static_cast<uint16_t>(4 * channels));
     u16(32);
     std::fwrite("data", 1, 4, f);
     u32(bytes);
@@ -249,6 +252,8 @@ int main(int argc, char** argv)
             noDiskWarp = true;
         } else if (a == "--fast-resampling") {
             sidCfg.resampling = emu::SidResampling::Fast;
+        } else if (a == "--voices") {
+            sidCfg.voiceOutputs = true;
         } else if (a == "--note") {
             const auto p = split(next());
             const double t = std::atof(p[0].c_str());
@@ -390,6 +395,13 @@ int main(int argc, char** argv)
 
     const Palette& pal = palette(paletteKey);
     std::vector<float> l(static_cast<size_t>(block)), r(static_cast<size_t>(block)), wavData;
+    // Voice outputs: SID 1 voice 1, 2, 3, SID 2 voice 1, ...
+    std::vector<std::vector<float>> voiceBuf, voiceData;
+    if (sidCfg.voiceOutputs) {
+        voiceBuf.assign(static_cast<size_t>(sidCfg.count) * 3, std::vector<float>(static_cast<size_t>(block)));
+        voiceData.resize(voiceBuf.size());
+    }
+    double processSeconds = 0.0;
     std::vector<MidiEvent> events, midiOut;
     midiOut.reserve(4096); // Engine::process appends only up to the capacity
     std::vector<uint8_t> frame(static_cast<size_t>(emu::Vic::kWidth) * emu::Vic::kHeight);
@@ -460,8 +472,14 @@ int main(int argc, char** argv)
         Engine::Outputs out;
         out.left = l.data();
         out.right = r.data();
+        if (sidCfg.voiceOutputs)
+            for (size_t i = 0; i < voiceBuf.size(); ++i)
+                out.voice[i / 3][i % 3] = voiceBuf[i].data();
         const bool warp = engine.warping();
+        const auto t0 = std::chrono::steady_clock::now();
         engine.process(n, events.data(), events.size(), out, midiOut);
+        if (!warp)
+            processSeconds += std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
         if (warp) {
             if (++warpBlocks > 100000) {
                 std::fprintf(stderr, "never left warp: the program did not start\n");
@@ -473,6 +491,8 @@ int main(int argc, char** argv)
             wavData.push_back(l[k]);
             wavData.push_back(r[k]);
         }
+        for (size_t i = 0; i < voiceBuf.size(); ++i)
+            voiceData[i].insert(voiceData[i].end(), voiceBuf[i].begin(), voiceBuf[i].begin() + n);
         for (const auto& e : midiOut)
             std::printf("midi out @%.4fs: %02X\n", static_cast<double>(done + e.offset) / rate, e.data[0]);
         done += n;
@@ -501,6 +521,8 @@ int main(int argc, char** argv)
     std::printf("audio: %.2fs, peak %.1f dBFS, rms %.1f dBFS; warp blocks %llu; pc=%04X\n",
                 static_cast<double>(done) / rate, 20.0 * std::log10(std::max(peak, 1e-9f)),
                 20.0 * std::log10(std::max(rms, 1e-12)), static_cast<unsigned long long>(warpBlocks), c64.cpu.s.pc);
+    std::printf("process time: %.3fs for %.2fs of audio (%.1f %% of real time)\n", processSeconds,
+                static_cast<double>(done) / rate, done ? 100.0 * processSeconds * rate / static_cast<double>(done) : 0.0);
     if (!exportD64.empty()) {
         if (!writeFile(exportD64, c64.diskImage().data()))
             std::fprintf(stderr, "cannot write %s\n", exportD64.c_str());
@@ -510,6 +532,16 @@ int main(int argc, char** argv)
     if (!wav.empty() && !writeWav(wav, wavData, rate)) {
         std::fprintf(stderr, "cannot write %s\n", wav.c_str());
         return 1;
+    }
+    if (!wav.empty()) {
+        const std::string stem = wav.size() > 4 && wav.compare(wav.size() - 4, 4, ".wav") == 0 ? wav.substr(0, wav.size() - 4) : wav;
+        for (size_t i = 0; i < voiceData.size(); ++i) {
+            const std::string path = stem + "-sid" + std::to_string(i / 3 + 1) + "-v" + std::to_string(i % 3 + 1) + ".wav";
+            if (!writeWav(path, voiceData[i], rate, 1)) {
+                std::fprintf(stderr, "cannot write %s\n", path.c_str());
+                return 1;
+            }
+        }
     }
     return 0;
 }

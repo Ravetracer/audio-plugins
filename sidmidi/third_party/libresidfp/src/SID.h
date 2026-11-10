@@ -355,6 +355,11 @@ public:
     void enableFilter(bool enable);
 
     /**
+     * Voices heard (SidMidi): bit 0-2 voice 1-3, bit 3 EXT IN.
+     */
+    void setVoiceMask(uint8_t mask);
+
+    /**
      * Enable/disable old caps (2200pF) for 6581 model.
      */
     void enableOld6581caps(bool enable);

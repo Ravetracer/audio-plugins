@@ -196,6 +196,12 @@ void SID::enableFilter(bool enable)
     filter8580->enable(enable);
 }
 
+void SID::setVoiceMask(uint8_t mask)
+{
+    filter6581->setVoiceMask(mask);
+    filter8580->setVoiceMask(mask);
+}
+
 void SID::enableOld6581caps(bool enable)
 {
     p->old6581caps = enable;

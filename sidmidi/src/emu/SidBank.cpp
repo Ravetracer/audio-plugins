@@ -69,22 +69,36 @@ SidTuning sidVariantTuning(SidVariant v)
 
 SidBank::SidBank()
 {
-    for (auto& c : chips_)
-        c.fifo.assign(kFifoSize, 0);
+    for (auto& c : chips_) {
+        c.fifo.buf.assign(kFifoSize, 0);
+        for (auto& f : c.voiceFifo)
+            f.buf.assign(kFifoSize, 0);
+    }
     scratch_.resize(1 << 16);
+}
+
+void SidBank::Fifo::pop(float* out, size_t n)
+{
+    constexpr float k = 1.0f / 32768.0f;
+    for (size_t i = 0; i < n; ++i) {
+        if (rd == wr) {
+            out[i] = 0.0f;
+            continue;
+        }
+        out[i] = static_cast<float>(buf[rd]) * k;
+        rd = (rd + 1) % kFifoSize;
+    }
 }
 
 SidBank::~SidBank() = default;
 
-void SidBank::applyTuning(int i, bool force)
+namespace {
+// Applies a chip's tuning to one reSIDfp instance. Only what changed is
+// touched: a new chip model rebuilds tables, a filter curve does not, and a
+// slider drag must stay cheap. `valid` false applies everything.
+void tune(reSIDfp::residfp& sid, const SidChipConfig& cc, const SidChipConfig& was, bool valid)
 {
-    auto& sid = *chips_[i].sid;
-    const auto& cc = cfg_.chips[i];
-    const auto& was = applied_[i];
-    const bool valid = appliedValid_[i] && !force;
     const bool is8580 = sidVariantIs8580(cc.variant);
-    // Only what changed is touched: a new chip model rebuilds tables, a filter
-    // curve does not, and a slider drag must stay cheap.
     const bool modelChanged = !valid || sidVariantIs8580(was.variant) != is8580;
     if (modelChanged)
         sid.setChipModel(is8580 ? reSIDfp::CSG8580 : reSIDfp::MOS6581);
@@ -112,8 +126,52 @@ void SidBank::applyTuning(int i, bool force)
         sid.setFilter6581Range(std::clamp<double>(cc.tuning.filterRange, 0.0, 1.0));
     if (modelChanged || was.tuning.oldCaps != cc.tuning.oldCaps)
         sid.enableOld6581caps(cc.tuning.oldCaps);
-    applied_[i] = cc;
+}
+} // namespace
+
+void SidBank::applyTuning(int i, bool force)
+{
+    const bool valid = appliedValid_[i] && !force;
+    tune(*chips_[i].sid, cfg_.chips[i], applied_[i], valid);
+    for (auto& t : chips_[i].taps)
+        if (t)
+            tune(*t, cfg_.chips[i], applied_[i], valid);
+    applied_[i] = cfg_.chips[i];
     appliedValid_[i] = true;
+}
+
+void SidBank::setSampling(reSIDfp::residfp& sid) const
+{
+    sid.setSamplingParameters(clockHz_, cfg_.resampling == SidResampling::Fast ? reSIDfp::DECIMATE : reSIDfp::RESAMPLE,
+                              sampleRate_);
+}
+
+void SidBank::createTaps(int i)
+{
+    auto& c = chips_[i];
+    // The chip as it is now: registers, oscillators, envelopes and filter.
+    std::vector<char> state(static_cast<size_t>(c.sid->stateSize()));
+    c.sid->saveState(state.data(), static_cast<int>(state.size()));
+    const auto& cc = cfg_.chips[i];
+    for (int v = 0; v < kVoices; ++v) {
+        auto t = std::make_unique<reSIDfp::residfp>();
+        tune(*t, cc, cc, false);
+        setSampling(*t);
+        t->reset();
+        std::vector<char> copy = state; // restoreState wants a mutable buffer
+        t->restoreState(copy.data(), static_cast<int>(copy.size()));
+        if (!sidVariantIs8580(cc.variant)) {
+            t->setFilter6581Range(std::clamp<double>(cc.tuning.filterRange, 0.0, 1.0));
+            t->enableOld6581caps(cc.tuning.oldCaps);
+        }
+        t->setVoiceMask(static_cast<unsigned char>(1u << v));
+        c.taps[static_cast<size_t>(v)] = std::move(t);
+        // As far behind as the chip's own output, so the voices line up with it.
+        auto& f = c.voiceFifo[static_cast<size_t>(v)];
+        f.clear();
+        for (size_t k = c.fifo.available(); k > 0; --k)
+            f.push(0);
+    }
 }
 
 void SidBank::configure(const SidBankConfig& cfg, double clockHz, double sampleRate, uint64_t clk)
@@ -133,21 +191,30 @@ void SidBank::configure(const SidBankConfig& cfg, double clockHz, double sampleR
             fresh = true;
         }
         applyTuning(i, fresh);
-        if (fresh || rateChanged)
-            c.sid->setSamplingParameters(clockHz_,
-                                         cfg_.resampling == SidResampling::Fast ? reSIDfp::DECIMATE : reSIDfp::RESAMPLE,
-                                         sampleRate_);
+        if (fresh || rateChanged) {
+            setSampling(*c.sid);
+            for (auto& t : c.taps)
+                if (t)
+                    setSampling(*t);
+        }
         if (fresh || rateChanged || i >= oldCount) {
             // A chip that was not running starts at the machine's time.
             c.clk = clk;
             c.resetClk = clk;
-            c.rd = c.wr = 0;
+            c.fifo.clear();
+            for (auto& f : c.voiceFifo)
+                f.clear();
         }
         if (fresh) {
             c.sid->reset();
             for (int r = 0; r < 25; ++r)
                 c.sid->write(r, regs_[i][r]);
         }
+        if (cfg_.voiceOutputs && !c.taps[0])
+            createTaps(i);
+        else if (!cfg_.voiceOutputs && c.taps[0])
+            for (auto& t : c.taps)
+                t.reset();
     }
     setPots(potX_, potY_);
 }
@@ -158,6 +225,9 @@ void SidBank::reset(uint64_t clk)
         auto& c = chips_[i];
         catchUp(c, clk);
         c.sid->reset();
+        for (auto& t : c.taps)
+            if (t)
+                t->reset();
         regs_[i].fill(0);
         c.written = false;
         c.resetClk = clk;
@@ -186,12 +256,12 @@ void SidBank::pushSilence(Chip& c, uint64_t cycles)
     const double exact = static_cast<double>(cycles) * sampleRate_ / clockHz_ + c.silentFrac;
     const auto n = static_cast<uint64_t>(exact);
     c.silentFrac = exact - static_cast<double>(n);
+    const bool voices = c.taps[0] != nullptr;
     for (uint64_t k = 0; k < n; ++k) {
-        const size_t next = (c.wr + 1) % kFifoSize;
-        if (next == c.rd)
-            c.rd = (c.rd + 1) % kFifoSize;
-        c.fifo[c.wr] = 0;
-        c.wr = next;
+        c.fifo.push(0);
+        if (voices)
+            for (auto& f : c.voiceFifo)
+                f.push(0);
     }
 }
 
@@ -236,12 +306,14 @@ void SidBank::catchUp(Chip& c, uint64_t clk)
         const unsigned n = static_cast<unsigned>(std::min<uint64_t>(todo, 20000));
         todo -= n;
         const int got = c.sid->clock(n, scratch_.data());
-        for (int k = 0; k < got; ++k) {
-            const size_t next = (c.wr + 1) % kFifoSize;
-            if (next == c.rd)
-                c.rd = (c.rd + 1) % kFifoSize; // overflow: drop the oldest
-            c.fifo[c.wr] = scratch_[k];
-            c.wr = next;
+        for (int k = 0; k < got; ++k)
+            c.fifo.push(scratch_[k]);
+        for (int v = 0; v < kVoices; ++v) {
+            if (!c.taps[static_cast<size_t>(v)])
+                continue;
+            const int gv = c.taps[static_cast<size_t>(v)]->clock(n, scratch_.data());
+            for (int k = 0; k < gv; ++k)
+                c.voiceFifo[static_cast<size_t>(v)].push(scratch_[k]);
         }
     }
 }
@@ -265,6 +337,9 @@ void SidBank::write(int chip, uint8_t reg, uint8_t v, uint64_t clk)
     c.written = true;
     regs_[chip][reg & 0x1f] = v;
     c.sid->write(reg & 0x1f, v);
+    for (auto& t : c.taps)
+        if (t)
+            t->write(reg & 0x1f, v);
 }
 
 void SidBank::setPots(uint8_t x, uint8_t y)
@@ -283,45 +358,52 @@ void SidBank::sync(uint64_t clk)
 
 void SidBank::discard()
 {
-    for (auto& c : chips_)
-        c.rd = c.wr;
-}
-
-size_t SidBank::available(int chip) const
-{
-    const auto& c = chips_[chip];
-    return (c.wr + kFifoSize - c.rd) % kFifoSize;
-}
-
-void SidBank::pop(int chip, float* out, size_t n)
-{
-    auto& c = chips_[chip];
-    constexpr float k = 1.0f / 32768.0f;
-    for (size_t i = 0; i < n; ++i) {
-        if (c.rd == c.wr) {
-            out[i] = 0.0f;
-            continue;
-        }
-        out[i] = static_cast<float>(c.fifo[c.rd]) * k;
-        c.rd = (c.rd + 1) % kFifoSize;
+    for (auto& c : chips_) {
+        c.fifo.rd = c.fifo.wr;
+        for (auto& f : c.voiceFifo)
+            f.rd = f.wr;
     }
 }
 
 std::vector<int16_t> SidBank::pending(int chip) const
 {
-    const auto& c = chips_[chip];
+    const auto& f = chips_[chip].fifo;
     std::vector<int16_t> out;
-    for (size_t i = c.rd; i != c.wr; i = (i + 1) % kFifoSize)
-        out.push_back(c.fifo[i]);
+    for (size_t i = f.rd; i != f.wr; i = (i + 1) % kFifoSize)
+        out.push_back(f.buf[i]);
     return out;
 }
 
 void SidBank::setPending(int chip, const std::vector<int16_t>& samples)
 {
     auto& c = chips_[chip];
-    c.rd = c.wr = 0;
+    c.fifo.clear();
     for (size_t i = 0; i < samples.size() && i + 1 < kFifoSize; ++i)
-        c.fifo[c.wr++] = samples[i];
+        c.fifo.push(samples[i]);
+    // The voices' own queues are not in the state: silence, as long.
+    for (auto& f : c.voiceFifo) {
+        f.clear();
+        if (c.taps[0])
+            for (size_t i = 0; i < c.fifo.available(); ++i)
+                f.push(0);
+    }
+}
+
+std::vector<int16_t> SidBank::pendingVoice(int chip, int v) const
+{
+    const auto& f = chips_[chip].voiceFifo[static_cast<size_t>(v)];
+    std::vector<int16_t> out;
+    for (size_t i = f.rd; i != f.wr; i = (i + 1) % kFifoSize)
+        out.push_back(f.buf[i]);
+    return out;
+}
+
+void SidBank::setPendingVoice(int chip, int v, const std::vector<int16_t>& samples)
+{
+    auto& f = chips_[chip].voiceFifo[static_cast<size_t>(v)];
+    f.clear();
+    for (size_t i = 0; i < samples.size() && i + 1 < kFifoSize; ++i)
+        f.push(samples[i]);
 }
 
 std::vector<char> SidBank::saveState() const
@@ -335,6 +417,17 @@ std::vector<char> SidBank::saveState() const
         std::memcpy(out.data() + at, &n, 4);
         sid.saveState(out.data() + at + 4, n);
     }
+    // The voice taps after all chips (older builds stop reading before them).
+    for (int i = 0; i < cfg_.count; ++i)
+        for (const auto& t : chips_[i].taps) {
+            if (!t)
+                continue;
+            const int n = t->stateSize();
+            const size_t at = out.size();
+            out.resize(at + 4 + static_cast<size_t>(n));
+            std::memcpy(out.data() + at, &n, 4);
+            t->saveState(out.data() + at + 4, n);
+        }
     return out;
 }
 
@@ -365,8 +458,48 @@ bool SidBank::restoreState(const std::vector<char>& data, uint64_t clk)
         }
         at += static_cast<size_t>(n);
         c.clk = clk;
-        c.rd = c.wr = 0;
+        c.fifo.clear();
         c.written = true; // nothing is known about its history: keep it running
+    }
+    // Voice taps: their own states when the project has them, else copies of
+    // their chip (from a project saved without voice outputs).
+    for (int i = 0; i < cfg_.count; ++i) {
+        auto& c = chips_[i];
+        if (!c.taps[0])
+            continue;
+        bool own = true;
+        size_t probe = at;
+        for (int v = 0; v < kVoices && own; ++v) {
+            int n = 0;
+            if (probe + 4 > data.size()) {
+                own = false;
+                break;
+            }
+            std::memcpy(&n, data.data() + probe, 4);
+            own = n == c.taps[static_cast<size_t>(v)]->stateSize() && probe + 4 + static_cast<size_t>(n) <= data.size();
+            probe += 4 + static_cast<size_t>(n);
+        }
+        if (!own) {
+            for (auto& t : c.taps)
+                t.reset();
+            createTaps(i);
+            continue;
+        }
+        const auto& cc = cfg_.chips[static_cast<size_t>(i)];
+        for (int v = 0; v < kVoices; ++v) {
+            auto& t = *c.taps[static_cast<size_t>(v)];
+            int n = 0;
+            std::memcpy(&n, data.data() + at, 4);
+            at += 4;
+            std::vector<char> buf(data.begin() + static_cast<long>(at), data.begin() + static_cast<long>(at + n));
+            t.restoreState(buf.data(), n);
+            at += static_cast<size_t>(n);
+            if (!sidVariantIs8580(cc.variant)) {
+                t.setFilter6581Range(std::clamp<double>(cc.tuning.filterRange, 0.0, 1.0));
+                t.enableOld6581caps(cc.tuning.oldCaps);
+            }
+            c.voiceFifo[static_cast<size_t>(v)].clear();
+        }
     }
     return true;
 }

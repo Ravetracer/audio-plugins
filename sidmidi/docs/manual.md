@@ -34,7 +34,8 @@ What you get:
   Sequential, Passport, Namesoft, Maplin, Moog Song Producer) or the
   **HerMIDI** interface on the serial port.
 - **Up to eight SID chips**, each a 6581 or 8580 of a chosen revision, with
-  its own filter character, level and pan, and its own output.
+  its own filter character, level and pan, and its own output — and, if
+  you like, an output for each of its three voices.
 - A **disk drive** that loads instantly, or a complete emulated **1541** for
   programs with their own fast loaders. Whatever a program saves goes into
   the disk, which is kept in your project.
@@ -353,6 +354,10 @@ because it skips the filter that keeps high notes clean; the price is
 aliasing, a harsh, metallic edge on bright sounds. Try it when many SIDs
 play at once and your computer struggles.
 
+**Voice outputs** — Off, or On: every voice of every SID gets its own
+output as well (chapter 9). A SID with voice outputs takes about four times
+the processing time, so leave it off unless you route the voices.
+
 ### Each SID
 
 **Model** — 6581 (a generic one), 6581R3, 6581R4, 6581R4AR or 8580R5. The
@@ -457,6 +462,23 @@ If you do, change the map to match and save it as your own.
 A stereo **main output** with every SID at its level and pan, and **one mono
 output per SID**, for a separate mixer channel or effect chain per chip.
 Which outputs your DAW offers, and how they are routed, is set in the DAW.
+
+**Voice outputs.** With **Voice outputs** on (machine page), each of the
+three voices of every SID comes out on its own mono output as well: *SID 1
+Voice 1* to *SID 8 Voice 3*, 24 in all. Record them on separate tracks and
+treat each voice on its own. A voice keeps its share of the SID's sound —
+it goes through the chip's filter and volume just as in the chip — but each
+voice through a filter of its own. A SID's filter and mixer saturate a
+little when several loud voices play at once, the 6581 much more than the
+8580: that grit is part of the chip's sound and lives in the sum, so the
+three voice outputs mixed together sound cleaner than the SID's own output,
+and a 6581's a little louder too. Digitised sounds played through the
+volume register reach the voice outputs only in part. The per-SID output
+stays the real thing.
+
+The per-SID and voice outputs carry the chip's own signal: the machine
+page's **Level**, **Pan** and **Volume** shape the main output only. With
+voice outputs off, the 24 voice outputs are silent.
 
 ## 10. Projects
 
