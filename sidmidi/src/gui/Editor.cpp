@@ -9,6 +9,7 @@
 #include "engine/Resources.h"
 #include "plugin/CcMap.h"
 #include "plugin/SidMidiPlugin.h"
+#include "sidmidi.h"
 
 namespace sidmidi::gui {
 
@@ -324,7 +325,7 @@ public:
                         edit([i](MachineSettings& s) { s.driveMode = static_cast<emu::DriveMode>(i); });
                     })
             ->setTooltip("Virtual: instant, through the KERNAL. True 1541: the real drive, for programs with "
-                         "their own loaders (needs the 1541 ROM; loads in warp).");
+                         "their own loaders (needs the 1541 ROM).");
         for (int port = 0; port < 2; ++port)
             add<Choice>(port == 0 ? "Port 1" : "Port 2", std::vector<std::string>{"Joystick", "Mouse 1351", "Paddles"},
                         [&pl, port] { return static_cast<int>(pl.settings().portDevice[port]); },
@@ -347,6 +348,19 @@ public:
                     [&pl] { return static_cast<int>(pl.settings().sids.resampling); },
                     [edit](int i) { edit([i](MachineSettings& s) { s.sids.resampling = static_cast<emu::SidResampling>(i); }); })
             ->setTooltip("Sinc: clean, the reference. Fast: much cheaper with many SIDs, but it aliases (harsh highs).");
+        add<Choice>("Auto warp", std::vector<std::string>{"Start and disk", "Start only", "Disk only", "Off"},
+                    [&pl] {
+                        const auto& s = pl.settings();
+                        return (s.warpOnBoot ? 0 : 2) + (s.warpOnDiskAccess ? 0 : 1);
+                    },
+                    [edit](int i) {
+                        edit([i](MachineSettings& s) {
+                            s.warpOnBoot = i < 2;
+                            s.warpOnDiskAccess = i % 2 == 0;
+                        });
+                    })
+            ->setTooltip("When the machine warps on its own (muted): while a program starts, and while the "
+                         "True 1541's motor runs. The Warp button stops a running one.");
 
         for (const char* h : {"", "Address", "Model", "Curve", "Range", "Caps", "Combined", "Level", "Pan"})
             add<Label>(h, 10.0f, Align::Left, theme::textFaint);
@@ -437,16 +451,16 @@ public:
         const float w = bounds_.w - 32;
         const float rowH = 26, gap = 8;
         size_t k = 0;
-        // Machine row: video, palette, clock, drive; then the SID count.
+        // Machine row: video, palette, clock, drive.
         const float cw = (w - 3 * gap) / 4;
         for (int i = 0; i < 4 && k < ch.size(); ++i, ++k)
             ch[k]->setBounds({x0 + i * (cw + gap), y0, cw, rowH});
         // Second row: the two control ports, the SID count, the keyboard;
-        // third: the resampling.
+        // third: the resampling, the automatic warp.
         for (int i = 0; i < 4 && k < ch.size(); ++i, ++k)
             ch[k]->setBounds({x0 + i * (cw + gap), y0 + rowH + gap, cw, rowH});
-        if (k < ch.size())
-            ch[k++]->setBounds({x0, y0 + 2 * (rowH + gap), cw, rowH});
+        for (int i = 0; i < 2 && k < ch.size(); ++i, ++k)
+            ch[k]->setBounds({x0 + i * (cw + gap), y0 + 2 * (rowH + gap), cw, rowH});
         // The SID table.
         constexpr int nc = 9;
         const float cols[nc] = {0.07f, 0.08f, 0.13f, 0.13f, 0.11f, 0.10f, 0.11f, 0.14f, 0.13f};
@@ -756,7 +770,8 @@ Editor::Editor(SidMidiPlugin& plugin) : plugin_(plugin), window_(this)
     powerButton_ = add<Button>("Power", [this] { plugin_.powerCycle(); });
     powerButton_->setTooltip("Switch off and on: the attached program starts again");
     warpButton_ = add<Button>("Warp", [this] { plugin_.setWarp(!warpButton_->isActive()); });
-    warpButton_->setTooltip("Run as fast as possible (muted), e.g. while a program unpacks itself");
+    warpButton_->setTooltip("Run as fast as possible (muted), e.g. while a program unpacks itself. Lit by an automatic warp: "
+                            "click to stop it (Machine page: Auto warp)");
 
     std::vector<std::string> ifaces;
     for (int i = 0; i < static_cast<int>(emu::MidiInterface::Count); ++i)
@@ -866,6 +881,12 @@ void Editor::paintStatus(cairo_t* cr)
     led(x + 56, now < midiInLit_, theme::green, "In");
     led(x + 92, now < midiOutLit_, theme::accentBright, "Out");
     led(x + 132, warpLit_, theme::amp, "Warp");
+    // Which build this is, beside the indicators.
+    const float verW = 84;
+    setFont(cr, 10.0f);
+    drawText(cr, std::string(kPluginName) + " " + kPluginVersion, {x - 16 - verW, bar.y, verW, bar.h}, Align::Right,
+             theme::textFaint);
+    x -= verW + 8;
     setFont(cr, 10.5f);
     std::string text = notice_;
     Color c = noticeError_ ? theme::red : theme::text;

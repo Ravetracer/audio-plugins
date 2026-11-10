@@ -416,6 +416,28 @@ Also in 0.5.0, from the user's request for fast-loader cartridges:
   `--freeze`, `--dump`, `--no-disk-warp` for this. Keys held during a warped
   boot are not seen by the FC3 (hold RUN/STOP with `--no-disk-warp`).
 
+## Status (0.6.0, 2026-11-10)
+
+From the user's DAW use: a game with its own loader, on the True 1541,
+went into warp by itself and the Warp button could not stop it. Both warps
+were by design (start, and the true drive's motor, `Engine::autoWarping()`),
+but the disk one had only a state key (`warp_disk`) and no control, and the
+button only cleared its own flag.
+- **Auto warp** on the Machine page: start and disk, start only, disk only,
+  off (`warp_boot`, `warp_disk` in the settings; a project without
+  `warp_boot` keeps the start warp).
+- **The Warp button stops an automatic warp** (`Engine::holdAuto_`) until it
+  would have ended, i.e. the motor stops or the program has started; a new
+  start (anything that calls `Engine::resync()`) warps again. Settings
+  changes re-prime the audio through `resyncAudio()` and leave a stopped
+  warp stopped.
+- The private loader extension is `/4` (`warping`, `set_warp`);
+  `sidmidi-selftest` checks that a start warps, the button stops it, the next
+  load warps again and Auto warp off loads in real time. Put back, the
+  button check fails.
+- The status bar shows "SidMidi <version>" left of the indicators, so the
+  user can tell which build a host has loaded.
+
 ## Next session
 
 Where 0.5.0 was left (2026-11-10):

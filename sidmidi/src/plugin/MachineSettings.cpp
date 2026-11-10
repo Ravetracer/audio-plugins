@@ -20,6 +20,7 @@ std::string MachineSettings::toText() const
     o << "port2_device = " << static_cast<int>(portDevice[1]) << "\n";
     o << "send_clock = " << (sendClock ? 1 : 0) << "\n";
     o << "drive_mode = " << static_cast<int>(driveMode) << "\n";
+    o << "warp_boot = " << (warpOnBoot ? 1 : 0) << "\n";
     o << "warp_disk = " << (warpOnDiskAccess ? 1 : 0) << "\n";
     o << "screen_scale = " << screenScale << "\n";
     o << "cc_follow = " << (ccFollowProgram ? 1 : 0) << "\n";
@@ -75,6 +76,8 @@ void MachineSettings::fromText(const std::string& text)
             driveMode = iv ? emu::DriveMode::Virtual : emu::DriveMode::None;
         else if (key == "drive_mode")
             driveMode = static_cast<emu::DriveMode>(std::clamp(iv, 0, 2));
+        else if (key == "warp_boot")
+            warpOnBoot = iv != 0;
         else if (key == "warp_disk")
             warpOnDiskAccess = iv != 0;
         else if (key == "screen_scale")

@@ -31,6 +31,7 @@ struct MachineSettings
     emu::PortDevice portDevice[2] = {emu::PortDevice::Joystick, emu::PortDevice::Joystick};
     bool sendClock = false;        // MIDI clock and start/stop from the host transport
     emu::DriveMode driveMode = emu::DriveMode::Virtual;
+    bool warpOnBoot = true;        // warp until the program has started
     bool warpOnDiskAccess = true;  // the true 1541: warp while its motor runs
     int screenScale = 2;           // 1..3, the screen's pixel size at GUI scale 1
     bool ccFollowProgram = true;   // loading a program picks its CC map

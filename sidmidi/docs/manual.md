@@ -144,7 +144,10 @@ with the disk in the drive.
 
 **Warp** runs the machine as fast as it can, muted. Some programs unpack
 themselves for a while after loading; Station64, for example, needs about
-twelve seconds.
+twelve seconds. The button also lights up when the machine warps on its own
+(while a program starts, and while the True 1541 loads); click it then to
+stop that warp and watch the load in real time. The next start warps again;
+to switch it off for good, see **Auto warp** on the machine page.
 
 **MIDI** is the interface in the C64's expansion port (chapter 6). **Joy**
 puts a joystick on your keyboard, **Port** chooses the control port it is
@@ -213,25 +216,30 @@ SidMidi runs any C64 program, but the ones it is made for are the C64's
 MIDI synthesizers. They are not included; get them from their authors.
 Four have been tried throughout:
 
-**Cynthcart** — a synthesizer with presets, arpeggios and modulation. It
-finds the Datel cartridge by itself and answers on every MIDI channel at
-once. At its default octave, notes sound an octave lower than they are
-played.
+**Cynthcart** by Paul Slocum — a synthesizer with presets, arpeggios and
+modulation. It finds the Datel cartridge by itself and answers on every MIDI
+channel at once. At its default octave, notes sound an octave lower than
+they are played. Download: <https://www.qotile.net/cynthcart.html>
 
-**Station64** — a three-oscillator synthesizer with a deep sound engine. It
+**Station64** by DJ Indikator — a three-oscillator synthesizer with a deep sound engine. It
 listens on MIDI channels 1 to 3. It unpacks itself for about twelve seconds
 after loading; press **Warp** to skip the wait. It finds a Datel, Passport,
-Sequential or Namesoft interface by itself.
+Sequential or Namesoft interface by itself. Download:
+<https://ultradaw.com/station64/>, also on CSDb:
+<https://csdb.dk/release/?id=139033>
 
-**SID-Wizard** — a music editor (tracker) that can be played and sequenced
+**SID-Wizard** by Hermit — a music editor (tracker) that can be played and sequenced
 over MIDI. Its MIDI input is off when it starts: set it to OMNI or to a
 channel in its menu. It works with the cartridges and with HerMIDI.
+Download: <https://csdb.dk/release/?id=255544>
 
-**SID Synth** — a polyphonic synthesizer with arpeggiator, a bank of 54
+**SID Synth** by Lukhash — a polyphonic synthesizer with arpeggiator, a bank of 54
 instruments and a full CC setup. **Its MIDI is off when it starts:** press
 RUN/STOP (Esc) for its menu, choose item 01, and press RETURN until it says
 **DATEL** (or the interface you chose in SidMidi). Then RUN/STOP returns to
-the synthesizer.
+the synthesizer. SID Synth comes with Lukhash's album *Neon Airlines*: buy
+it at <https://lukhash.bandcamp.com/album/neon-airlines>, and the download
+instructions for the synth are inside the album archive.
 
 ![SID Synth after loading. Its menu (RUN/STOP) switches its MIDI on.](images/sidsynth.png)
 
@@ -326,6 +334,11 @@ of tune on the other.
 uses the C64's normal disk routines. **True 1541**: a complete 1541 drive,
 for programs with their own fast loaders; it needs the drive's DOS ROM, and
 loading runs in warp. **None**: no drive.
+
+**Auto warp** — when the machine warps on its own, muted: while a program
+starts, while the True 1541's motor runs, both (the default), or never.
+Turn the disk part off for a game or a demo that loads while it plays: in
+warp you would neither hear nor really see it.
 
 **Port 1, Port 2** — joystick, 1351 mouse or paddles (chapter 4).
 

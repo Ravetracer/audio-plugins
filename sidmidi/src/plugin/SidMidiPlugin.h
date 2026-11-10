@@ -33,7 +33,7 @@ class Editor;
 
 // A plugin-specific extension: load a program as the Load button does, and
 // count what reached the machine. For test harnesses and automation.
-inline constexpr char kExtLoader[] = "de.ravetracer.sidmidi.loader/3";
+inline constexpr char kExtLoader[] = "de.ravetracer.sidmidi.loader/4";
 struct ExtLoader
 {
     bool (*load_file)(const clap_plugin_t* plugin, const char* path);
@@ -45,6 +45,9 @@ struct ExtLoader
     // Files on the inserted disk (-1 without one), and whether a cartridge is in.
     int (*disk_files)(const clap_plugin_t* plugin);
     bool (*has_cartridge)(const clap_plugin_t* plugin);
+    // The Warp button: whether the machine warps (also on its own), and a click.
+    bool (*warping)(const clap_plugin_t* plugin);
+    void (*set_warp)(const clap_plugin_t* plugin, bool on);
 };
 
 

@@ -61,7 +61,7 @@ audio-plugins/
 | 3 | **Aurum** | `aurum/` | 0.3.1 | Linux, Windows | CLAP, VST3 | a clean-room algorithmic reverb (FDN, allpass ring, plate) with a per-frequency decay contour; own DSP and GUI, see *Aurum* below |
 | 4 | **Substrike** | `substrike/` | 1.1.0 | Linux, Windows | CLAP, VST3 | a layered kick drum designer for every style; standalone like Aurum, see *Substrike* below |
 | 5 | **Shapeau** | `shapeau/` | 0.4.0 | Linux, Windows | CLAP, VST3 | a multiband drawing rack: a reorderable chain of shape-driven effects per band, beat-synced or triggered by MIDI or a sidechain hit, with the audio drawn behind the shape; see *Shapeau* below |
-| 6 | **SidMidi** | `sidmidi/` | 0.5.1 | Linux, Windows | CLAP, VST3 | a Commodore 64 running the original C64 MIDI programs, played from the DAW through an emulated MIDI cartridge, with up to eight reSIDfp SIDs; GPL, standalone, see *SidMidi* below |
+| 6 | **SidMidi** | `sidmidi/` | 0.6.0 | Linux, Windows | CLAP, VST3 | a Commodore 64 running the original C64 MIDI programs, played from the DAW through an emulated MIDI cartridge, with up to eight reSIDfp SIDs; GPL, standalone, see *SidMidi* below |
 
 Naming follows the plugin, not a pattern: the CMake project, the installed
 artifact and the display name are CamelCase (`SaeureKiste`), the folder is
@@ -645,7 +645,7 @@ What to know before working there:
   emulated drive and a state round trip). `sidmidi-run` boots, autostarts, plays a MIDI
   script, writes WAV and PNG (`--sidregs` dumps SID 1). GUI shots: a private
   Xvfb in the devbox with `sidmidi-gui-host` (`SIDMIDI_LOAD=<file>` loads a
-  program through the plugin's `de.ravetracer.sidmidi.loader/3` extension, which also inserts a disk and
+  program through the plugin's `de.ravetracer.sidmidi.loader/4` extension, which also inserts a disk and
   starts from one for the tests).
 
 ## Build and install

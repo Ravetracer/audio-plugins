@@ -80,18 +80,28 @@ public:
     void process(uint32_t frames, const MidiEvent* events, size_t numEvents, const Outputs& out,
                  std::vector<MidiEvent>& midiOut);
 
-    // Warp until the program has started, and while the true 1541 works.
-    bool warping() const
+    // Warp when asked (the Warp button), and on its own until the program has
+    // started and while the true 1541 works -- each of those can be switched
+    // off, and an automatic warp in progress can be stopped by setWarp(false).
+    bool warping() const { return warp_ || (autoWarping() && !holdAuto_); }
+    bool autoWarping() const
     {
-        return warp_ || c64_.autostartPending() || c64_.booting() ||
+        return (warpOnBoot && (c64_.autostartPending() || c64_.booting())) ||
                (warpOnDiskAccess && c64_.trueDriveActive() && c64_.drive1541.motorOn());
     }
+    bool warpOnBoot = true;
     bool warpOnDiskAccess = true;
     // Realtime: warp spends at most part of each block's time, measured on the
     // clock. Offline (renders, tests): a fixed amount, so results repeat.
     bool realtime = true;
-    void setWarp(bool on) { warp_ = on; }
-    // After a power cycle or a reload: discard queued audio and re-prime.
+    // Off also stops an automatic warp that is running, until it would end.
+    void setWarp(bool on)
+    {
+        warp_ = on;
+        holdAuto_ = !on && autoWarping();
+    }
+    // After a power cycle or a reload: discard queued audio and re-prime, and
+    // let an automatic warp the Warp button stopped run again.
     void resync();
     // What lies between the machine and the outputs (the cycle fraction, the
     // samples queued per SID), so a restored project continues seamlessly.
@@ -109,6 +119,7 @@ public:
     std::atomic<bool> driveLed{false};
 
 private:
+    void resyncAudio(); // discard queued audio and re-prime
     void publishFrame();
     void runTo(uint64_t clk);
 
@@ -117,6 +128,7 @@ private:
     double cyclesPerSample_ = 985248.0 / 48000.0;
     double clkFrac_ = 0.0;
     bool warp_ = false;
+    bool holdAuto_ = false; // an automatic warp the user stopped
     bool wasWarping_ = true;
     uint64_t lastFrame_ = ~0ull;
     std::vector<float> scratch_;

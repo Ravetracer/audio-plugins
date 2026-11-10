@@ -15,7 +15,9 @@
 //    when it loads; the slots carry its names and value labels; a slot that
 //    moves reaches the machine as one message, an unchanged or unused one as
 //    none; the map travels with the state.
-// 5. Counts heap allocations inside process() once the program is running --
+// 5. Warp: a start warps on its own, the Warp button stops it (and only that
+//    one), and the Auto warp setting switches it off.
+// 6. Counts heap allocations inside process() once the program is running --
 //    this executable's operator new replaces the one the plugin's libstdc++
 //    would use -- through notes, and while a flood
 //    of MIDI, more than the cable queue holds, goes in; the count must stay
@@ -510,6 +512,43 @@ int main(int argc, char** argv)
         check(diffD == 0.0, "another instance's filter range leaves this one untouched");
         c.destroy();
         d.destroy();
+    }
+
+    // Warp. A load starts in warp on its own; the Warp button stops it, and
+    // the stop holds until that warp would have ended -- the next load warps
+    // again. With Auto warp off ("warp_boot = 0", "warp_disk = 0") it does not.
+    {
+        Instance e;
+        e.create(factory);
+        auto* le = static_cast<const sidmidi::ExtLoader*>(e.plugin->get_extension(e.plugin, sidmidi::kExtLoader));
+        le->load_file(e.plugin, argv[2]);
+        e.run(2);
+        check(le->warping(e.plugin), "a load warps on its own");
+        le->set_warp(e.plugin, false);
+        const bool stopped = !le->warping(e.plugin);
+        e.run(2); // in real time now: about 20 ms, far from the end of the start
+        check(stopped && !le->warping(e.plugin), "the Warp button stops an automatic warp");
+        le->load_file(e.plugin, argv[2]);
+        e.run(2);
+        check(le->warping(e.plugin), "the next load warps again");
+
+        auto* stE = static_cast<const clap_plugin_state_t*>(e.plugin->get_extension(e.plugin, CLAP_EXT_STATE));
+        Buffer offBuf;
+        clap_ostream_t osE{&offBuf, Buffer::write};
+        stE->save(e.plugin, &osE);
+        for (const std::string from : {"warp_boot = 1", "warp_disk = 1"}) {
+            const std::string to = from.substr(0, from.size() - 1) + "0";
+            auto it = std::search(offBuf.data.begin(), offBuf.data.end(), from.begin(), from.end());
+            check(it != offBuf.data.end(), ("the settings carry " + from.substr(0, 9)).c_str());
+            if (it != offBuf.data.end())
+                std::copy(to.begin(), to.end(), it);
+        }
+        clap_istream_t isE{&offBuf, Buffer::read};
+        check(stE->load(e.plugin, &isE), "a state with Auto warp off loads");
+        le->load_file(e.plugin, argv[2]);
+        e.run(2);
+        check(!le->warping(e.plugin), "with Auto warp off a load runs in real time");
+        e.destroy();
     }
 
     a.destroy();

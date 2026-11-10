@@ -23,13 +23,13 @@ void Engine::setSampleRate(double rate)
     rate_ = rate;
     cyclesPerSample_ = c64_.clockHz() / rate_;
     c64_.sids.configure(c64_.sids.config(), c64_.clockHz(), rate_, c64_.clk());
-    resync();
+    resyncAudio();
 }
 
 void Engine::configureSids(const emu::SidBankConfig& cfg)
 {
     c64_.sids.configure(cfg, c64_.clockHz(), rate_, c64_.clk());
-    resync();
+    resyncAudio();
 }
 
 void Engine::setStandard(emu::VideoStandard std)
@@ -37,10 +37,16 @@ void Engine::setStandard(emu::VideoStandard std)
     c64_.setStandard(std);
     cyclesPerSample_ = c64_.clockHz() / rate_;
     c64_.sids.configure(c64_.sids.config(), c64_.clockHz(), rate_, c64_.clk());
-    resync();
+    resyncAudio();
 }
 
 void Engine::resync()
+{
+    holdAuto_ = false; // a new start warps again
+    resyncAudio();
+}
+
+void Engine::resyncAudio()
 {
     c64_.sids.sync(c64_.clk());
     c64_.sids.discard();
@@ -135,6 +141,8 @@ void Engine::process(uint32_t frames, const MidiEvent* events, size_t numEvents,
     const int nSids = c64_.sids.count();
     const uint64_t start = c64_.clk();
     c64_.vic.renderVideo = videoWanted.load(std::memory_order_relaxed);
+    if (holdAuto_ && !autoWarping())
+        holdAuto_ = false; // the stopped warp is over; the next one runs again
 
     if (warping()) {
         // Cycles in bulk, audio and incoming MIDI dropped; the program has

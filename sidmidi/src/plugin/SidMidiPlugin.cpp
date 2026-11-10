@@ -207,6 +207,12 @@ struct Glue
         std::lock_guard<std::mutex> lock(self(p)->machineLock());
         return self(p)->engine().machine().cart.present();
     }
+    static bool loaderWarping(const clap_plugin_t* p)
+    {
+        std::lock_guard<std::mutex> lock(self(p)->machineLock());
+        return self(p)->warping();
+    }
+    static void loaderSetWarp(const clap_plugin_t* p, bool on) { self(p)->setWarp(on); }
     static const ExtLoader loader;
     // Offline bounces warp by a fixed amount, so they render the same every time.
     static bool renderHardRealtime(const clap_plugin_t*) { return false; }
@@ -218,7 +224,8 @@ struct Glue
     static const clap_plugin_render_t render;
 };
 const clap_plugin_render_t Glue::render = {renderHardRealtime, renderSetMode};
-const ExtLoader Glue::loader = {loaderLoad, loaderMidiIn, loaderAttach, loaderStart, loaderDiskFiles, loaderHasCart};
+const ExtLoader Glue::loader = {loaderLoad, loaderMidiIn, loaderAttach, loaderStart, loaderDiskFiles, loaderHasCart,
+                                  loaderWarping, loaderSetWarp};
 
 const clap_plugin_audio_ports_t Glue::audioPorts = {portsCount, portsGet};
 const clap_plugin_note_ports_t Glue::notePorts = {notePortsCount, notePortsGet};
@@ -366,6 +373,7 @@ void SidMidiPlugin::configureMachine()
     if (c64.midi.type != settings_.midi)
         c64.setMidiInterface(settings_.midi);
     c64.setDriveMode(settings_.driveMode);
+    engine_.warpOnBoot = settings_.warpOnBoot;
     engine_.warpOnDiskAccess = settings_.warpOnDiskAccess;
     for (int p = 0; p < 2; ++p)
         if (c64.m.device[p] != settings_.portDevice[p])

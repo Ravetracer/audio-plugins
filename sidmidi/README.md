@@ -10,7 +10,7 @@ cartridge arrives in the DAW as MIDI.
 It is not a SID synthesizer with a C64 skin. The instrument is the C64
 program; SidMidi is the computer it runs on.
 
-**Status: 0.5.1.** Released for Linux and Windows, CLAP and VST3. The manual
+**Status: 0.6.0.** Released for Linux and Windows, CLAP and VST3. The manual
 is `docs/manual.md` (the PDF ships in the release archive); the plan and its
 phases are in [docs/PLAN.md](docs/PLAN.md).
 
