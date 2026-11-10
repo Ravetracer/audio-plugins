@@ -61,7 +61,7 @@ audio-plugins/
 | 3 | **Aurum** | `aurum/` | 0.3.1 | Linux, Windows | CLAP, VST3 | a clean-room algorithmic reverb (FDN, allpass ring, plate) with a per-frequency decay contour; own DSP and GUI, see *Aurum* below |
 | 4 | **Substrike** | `substrike/` | 1.1.0 | Linux, Windows | CLAP, VST3 | a layered kick drum designer for every style; standalone like Aurum, see *Substrike* below |
 | 5 | **Shapeau** | `shapeau/` | 0.4.0 | Linux, Windows | CLAP, VST3 | a multiband drawing rack: a reorderable chain of shape-driven effects per band, beat-synced or triggered by MIDI or a sidechain hit, with the audio drawn behind the shape; see *Shapeau* below |
-| 6 | **SidMidi** | `sidmidi/` | 0.5.0 | Linux, Windows | CLAP, VST3 | a Commodore 64 running the original C64 MIDI programs, played from the DAW through an emulated MIDI cartridge, with up to eight reSIDfp SIDs; GPL, standalone, see *SidMidi* below |
+| 6 | **SidMidi** | `sidmidi/` | 0.5.1 | Linux, Windows | CLAP, VST3 | a Commodore 64 running the original C64 MIDI programs, played from the DAW through an emulated MIDI cartridge, with up to eight reSIDfp SIDs; GPL, standalone, see *SidMidi* below |
 
 Naming follows the plugin, not a pattern: the CMake project, the installed
 artifact and the display name are CamelCase (`SaeureKiste`), the folder is
@@ -602,7 +602,10 @@ What to know before working there:
 - **The emulator is ours** (`src/emu/`): one `Cpu6502<Bus>` template for the
   C64 and a later 1541, every bus access one cycle; `Vic` after Bauer's
   article; `Cia6526` with pipelines; `MidiCart` (6850; master-reset status
-  must read 0, Cynthcart's autodetect depends on it); `SidBank` (lazy
+  must read 0 for an ACIA held in reset since power-on -- Cynthcart's
+  autodetect depends on it -- while one that was running keeps TDRE, which
+  Station64's Sequential/Namesoft test waits for; `tools/interface-test.sh`
+  proves both); `SidBank` (lazy
   clocking, a FIFO per chip); `VirtualDrive` + `D64` (KERNAL serial traps at
   the 901227-03 entry points, checked by ROM signature).
   `src/engine/Engine` runs the machine per host block and is what the plugin

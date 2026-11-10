@@ -41,6 +41,10 @@ if [ -f "$prg" ] && [ -d "$roms" ]; then
     if [ -f "$ar" ] && [ -f "$fc3" ] && [ -f "$start" ] && [ -f "${start%.d64}.prg" ]; then
         tools/cart-test.sh "$roms" "$ar" "$fc3" "$start" "${start%.d64}.prg"
     fi
+    # Interface detection by the programs themselves, on every interface they know.
+    if [ -f "$start" ] && [ -f "$cart" ]; then
+        tools/interface-test.sh "$roms" "$start" "$cart"
+    fi
     # Offline renders repeat exactly, across processes too.
     for i in 1 2; do
         build/sidmidi-run --roms "$roms" --prg "$prg" --seconds 6 --note 4:60:100:1 --no-video \

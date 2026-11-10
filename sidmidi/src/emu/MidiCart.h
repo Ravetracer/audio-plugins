@@ -9,9 +9,11 @@
 // transmits leaves after its frame time and is handed to the plugin with the
 // cycle it finished on.
 //
-// After a master reset (control = %xxxxxx11) the status register reads 0, and
-// TDRE comes up once a non-reset control word is written: Cynthcart's
-// autodetection depends on exactly that.
+// After a master reset (control = %xxxxxx11) of an ACIA held in reset since
+// power-on the status register reads 0, and TDRE comes up once a non-reset
+// control word is written: Cynthcart's autodetection depends on exactly that.
+// An ACIA that was running and is reset again keeps TDRE readable, as in
+// VICE: Station64's Sequential/Namesoft test waits for it (MidiCart::write).
 
 #include <cstdint>
 #include <vector>

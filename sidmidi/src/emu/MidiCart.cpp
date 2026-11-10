@@ -144,9 +144,18 @@ void MidiCart::write(uint16_t addr, uint8_t v, uint64_t clk)
     if (!(off & 1)) {
         s.cr = v;
         if ((v & 0x03) == 0x03) {
-            // Master reset: status cleared, nothing in flight.
+            // Master reset: nothing in flight. The chip reads TDRE as 0
+            // while it is held in reset, and an ACIA held there since
+            // power-on does (Cynthcart's autodetection checks for it). One
+            // that was running and is put back into reset keeps TDRE
+            // readable, as VICE has it for every reset: Station64 2.6 tells
+            // Sequential from Namesoft by writing a control word from zero
+            // page ($31, BASIC's end-of-arrays pointer, $F7 after LOAD and
+            // RUN -- a master reset) and then waits for TDRE, which on the
+            // chip would never come.
+            const bool wasRunning = !s.inReset;
             s.inReset = true;
-            s.sr = 0;
+            s.sr = wasRunning ? TDRE : 0;
             s.txFull = false;
             s.txShifting = false;
         } else if (s.inReset) {

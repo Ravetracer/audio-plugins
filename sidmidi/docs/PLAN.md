@@ -333,7 +333,21 @@ CC 121.
 - **HerMIDI's firmware stays in `third_party/hermidi`** (the user's
   decision, 2026-11-10).
 
-## Status (0.5.0, 2026-11-10)
+## Status (0.5.1, 2026-11-10)
+
+0.5.1 is a fix: Station64 hung at its intro with a Sequential or Namesoft
+interface (with or without a cartridge). Its test that tells the two apart
+loads the control word from zero page (`LDA $31`, where `LDA #$31` was
+meant); $31 is BASIC's STREND, $F7 after LOAD and RUN, a master reset, and
+it then waits for TDRE. The chip reads TDRE as 0 in reset (MAME; Cynthcart's
+autodetection depends on it and is "incompatible with VICE" by its own
+source), VICE reads 1. `MidiCart::write` now does both: an ACIA held in
+reset since power-on reads 0, one that was running and is reset again keeps
+TDRE. Station64 then reports Namesoft for both, and both play.
+`tools/interface-test.sh` (run by install.sh) plays a note through Station64
+on all four interfaces and through Cynthcart on its three; reading 0 always
+fails the first two Station64 cases, reading TDRE always fails every
+Cynthcart case.
 
 From the user's DAW use (CC renaming, Range/Caps and Fast resampling all
 confirmed working there):

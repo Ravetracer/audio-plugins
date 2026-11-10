@@ -220,7 +220,8 @@ played.
 
 **Station64** — a three-oscillator synthesizer with a deep sound engine. It
 listens on MIDI channels 1 to 3. It unpacks itself for about twelve seconds
-after loading; press **Warp** to skip the wait.
+after loading; press **Warp** to skip the wait. It finds a Datel, Passport,
+Sequential or Namesoft interface by itself.
 
 **SID-Wizard** — a music editor (tracker) that can be played and sequenced
 over MIDI. Its MIDI input is off when it starts: set it to OMNI or to a
