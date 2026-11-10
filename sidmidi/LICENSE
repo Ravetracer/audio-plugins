@@ -4,7 +4,10 @@ Copyright (c) 2026 Christian Nielebock
 This folder (sidmidi/) is licensed under the GNU General Public License,
 version 2 or (at your option) any later version, because it links reSIDfp
 (third_party/libresidfp, GPL-2.0-or-later). The full licence text is in
-third_party/libresidfp/COPYING.
+COPYING beside this file (the same text as third_party/libresidfp/COPYING),
+and it ships with every release archive of SidMidi. The source code of a
+release is in https://github.com/Ravetracer/audio-plugins under that
+release's tag.
 
 This program is free software; you can redistribute it and/or modify it under
 the terms of the GNU General Public License as published by the Free Software

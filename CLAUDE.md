@@ -805,6 +805,18 @@ whole collection.
 The per-plugin archives carry that plugin's **own** version from its `project()`
 line, not the collection's, because they are downloaded and updated separately.
 
+**GitHub releases are per plugin, never the collection.** Users pick the
+plugins they want, so each plugin has its own GitHub release, tagged
+`<name lowercased>-v<version>` (`saeurekiste-v0.17.0`, `sidmidi-v0.4.0`),
+with its `<Name>-<version>.zip` and its manual PDF as assets.
+`audio-plugins-<version>.zip` stays local and is not uploaded. The first
+releases went up on 2026-11-10 (collection build 0.24.0). Release notes are
+public copy: the brand-name rules for the website and the manuals apply.
+
+A plugin whose `LICENSE` refers to a full licence text keeps that text as
+`<plugin>/COPYING`; `release.sh` puts it into the plugin's archive (and into
+the collection as `COPYING-<Name>`). SidMidi's GPL depends on it.
+
 **This script came from Verdalis unchanged**, and as of 0.2.0 this repository
 delivers everything it assumes: it builds Windows and VST3 for every plugin, and
 SaeureKiste does both. `--linux-only` and `--no-vst3` are still there for a

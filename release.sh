@@ -328,6 +328,9 @@ fi
 install_note() {
    local what="$1" what_linux="$2" what_windows="$3"
    local what_linux_vst3="${4:-}" what_windows_vst3="${5:-}"
+   # The name the examples use: the plugin's own in its archive, a
+   # placeholder in the suite's.
+   local ex="${6:-<Name>}"
    echo "$what"
    printf '=%.0s' $(seq ${#what})
    echo
@@ -358,9 +361,8 @@ CLAP -- copy ${what_linux} into:
 
     ~/.clap/
 
-so that you end up with ~/.clap/RainyDay/RainyDay.clap and so on. Keep the
-presets folder with it: a CLAP looks for its factory presets in a presets
-directory beside its own binary.
+so that you end up with ~/.clap/${ex}/${ex}.clap. Keep the folder whole:
+a plugin that has factory presets as files finds them beside its own binary.
 TXT
       if [ "$build_vst3" = 1 ]; then
          cat <<TXT
@@ -369,10 +371,8 @@ VST3 -- copy ${what_linux_vst3} into:
 
     ~/.vst3/
 
-so that you end up with ~/.vst3/RainyDay.vst3/ and so on. Keep the .vst3 folder
-whole -- it is a bundle, not a file. Its factory presets are built into the
-plugin and appear in its own browser either way; the copies inside the bundle
-are there to read and to edit.
+so that you end up with ~/.vst3/${ex}.vst3/. Keep the .vst3 folder whole --
+it is a bundle, not a file.
 TXT
       fi
       cat <<'TXT'
@@ -390,9 +390,8 @@ CLAP -- copy ${what_windows} into:
 
     C:\\Program Files\\Common Files\\CLAP\\
 
-so that you end up with ...\\CLAP\\RainyDay\\RainyDay.clap and so on. Keep the
-presets folder with it: a CLAP looks for its factory presets in a presets
-directory beside its own binary.
+so that you end up with ...\\CLAP\\${ex}\\${ex}.clap. Keep the folder whole:
+a plugin that has factory presets as files finds them beside its own binary.
 TXT
       if [ "$build_vst3" = 1 ]; then
          cat <<TXT
@@ -401,10 +400,8 @@ VST3 -- copy ${what_windows_vst3} into:
 
     C:\\Program Files\\Common Files\\VST3\\
 
-so that you end up with ...\\VST3\\RainyDay.vst3\\ and so on. Keep the .vst3
-folder whole -- it is a bundle, not a file. Its factory presets are built into
-the plugin and appear in its own browser either way; the copies inside the
-bundle are there to read and to edit.
+so that you end up with ...\\VST3\\${ex}.vst3\\. Keep the .vst3 folder whole
+-- it is a bundle, not a file.
 TXT
       fi
       cat <<'TXT'
@@ -470,6 +467,9 @@ copy_extra_licenses() {
       extra="$(plugin_license "$p")"
       if [ -n "$extra" ]; then
          cp "$extra" "${d}/LICENSE-$(project_name "$p")"
+      fi
+      if [ -f "${here}/${p}/COPYING" ]; then
+         cp "${here}/${p}/COPYING" "${d}/COPYING-$(project_name "$p")"
       fi
    done
 }
@@ -553,12 +553,15 @@ for plugin in "${plugins[@]}"; do
    fi
    own="$(plugin_license "$plugin")"
    cp "${own:-${here}/LICENSE}" "${d}/LICENSE"
+   # A licence whose LICENSE refers to a full text kept beside it (SidMidi's
+   # GPL) ships that text too: the binaries may not go out without it.
+   [ -f "${here}/${plugin}/COPYING" ] && cp "${here}/${plugin}/COPYING" "${d}/COPYING"
    [ -f "${here}/${plugin}/README.md" ] && cp "${here}/${plugin}/README.md" "${d}/"
    manual="$(manual_for "$plugin")"
    [ -f "$manual" ] && cp "$manual" "${d}/"
    install_note "${name} ${pver}" \
       "linux/${name}" "windows\\${name}" \
-      "linux/${name}.vst3" "windows\\${name}.vst3" > "${d}/INSTALL.txt"
+      "linux/${name}.vst3" "windows\\${name}.vst3" "$name" > "${d}/INSTALL.txt"
    build_info > "${d}/BUILD-INFO.txt"
    pack "$d"
 done
