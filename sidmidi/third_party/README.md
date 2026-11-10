@@ -3,6 +3,7 @@
 | Folder | What | Licence |
 |--------|------|---------|
 | `libresidfp/` | reSIDfp from [libresidfp](https://github.com/libsidplayfp/libresidfp) 1.2.3 (Dag Lem, Antti S. Lankila, Leandro Nini), with the patches below applied | GPL-2.0-or-later, `libresidfp/COPYING` |
+| `sidlite/` | SIDLite from [libsidplayfp](https://github.com/libsidplayfp/libsidplayfp) (Leandro Nini, after Mihaly Horvath's cRSID), `src/builders/sidlite-builder/sidlite/` at commit `b2f27b5` (2026-10-27), with the patches below applied; `sl_defs.h` written by hand from `sl_defs.h.in` | GPL-2.0-or-later, `sidlite/COPYING` |
 | `hermidi/` | HerMIDI's PIC12F509 firmware (Mihaly Horvath), from the SID-Wizard package | WTF Public License (SID-Wizard's) |
 
 ## Patches to libresidfp
@@ -42,3 +43,35 @@ means unpacking the new release and applying them again.
   DC. The mask is not part of the saved state; all on is the unpatched
   sound, bit for bit. Unlike 0001 and 0002 this one is the diff against the
   tree with them applied (all three touch `Filter.h`).
+
+## Patches to SIDLite
+
+The sources in `sidlite/src/sidlite` are libsidplayfp's with these applied,
+in order; each is the diff against the tree before it (`patch -p2` inside
+`sidlite/src`). The folder is `sidlite/` so the headers are included as
+`"sidlite/SID.h"`: reSIDfp's `src/` is on the include path and has a `SID.h`
+of its own.
+
+- `patches/sidlite-0001-clock-ratio.patch` -- exact time and pitch. The
+  CPU clocks per output sample were kept with four fractional bits
+  (985248/48000 = 20.526 became 20.5), so a chip made 0.13 % too many
+  samples -- SidMidi's FIFO filled until the engine dropped them -- and
+  played about 2 cents flat, since the oscillators step by the same ratio.
+  The ratio is now kept with sixteen more bits and each sample takes the
+  integer part plus a carry from the remainder, so the average is exact:
+  ten minutes come out within one sample of its own rate, A4 within 0.001 cent
+  (`sidmidi-enginetest`). Also: the clock is a `double` (NTSC's 1022727 Hz
+  is not a whole number in Hz either), and the sample rate an `unsigned int`
+  -- as an `unsigned short`, 96000 wrapped to 30464 and passed the 48 kHz
+  check. The sample counter is an `int`, and its step uses the fractional
+  bits' constant instead of a literal 4.
+- `patches/sidlite-0002-state.patch` -- `stateSize`, `saveState`,
+  `restoreState`: every field that changes while the chip runs, listed once
+  per class in a `state(V&)` visitor (`sl_state.h`) and written field by
+  field. `ADSR`, `Filter` and `WavGen` hold pointers into the `SID`, so the
+  object can never be copied as memory. Not the configuration (model,
+  sampling), which the caller sets first.
+- `patches/sidlite-0003-voice-mask.patch` -- `setVoiceMask` (bit 0-2 voice
+  1-3) for the voice outputs. A masked voice runs on -- OSC3, ENV3, sync and
+  ring modulation are unchanged -- and is heard as a closed envelope, the
+  same rule as reSIDfp's 0003. All on is the unpatched sound.

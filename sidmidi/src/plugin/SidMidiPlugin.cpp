@@ -213,6 +213,12 @@ struct Glue
         return self(p)->warping();
     }
     static void loaderSetWarp(const clap_plugin_t* p, bool on) { self(p)->setWarp(on); }
+    static void loaderSetSidEngine(const clap_plugin_t* p, int engine)
+    {
+        MachineSettings s = self(p)->settings();
+        s.sids.engine = engine == 1 ? emu::SidEngine::Lite : emu::SidEngine::ReSidFp;
+        self(p)->applySettings(s);
+    }
     static const ExtLoader loader;
     // Offline bounces warp by a fixed amount, so they render the same every time.
     static bool renderHardRealtime(const clap_plugin_t*) { return false; }
@@ -225,7 +231,7 @@ struct Glue
 };
 const clap_plugin_render_t Glue::render = {renderHardRealtime, renderSetMode};
 const ExtLoader Glue::loader = {loaderLoad, loaderMidiIn, loaderAttach, loaderStart, loaderDiskFiles, loaderHasCart,
-                                  loaderWarping, loaderSetWarp};
+                                  loaderWarping, loaderSetWarp, loaderSetSidEngine};
 
 const clap_plugin_audio_ports_t Glue::audioPorts = {portsCount, portsGet};
 const clap_plugin_note_ports_t Glue::notePorts = {notePortsCount, notePortsGet};

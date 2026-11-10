@@ -1,0 +1,45 @@
+diff -ruN a/src/sidlite/SID.h b/src/sidlite/SID.h
+--- a/src/sidlite/SID.h	2026-11-10 20:10:18.972026526 +0100
++++ b/src/sidlite/SID.h	2026-11-10 20:10:18.973026529 +0100
+@@ -51,6 +51,10 @@
+ 
+     void setChipModel(model_t model);
+     void setRealSIDmode(bool mode);
++    // Which voices reach the filter and the output (bit 0-2: voice 1-3). A
++    // masked voice runs as before (OSC3, ENV3, sync and ring modulation are
++    // unchanged) and is heard as a closed envelope.
++    void setVoiceMask(unsigned char mask) { s.VoiceMask = mask & 0x07; }
+     // clockFrequency in Hz; samplingFrequency 8000..48000 Hz.
+     bool setSamplingParameters(double clockFrequency, unsigned int samplingFrequency);
+ 
+diff -ruN a/src/sidlite/sl_settings.h b/src/sidlite/sl_settings.h
+--- a/src/sidlite/sl_settings.h	2026-11-10 20:10:18.972026526 +0100
++++ b/src/sidlite/sl_settings.h	2026-11-10 20:10:18.973026529 +0100
+@@ -36,6 +36,7 @@
+     inline bool is8580() const { return sid8580; }
+     inline unsigned int getSampleClockRatio() const { return SampleClockRatio; }
+     inline bool getRealSIDmode() const { return RealSIDmode; }
++    inline unsigned char getVoiceMask() const { return VoiceMask; }
+ 
+     template<class V> void state(V& v) { v(SampleClockRatio); }
+ 
+@@ -43,6 +44,7 @@
+     unsigned int   SampleClockRatio = 0; // ratio of CPU-clock and samplerate, this sample's
+     bool           sid8580     = true;  // SID model 8580 or 6581
+     bool           RealSIDmode = true;
++    unsigned char  VoiceMask   = 0x07;  // bit 0-2: voice 1-3 heard
+ };
+ 
+ }
+diff -ruN a/src/sidlite/WavGen.cpp b/src/sidlite/WavGen.cpp
+--- a/src/sidlite/WavGen.cpp	2026-11-10 20:10:18.972026526 +0100
++++ b/src/sidlite/WavGen.cpp	2026-11-10 20:10:18.973026529 +0100
+@@ -360,6 +360,8 @@
+         EnvOut = adsr->counter(Channel);
+         unsigned char Envelope = (LIKELY(m_settings->is8580()))
+             ? EnvOut : ADSR_DAC_6581[EnvOut];
++        if (UNLIKELY(!(m_settings->getVoiceMask() & (1 << Channel))))
++            Envelope = 0;
+         int swave = static_cast<int>(WavGenOut) - CRSID_WAVE_MID;
+         if (UNLIKELY(FilterSwitchReso & (1 << Channel)))
+         {

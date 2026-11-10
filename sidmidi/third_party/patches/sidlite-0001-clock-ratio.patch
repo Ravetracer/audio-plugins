@@ -1,0 +1,113 @@
+diff -ruN a/src/sidlite/SID.cpp b/src/sidlite/SID.cpp
+--- a/src/sidlite/SID.cpp	2026-11-10 20:08:19.636682101 +0100
++++ b/src/sidlite/SID.cpp	2026-11-10 20:08:19.637682104 +0100
+@@ -60,7 +60,7 @@
+             return false;
+ 
+         unsigned char InstructionCycles = std::min(7u, cycles);
+-        SampleCycleCnt += InstructionCycles << 4;
++        SampleCycleCnt += InstructionCycles << CRSID_CLOCK_FRACTIONAL_BITS;
+         cycles -= InstructionCycles;
+ 
+         adsr.clock(InstructionCycles);
+@@ -80,9 +80,17 @@
+         sample = INT16_MIN;
+     output = static_cast<short>(sample);
+ 
++    nextSampleRatio();
+     return true;
+ }
+ 
++inline void SID::nextSampleRatio()
++{
++    RatioRemainder += static_cast<unsigned int>(ExactClockRatio & 0xFFFF);
++    s.SampleClockRatio = static_cast<unsigned int>(ExactClockRatio >> 16) + (RatioRemainder >> 16);
++    RatioRemainder &= 0xFFFF;
++}
++
+ void SID::write(int addr, int value)
+ {
+     regs[addr] = value;
+@@ -113,6 +121,8 @@
+ void SID::reset()
+ {
+     SampleCycleCnt = 0;
++    RatioRemainder = 0;
++    s.SampleClockRatio = static_cast<unsigned int>(ExactClockRatio >> 16);
+ 
+     std::fill(std::begin(regs), std::end(regs), 0);
+ 
+@@ -121,15 +131,18 @@
+     wavgen.reset();
+ }
+ 
+-bool SID::setSamplingParameters(unsigned int clockFrequency, unsigned short samplingFrequency)
++bool SID::setSamplingParameters(double clockFrequency, unsigned int samplingFrequency)
+ {
+-    if ((samplingFrequency < 8000) || (samplingFrequency > 48000))
++    if ((samplingFrequency < 8000) || (samplingFrequency > 48000) || clockFrequency <= 0.0)
+         return false;
+ 
+-    filter.rebuildCutoffTables(samplingFrequency);
++    filter.rebuildCutoffTables(static_cast<unsigned short>(samplingFrequency));
+ 
+     // shifting (multiplication) enhances SampleClockRatio precision
+-    s.SampleClockRatio = (clockFrequency << CRSID_CLOCK_FRACTIONAL_BITS) / samplingFrequency;
++    ExactClockRatio = static_cast<unsigned long long>(
++        clockFrequency * static_cast<double>(1u << (CRSID_CLOCK_FRACTIONAL_BITS + 16)) / samplingFrequency + 0.5);
++    RatioRemainder = 0;
++    s.SampleClockRatio = static_cast<unsigned int>(ExactClockRatio >> 16);
+     return true;
+ }
+ 
+diff -ruN a/src/sidlite/SID.h b/src/sidlite/SID.h
+--- a/src/sidlite/SID.h	2026-11-10 20:08:19.636682101 +0100
++++ b/src/sidlite/SID.h	2026-11-10 20:08:19.637682104 +0100
+@@ -51,7 +51,8 @@
+ 
+     void setChipModel(model_t model);
+     void setRealSIDmode(bool mode);
+-    bool setSamplingParameters(unsigned int clockFrequency, unsigned short samplingFrequency);
++    // clockFrequency in Hz; samplingFrequency 8000..48000 Hz.
++    bool setSamplingParameters(double clockFrequency, unsigned int samplingFrequency);
+ 
+     int getLevel() const { return filter.getLevel(); }
+ 
+@@ -63,10 +64,19 @@
+     WavGen            wavgen;
+     settings          s;
+ 
+-    short             SampleCycleCnt;
++    int               SampleCycleCnt;
++
++    // The exact CPU clocks per sample in 1/2^(CRSID_CLOCK_FRACTIONAL_BITS+16)
++    // units. Each sample uses the integer part (SampleClockRatio, in
++    // 1/2^CRSID_CLOCK_FRACTIONAL_BITS units) plus a carry from the remainder,
++    // so the average ratio is exact: no drift of the sample count against
++    // the clock, and no pitch error.
++    unsigned long long ExactClockRatio = 0;
++    unsigned int      RatioRemainder = 0;
+ 
+ private:
+     inline bool generateSample(unsigned int &cycles, short &output);
++    inline void nextSampleRatio();
+ };
+ 
+ }
+diff -ruN a/src/sidlite/sl_settings.h b/src/sidlite/sl_settings.h
+--- a/src/sidlite/sl_settings.h	2026-11-10 20:08:19.636682101 +0100
++++ b/src/sidlite/sl_settings.h	2026-11-10 20:08:19.637682104 +0100
+@@ -34,11 +34,11 @@
+ 
+ public:
+     inline bool is8580() const { return sid8580; }
+-    inline unsigned short getSampleClockRatio() const { return SampleClockRatio; }
++    inline unsigned int getSampleClockRatio() const { return SampleClockRatio; }
+     inline bool getRealSIDmode() const { return RealSIDmode; }
+ 
+ private:
+-    unsigned short SampleClockRatio;    // ratio of CPU-clock and samplerate
++    unsigned int   SampleClockRatio = 0; // ratio of CPU-clock and samplerate, this sample's
+     bool           sid8580     = true;  // SID model 8580 or 6581
+     bool           RealSIDmode = true;
+ };

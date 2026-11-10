@@ -2,7 +2,11 @@
 #
 # Renders SidMidi's demo audio into dist/demos/SidMidi/.
 #
-#   sidmidi/tools/make-demos.sh
+#   sidmidi/tools/make-demos.sh [--engine lite]
+#
+# With --engine lite the same takes are played on the Light SID engine and
+# written to dist/demos/SidMidi-Light/ instead, for comparing the engines by
+# ear; the release demos are the reSIDfp ones.
 #
 # SidMidi has no presets of its own -- its sounds are the C64 programs' -- so
 # the shared make-demos.sh, which renders factory presets, does not fit. This
@@ -25,6 +29,15 @@ run="${src}/build/sidmidi-run"
 roms="${SIDMIDI_DEMO_ROMS:-${src}/_dev_/roms}"
 out="${root}/dist/demos/SidMidi"
 work="${src}/build/demo-work"
+engine=()
+if [ "${1:-}" = "--engine" ] && [ "${2:-}" = "lite" ]; then
+   engine=(--engine lite)
+   out="${root}/dist/demos/SidMidi-Light"
+   work="${src}/build/demo-work-light"
+elif [ $# -gt 0 ]; then
+   echo "usage: $0 [--engine lite]" >&2
+   exit 2
+fi
 mkdir -p "$out" "$work"
 [ -x "$run" ] || { echo "no ${run}: build with the tools" >&2; exit 1; }
 for t in ffmpeg lame python3; do
@@ -51,7 +64,7 @@ demo() {
    echo "--> ${name}"
    # shellcheck disable=SC2086
    "$run" --roms "$roms" "$opt" "$file" --no-video --seconds "$(python3 -c "print(${start} + ${seconds})")" \
-      "$@" --wav "${work}/${name}-full.wav" >/dev/null
+      "${engine[@]}" "$@" --wav "${work}/${name}-full.wav" >/dev/null
    ffmpeg -nostats -hide_banner -loglevel error -y -ss "$start" -t "$seconds" -i "${work}/${name}-full.wav" \
       -c:a pcm_f32le "${work}/${name}.wav"
    read -r loudness truepeak <<<"$(ffmpeg -nostats -hide_banner -i "${work}/${name}.wav" \

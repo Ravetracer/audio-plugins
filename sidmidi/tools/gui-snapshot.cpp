@@ -9,6 +9,7 @@
 //     --size WxH         window size in logical pixels (default 800x622)
 //     --sids N           number of SIDs (for the machine page)
 //     --model I:NAME     SID I's model (6581, 6581R3, 6581R4, 6581R4AR, 8580R5)
+//     --engine NAME      SID engine: resid-fp (default) or lite
 //     --open FILE        after the run, open FILE as Load does (a .d64 shows its files)
 //     --media-menu       after the run, open the Media menu
 //
@@ -54,6 +55,7 @@ int main(int argc, char** argv)
     bool mediaMenu = false;
     double seconds = 10.0, scale = 1.0;
     int w = 800, h = 622, sids = 0;
+    bool lite = false;
     std::vector<std::pair<int, std::string>> models;
     for (int i = 2; i < argc; ++i) {
         const std::string a = argv[i];
@@ -74,6 +76,8 @@ int main(int argc, char** argv)
             mediaMenu = true;
         else if (a == "--sids")
             sids = std::atoi(next().c_str());
+        else if (a == "--engine")
+            lite = next() == "lite";
         else if (a == "--model") {
             const std::string v = next();
             const auto colon = v.find(':');
@@ -93,10 +97,12 @@ int main(int argc, char** argv)
     p->activate(p, 48000.0, 1, 512);
     p->start_processing(p);
 
-    if (sids > 0 || !models.empty()) {
+    if (sids > 0 || !models.empty() || lite) {
         sidmidi::MachineSettings s = plugin.settings();
         if (sids > 0)
             s.sids.count = sids;
+        if (lite)
+            s.sids.engine = sidmidi::emu::SidEngine::Lite;
         for (const auto& m : models)
             for (int v = 0; v < static_cast<int>(sidmidi::emu::SidVariant::Count); ++v)
                 if (m.first >= 0 && m.first < 8 &&

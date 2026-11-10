@@ -20,6 +20,7 @@
 //     --filter-range I:V    6581 filter range of SID I, 0..1 (after --model)
 //     --old-caps I          SID I has the 2200 pF filter caps (after --model)
 //     --fast-resampling     nearest sample instead of the sinc resampler
+//     --engine NAME         SID engine: resid-fp (default) or lite
 //     --voices              voice outputs on; with --wav, each voice of each SID is
 //                           written beside it as <wav>-sid<N>-v<V>.wav (mono)
 //     --no-disk-warp        the true 1541 loads in real time (no warp while its motor runs)
@@ -250,6 +251,13 @@ int main(int argc, char** argv)
             script.push_back(f);
         } else if (a == "--no-disk-warp") {
             noDiskWarp = true;
+        } else if (a == "--engine") {
+            const std::string e = next();
+            if (e != "lite" && e != "resid-fp") {
+                std::fprintf(stderr, "unknown engine %s (resid-fp or lite)\n", e.c_str());
+                return 2;
+            }
+            sidCfg.engine = e == "lite" ? emu::SidEngine::Lite : emu::SidEngine::ReSidFp;
         } else if (a == "--fast-resampling") {
             sidCfg.resampling = emu::SidResampling::Fast;
         } else if (a == "--voices") {

@@ -275,11 +275,11 @@ class MachinePage : public Widget
 public:
     explicit MachinePage(Editor& ed) : ed_(ed) {}
 
-    // Rebuilds the controls when the SID count changed.
+    // Rebuilds the controls when the SID count or the engine changed.
     void sync()
     {
-        const int n = ed_.plugin().settings().sids.count;
-        if (n != builtCount_)
+        const auto& sids = ed_.plugin().settings().sids;
+        if (sids.count != builtCount_ || sids.engine != builtEngine_)
             build();
     }
 
@@ -288,6 +288,10 @@ public:
         clearChildren();
         auto& pl = ed_.plugin();
         builtCount_ = pl.settings().sids.count;
+        builtEngine_ = pl.settings().sids.engine;
+        // The light engine has none of reSIDfp's tuning: those controls stay,
+        // disabled, and keep their values for when Accurate comes back.
+        const bool full = builtEngine_ == emu::SidEngine::ReSidFp;
 
         auto edit = [&pl](auto fn) {
             MachineSettings s = pl.settings();
@@ -344,10 +348,18 @@ public:
                     [edit](int i) { edit([i](MachineSettings& s) { s.keyMapping = static_cast<KeyMapping>(i); }); })
             ->setTooltip("Symbolic: a key types the character your layout prints on it. Positional: a key is the C64 "
                          "key in its place on a C64's keyboard.");
-        add<Choice>("Resampling", std::vector<std::string>{"Sinc (best)", "Fast"},
-                    [&pl] { return static_cast<int>(pl.settings().sids.resampling); },
-                    [edit](int i) { edit([i](MachineSettings& s) { s.sids.resampling = static_cast<emu::SidResampling>(i); }); })
-            ->setTooltip("Sinc: clean, the reference. Fast: much cheaper with many SIDs, but it aliases (harsh highs).");
+        add<Choice>("SID engine", std::vector<std::string>{"Accurate", "Light"},
+                    [&pl] { return static_cast<int>(pl.settings().sids.engine); },
+                    [edit](int i) { edit([i](MachineSettings& s) { s.sids.engine = static_cast<emu::SidEngine>(i); }); })
+            ->setTooltip("Accurate: reSIDfp, the reference. Light: about 30 times cheaper per SID, for slower "
+                         "computers; rougher digis, and only the model (6581 or 8580) of the tuning applies.");
+        auto* resampling = add<Choice>(
+            "Resampling", std::vector<std::string>{"Sinc (best)", "Fast"},
+            [&pl] { return static_cast<int>(pl.settings().sids.resampling); },
+            [edit](int i) { edit([i](MachineSettings& s) { s.sids.resampling = static_cast<emu::SidResampling>(i); }); });
+        resampling->setTooltip(full ? "Sinc: clean, the reference. Fast: much cheaper with many SIDs, but it aliases (harsh highs)."
+                                    : "Accurate engine only");
+        resampling->setEnabled(full);
         add<Choice>("Auto warp", std::vector<std::string>{"Start and disk", "Start only", "Disk only", "Off"},
                     [&pl] {
                         const auto& s = pl.settings();
@@ -388,8 +400,10 @@ public:
                                 c.tuning = emu::sidVariantTuning(c.variant);
                             });
                         })
-                ->setTooltip("Chip revision. Sets the filter and combined-waveform starting points.");
-            add<Slider>("", 0.0, 1.0, 0.5, [&pl, ci] { return static_cast<double>(pl.settings().sids.chips[ci].tuning.filterCurve); },
+                ->setTooltip(full ? "Chip revision. Sets the filter and combined-waveform starting points."
+                                  : "Chip revision. The Light engine knows a 6581 and an 8580; the revisions are "
+                                    "for the Accurate engine.");
+            auto* curve = add<Slider>("", 0.0, 1.0, 0.5, [&pl, ci] { return static_cast<double>(pl.settings().sids.chips[ci].tuning.filterCurve); },
                         [edit, ci](double v) {
                             edit([v, ci](MachineSettings& s) { s.sids.chips[ci].tuning.filterCurve = static_cast<float>(v); });
                         },
@@ -397,9 +411,11 @@ public:
                             char b[16];
                             std::snprintf(b, sizeof(b), "%.0f%%", v * 100);
                             return std::string(b);
-                        })
-                ->setTooltip("Filter curve: how dark (left) or bright (right) this chip's filter is. 6581s vary a lot.");
-            add<Slider>("", 0.0, 1.0, 19.0 / 39.0,
+                        });
+            curve->setTooltip(full ? "Filter curve: how dark (left) or bright (right) this chip's filter is. 6581s vary a lot."
+                                   : "Accurate engine only");
+            curve->setEnabled(full);
+            auto* range = add<Slider>("", 0.0, 1.0, 19.0 / 39.0,
                         [&pl, ci] { return static_cast<double>(pl.settings().sids.chips[ci].tuning.filterRange); },
                         [edit, ci](double v) {
                             edit([v, ci](MachineSettings& s) { s.sids.chips[ci].tuning.filterRange = static_cast<float>(v); });
@@ -410,22 +426,28 @@ public:
                             char b[16];
                             std::snprintf(b, sizeof(b), "%.0f%%", v * 100);
                             return std::string(b);
-                        })
-                ->setTooltip("6581 only: the filter's range and offset, dark (left) to bright (right). "
-                             "Double click for the default.");
-            add<Choice>("", std::vector<std::string>{"470 pF", "2200 pF"},
+                        });
+            range->setTooltip(full ? "6581 only: the filter's range and offset, dark (left) to bright (right). "
+                                     "Double click for the default."
+                                   : "Accurate engine only");
+            range->setEnabled(full);
+            auto* caps = add<Choice>("", std::vector<std::string>{"470 pF", "2200 pF"},
                         [&pl, ci] { return pl.settings().sids.chips[ci].tuning.oldCaps ? 1 : 0; },
-                        [edit, ci](int v) { edit([v, ci](MachineSettings& s) { s.sids.chips[ci].tuning.oldCaps = v == 1; }); })
-                ->setTooltip("6581 only: the filter capacitors. 2200 pF were fitted to early boards (ASSY 326298): "
-                             "a much darker filter.");
-            add<Choice>("", std::vector<std::string>{"Average", "Weak", "Strong"},
+                        [edit, ci](int v) { edit([v, ci](MachineSettings& s) { s.sids.chips[ci].tuning.oldCaps = v == 1; }); });
+            caps->setTooltip(full ? "6581 only: the filter capacitors. 2200 pF were fitted to early boards (ASSY 326298): "
+                                    "a much darker filter."
+                                  : "Accurate engine only");
+            caps->setEnabled(full);
+            auto* combined = add<Choice>("", std::vector<std::string>{"Average", "Weak", "Strong"},
                         [&pl, ci] { return static_cast<int>(pl.settings().sids.chips[ci].tuning.combined); },
                         [edit, ci](int v) {
                             edit([v, ci](MachineSettings& s) {
                                 s.sids.chips[ci].tuning.combined = static_cast<emu::CombinedWaves>(v);
                             });
-                        })
-                ->setTooltip("How loud combined waveforms (e.g. saw + triangle) come out");
+                        });
+            combined->setTooltip(full ? "How loud combined waveforms (e.g. saw + triangle) come out"
+                                      : "Accurate engine only");
+            combined->setEnabled(full);
             const uint32_t lid = pid::Level + static_cast<uint32_t>(i), pid_ = pid::Pan + static_cast<uint32_t>(i);
             auto* lvl = add<Slider>("", -60.0, 12.0, 0.0, [&pl, lid] { return pl.paramValue(lid); },
                                     [&pl, lid](double v) { pl.guiSetParam(lid, v); }, dbText);
@@ -440,8 +462,10 @@ public:
                                    [&pl](double v) { pl.guiSetParam(pid::Master, v); }, dbText);
         master->onBegin = [&pl] { pl.guiBeginParam(pid::Master); };
         master->onEnd = [&pl] { pl.guiEndParam(pid::Master); };
-        add<Label>("Model sets a starting point for Curve and Combined; tune Curve, Range and Caps by ear to your chip.", 10.0f,
-                   Align::Left, theme::textFaint);
+        add<Label>(full ? "Model sets a starting point for Curve and Combined; tune Curve, Range and Caps by ear to your chip."
+                        : "Light engine: of the chip settings only the model applies (6581 or 8580). The others keep "
+                          "their values for Accurate.",
+                   10.0f, Align::Left, theme::textFaint);
         layout();
         if (root())
             root()->markDirty();
@@ -461,10 +485,11 @@ public:
         for (int i = 0; i < 4 && k < ch.size(); ++i, ++k)
             ch[k]->setBounds({x0 + i * (cw + gap), y0, cw, rowH});
         // Second row: the two control ports, the SID count, the keyboard;
-        // third: the resampling, the automatic warp, the voice outputs.
+        // third: the SID engine, the resampling, the automatic warp, the
+        // voice outputs.
         for (int i = 0; i < 4 && k < ch.size(); ++i, ++k)
             ch[k]->setBounds({x0 + i * (cw + gap), y0 + rowH + gap, cw, rowH});
-        for (int i = 0; i < 3 && k < ch.size(); ++i, ++k)
+        for (int i = 0; i < 4 && k < ch.size(); ++i, ++k)
             ch[k]->setBounds({x0 + i * (cw + gap), y0 + 2 * (rowH + gap), cw, rowH});
         // The SID table.
         constexpr int nc = 9;
@@ -530,6 +555,7 @@ private:
 
     Editor& ed_;
     int builtCount_ = -1;
+    emu::SidEngine builtEngine_ = emu::SidEngine::ReSidFp;
 };
 
 // ================================================================= CcPage

@@ -1,6 +1,6 @@
 // sidmidi-selftest: the built plugin, loaded the way a host loads it.
 //
-//   sidmidi-selftest SidMidi.clap PROGRAM [seconds-until-ready] [rom-folder] [true1541]
+//   sidmidi-selftest SidMidi.clap PROGRAM [seconds-until-ready] [rom-folder] [true1541|lite]
 //
 // The ROM folder (default: the plugin's own) is handed over as SIDMIDI_ROM_DIR.
 //
@@ -21,11 +21,19 @@
 //    three voices of SID 1 together come close to SID 1's own output, nothing
 //    allocates, and the voices survive a state round trip exactly. Off, the
 //    voice ports are silent.
-// 7. Counts heap allocations inside process() once the program is running --
+// 7. The SID engine: switched while a note plays (to the other engine and
+//    back), the sound goes on and nothing allocates; a project from before
+//    the engine setting loads on reSIDfp (exactly, from a reSIDfp project;
+//    from a Light one the chips start from their registers and play).
+// 8. Counts heap allocations inside process() once the program is running --
 //    this executable's operator new replaces the one the plugin's libstdc++
 //    would use -- through notes, and while a flood
 //    of MIDI, more than the cable queue holds, goes in; the count must stay
 //    zero and the program must still play afterwards.
+//
+// With `lite` every instance runs on the Light engine (SIDLite), switched the
+// way the window switches it; on Light the 6581 filter range must change
+// nothing.
 //
 // Exit code 0 when everything passed.
 //
@@ -55,6 +63,7 @@
 namespace {
 bool counting = false;
 size_t allocations = 0;
+bool lite = false; // every instance on the Light engine
 }
 
 void* operator new(std::size_t n)
@@ -134,6 +143,8 @@ struct Instance
             render->set(plugin, CLAP_RENDER_OFFLINE);
         plugin->activate(plugin, 48000.0, 1, 512);
         plugin->start_processing(plugin);
+        if (lite)
+            setEngine(1);
         l.resize(512);
         r.resize(512);
         aux.assign(8 + 24, std::vector<float>(512));
@@ -194,6 +205,11 @@ struct Instance
                 auxAll[i].insert(auxAll[i].end(), aux[i].begin(), aux[i].end());
         }
         return all;
+    }
+    void setEngine(int engine)
+    {
+        auto* lo = static_cast<const sidmidi::ExtLoader*>(plugin->get_extension(plugin, sidmidi::kExtLoader));
+        lo->set_sid_engine(plugin, engine);
     }
     void destroy()
     {
@@ -313,6 +329,7 @@ int main(int argc, char** argv)
     const bool media = std::string(argv[2]) == "--media";
     const double ready = argc > 3 && !media ? std::atof(argv[3]) : 3.0;
     const int romArg = media ? 6 : 4;
+    lite = !media && argc > 5 && std::string(argv[5]) == "lite";
     if (argc > romArg)
         setenv("SIDMIDI_ROM_DIR", argv[romArg], 1);
     // A CC map for the program under test, in a scratch folder (this runs in
@@ -516,10 +533,79 @@ int main(int argc, char** argv)
             diffD = std::max(diffD, static_cast<double>(std::fabs(outA[i] - outD[i])));
         }
         std::printf("      SID 1 range 0.1: max difference %.3g; the original beside it: %.3g\n", diffC, diffD);
-        check(diffC > 1e-3, "the filter range changes the sound");
+        if (lite)
+            check(diffC == 0.0, "the Light engine has no filter range: it changes nothing");
+        else
+            check(diffC > 1e-3, "the filter range changes the sound");
         check(diffD == 0.0, "another instance's filter range leaves this one untouched");
         c.destroy();
         d.destroy();
+    }
+
+    // The SID engine. A project from before the setting has no sid_engine
+    // line (renamed here, so the blob keeps its length): it loads on reSIDfp.
+    // From a reSIDfp project it plays on exactly; a Light project's chip
+    // states are not reSIDfp's, so its chips start from their registers.
+    {
+        Buffer oldBuf = buf;
+        oldBuf.at = 0;
+        const std::string from = "sid_engine = ", to = "xid_engine = ";
+        auto it = std::search(oldBuf.data.begin(), oldBuf.data.end(), from.begin(), from.end());
+        check(it != oldBuf.data.end(), "the settings carry sid_engine");
+        if (it != oldBuf.data.end())
+            std::copy(to.begin(), to.end(), it);
+        Instance o;
+        const bool wasLite = lite;
+        lite = false; // a host loading an old project switches nothing
+        o.create(factory);
+        lite = wasLite;
+        clap_istream_t isO{&oldBuf, Buffer::read};
+        auto* stO = static_cast<const clap_plugin_state_t*>(o.plugin->get_extension(o.plugin, CLAP_EXT_STATE));
+        check(stO && stO->load(o.plugin, &isO), "a project without sid_engine loads");
+        const auto outO = o.run(100, phrase);
+        double dO = 0;
+        for (size_t i = 0; i < outA.size(); ++i)
+            dO = std::max(dO, static_cast<double>(std::fabs(outA[i] - outO[i])));
+        std::printf("      a project without sid_engine: max difference %.3g, level %.1f dB\n", dO, rmsDb(outO));
+        if (lite)
+            check(rmsDb(outO) > -50.0 && std::fabs(rmsDb(outO) - rmsDb(outA)) < 6.0,
+                  "a Light project read without the setting plays on reSIDfp, without a thump");
+        else
+            check(dO == 0.0, "a project without sid_engine plays on reSIDfp exactly");
+        o.destroy();
+    }
+    // Switched while a note plays: to the other engine and back. The note
+    // goes on (its oscillators start over), nothing allocates. A twin plays
+    // the same without switching: the levels must stay close to its own
+    // (the program's envelope may fall meanwhile).
+    {
+        Instance s, twin;
+        for (Instance* i : {&s, &twin}) {
+            i->create(factory);
+            auto* li = static_cast<const sidmidi::ExtLoader*>(i->plugin->get_extension(i->plugin, sidmidi::kExtLoader));
+            li->load_file(i->plugin, argv[2]);
+            i->run(readyBlocks);
+        }
+        const size_t before = allocations;
+        const auto pre = s.run(20, {{0, {0x90, 60, 100}}});
+        twin.run(20, {{0, {0x90, 60, 100}}});
+        s.setEngine(lite ? 0 : 1);
+        const auto other = s.run(30);
+        const auto otherTwin = twin.run(30);
+        s.setEngine(lite ? 1 : 0);
+        const auto back = s.run(30, {{29, {0x80, 60, 0}}});
+        const auto backTwin = twin.run(30, {{29, {0x80, 60, 0}}});
+        std::printf("      engine switch during a note: %.1f dB, on the other engine %.1f dB (twin %.1f), "
+                    "back %.1f dB (twin %.1f)\n",
+                    rmsDb(pre), rmsDb(other), rmsDb(otherTwin), rmsDb(back), rmsDb(backTwin));
+        check(rmsDb(other) > -50.0 && rmsDb(back) > -50.0, "a note plays on through engine switches");
+        // A fresh chip on a running machine steps its output's DC; unsettled,
+        // that thump was 10 dB louder than the note.
+        check(std::fabs(rmsDb(other) - rmsDb(otherTwin)) < 6.0 && std::fabs(rmsDb(back) - rmsDb(backTwin)) < 6.0,
+              "no thump when the engine changes (within 6 dB of a twin that does not switch)");
+        check(allocations == before, "process() allocates nothing around an engine switch");
+        s.destroy();
+        twin.destroy();
     }
 
     // Warp. A load starts in warp on its own; the Warp button stops it, and

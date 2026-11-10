@@ -25,6 +25,7 @@ std::string MachineSettings::toText() const
     o << "screen_scale = " << screenScale << "\n";
     o << "cc_follow = " << (ccFollowProgram ? 1 : 0) << "\n";
     o << "sid_count = " << sids.count << "\n";
+    o << "sid_engine = " << static_cast<int>(sids.engine) << "\n";
     o << "resampling = " << static_cast<int>(sids.resampling) << "\n";
     o << "voice_outputs = " << (sids.voiceOutputs ? 1 : 0) << "\n";
     for (int i = 0; i < 8; ++i) {
@@ -89,6 +90,8 @@ void MachineSettings::fromText(const std::string& text)
             sids.count = std::clamp(iv, 1, 8);
         else if (key == "voice_outputs")
             sids.voiceOutputs = iv != 0;
+        else if (key == "sid_engine") // 0.8.0; a project without it is on reSIDfp
+            sids.engine = iv == 1 ? emu::SidEngine::Lite : emu::SidEngine::ReSidFp;
         else if (key == "resampling")
             sids.resampling = iv == 1 ? emu::SidResampling::Fast : emu::SidResampling::Sinc;
         else if (key.size() == 4 && key.rfind("sid", 0) == 0 && key[3] >= '1' && key[3] <= '8') {

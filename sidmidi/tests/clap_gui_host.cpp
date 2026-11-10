@@ -12,6 +12,8 @@
 //                            accepts XDND drops and prints what it receives
 
 #include <clap/clap.h>
+
+#include "plugin/SidMidiPlugin.h" // the loader extension only
 #if defined(_WIN32)
 #include <windows.h>
 #else
@@ -389,8 +391,7 @@ int main(int argc, char** argv)
     g_plugin->activate(g_plugin, 48000.0, 1, 4096);
     if (const char* load = std::getenv("SIDMIDI_LOAD"))
     {
-        struct Loader { bool (*load_file)(const clap_plugin_t*, const char*); };
-        auto* loader = static_cast<const Loader*>(g_plugin->get_extension(g_plugin, "de.ravetracer.sidmidi.loader/3"));
+        auto* loader = static_cast<const sidmidi::ExtLoader*>(g_plugin->get_extension(g_plugin, sidmidi::kExtLoader));
         std::printf("load %s: %s\n", load, loader && loader->load_file(g_plugin, load) ? "ok" : "FAILED");
     }
 

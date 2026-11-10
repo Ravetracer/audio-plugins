@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.21)
-project(SidMidi VERSION 0.7.0 LANGUAGES C CXX)
+project(SidMidi VERSION 0.8.0 LANGUAGES C CXX)
 
 # SidMidi builds as a CLAP and, through the clap-wrapper, as a VST3, for Linux
 # and Windows (cross-compiled with mingw-w64). Like Aurum and Substrike it does
@@ -60,6 +60,18 @@ target_include_directories(sidmidi-residfp PUBLIC
 target_compile_options(sidmidi-residfp PRIVATE -w -O3)
 target_link_libraries(sidmidi-residfp PUBLIC Threads::Threads)
 
+# ---------------------------------------------------------------- SIDLite
+#
+# The light SID engine: SIDLite from libsidplayfp (Leandro Nini, after
+# Hermit's cRSID), vendored with our patches (third_party/patches/sidlite-*,
+# see third_party/README.md). Included as "sidlite/SID.h": reSIDfp's src/ is
+# on the public include path and has a SID.h of its own.
+file(GLOB SIDLITE_SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/third_party/sidlite/src/sidlite/*.cpp")
+add_library(sidmidi-sidlite STATIC ${SIDLITE_SOURCES})
+target_include_directories(sidmidi-sidlite PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/third_party/sidlite/src")
+target_compile_options(sidmidi-sidlite PRIVATE -w -O3)
+target_link_libraries(sidmidi-sidlite PUBLIC Threads::Threads)
+
 # ---------------------------------------------------------------- embedded data
 set(SIDMIDI_GENERATED "${CMAKE_CURRENT_BINARY_DIR}/generated")
 set(SIDMIDI_EMBED_HEADER "${SIDMIDI_GENERATED}/EmbeddedData.h")
@@ -88,6 +100,7 @@ add_library(sidmidi-emu STATIC
     src/emu/Cia6526.cpp
     src/emu/Vic.cpp
     src/emu/SidBank.cpp
+    src/emu/SidChip.cpp
     src/emu/MidiCart.cpp
     src/emu/Cartridge.cpp
     src/emu/D64.cpp
@@ -103,7 +116,7 @@ add_library(sidmidi-emu STATIC
 target_include_directories(sidmidi-emu PUBLIC src "${SIDMIDI_GENERATED}")
 add_dependencies(sidmidi-emu sidmidi-embedded)
 target_compile_options(sidmidi-emu PRIVATE -O3)
-target_link_libraries(sidmidi-emu PUBLIC sidmidi-residfp)
+target_link_libraries(sidmidi-emu PUBLIC sidmidi-residfp sidmidi-sidlite)
 
 if (SIDMIDI_BUILD_PLUGIN AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/cmake/plugin.cmake")
     include(cmake/plugin.cmake)
@@ -143,6 +156,7 @@ if (SIDMIDI_BUILD_TOOLS)
     if (SIDMIDI_BUILD_PLUGIN)
         # A minimal host that opens the window (X11; win32 under wine).
         add_executable(sidmidi-gui-host tests/clap_gui_host.cpp)
+        target_include_directories(sidmidi-gui-host PRIVATE src)
         target_link_libraries(sidmidi-gui-host PRIVATE clap Threads::Threads)
         if (CMAKE_SYSTEM_NAME STREQUAL "Windows")
             target_link_libraries(sidmidi-gui-host PRIVATE user32 gdi32)
@@ -158,4 +172,9 @@ if (SIDMIDI_BUILD_TOOLS)
     add_executable(sidmidi-cputest tools/cputest.cpp)
     target_include_directories(sidmidi-cputest PRIVATE src)
     sidmidi_static_runtime(sidmidi-cputest)
+
+    # The two SID engines chip by chip: sample count, pitch, state, voice mask.
+    add_executable(sidmidi-enginetest tools/enginetest.cpp)
+    target_link_libraries(sidmidi-enginetest PRIVATE sidmidi-emu)
+    sidmidi_static_runtime(sidmidi-enginetest)
 endif()

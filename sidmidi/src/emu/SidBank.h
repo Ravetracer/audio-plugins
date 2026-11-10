@@ -1,18 +1,19 @@
 #pragma once
 
-// Up to eight SID chips, each a reSIDfp instance with its own model, variant
-// and address.
+// Up to eight SID chips, each with its own model, variant and address, all on
+// one engine: reSIDfp (the reference) or SIDLite (light, for slower
+// machines; see SidChip.h).
 //
 // The chips are clocked lazily: a chip is brought up to the machine's cycle
 // whenever its registers are touched and at the end of every audio block,
-// producing samples at the host rate through reSIDfp's sinc resampler. Each
+// producing samples at the host rate (reSIDfp: through its resampler). Each
 // chip writes into its own FIFO; the resamplers do not land on exactly the
 // same sample count every block, so the FIFOs are read with a little latency
 // and nobody hears the difference.
 //
 // Voice outputs: a SID mixes its three voices through one analogue filter, so
 // there is no single voice to tap after it. With voice outputs on, each chip
-// gets three more reSIDfp instances (taps) that see every register write but
+// gets three more instances of its engine (taps) that see every register write but
 // hear only one voice each (the vendored voice mask, patch 0003): each voice
 // goes through its own filter, mixer and volume. On a 6581, whose filter
 // distorts the sum, the three together are close to the chip's output but
@@ -23,11 +24,15 @@
 #include <memory>
 #include <vector>
 
-namespace reSIDfp {
-class residfp;
-}
-
 namespace sidmidi::emu {
+
+class SidChip;
+
+// The SID engine of the whole machine. Accurate: reSIDfp, every control
+// applies. Light: SIDLite, about 30 times cheaper per SID; of the tuning only
+// the model (6581 or 8580) applies, and a register write lands on the next
+// output sample.
+enum class SidEngine : uint8_t { ReSidFp = 0, Lite };
 
 enum class SidVariant : uint8_t
 {
@@ -76,6 +81,7 @@ struct SidChipConfig
 struct SidBankConfig
 {
     int count = 1;
+    SidEngine engine = SidEngine::ReSidFp;
     SidResampling resampling = SidResampling::Sinc;
     bool voiceOutputs = false; // three taps per chip, one per voice
     std::array<SidChipConfig, 8> chips{};
@@ -105,6 +111,12 @@ public:
     int count() const { return cfg_.count; }
 
     void reset(uint64_t clk);
+    // After a reset and its registers written back on a running machine (a
+    // snapshot this build cannot restore, a new engine): the writes step the
+    // output's DC, which takes half a second to die away through the C64's
+    // output filter -- a thump. This runs every chip that long, unheard and
+    // without moving the machine's time. Off the audio thread.
+    void settle();
 
     // Address decoding. Returns the chip at `addr`, or -1. SID 1 mirrors
     // through $D400-$D7FF wherever no other chip is placed.
@@ -169,9 +181,9 @@ private:
     };
     struct Chip
     {
-        std::unique_ptr<reSIDfp::residfp> sid;
+        std::unique_ptr<SidChip> sid;
         // Voice outputs: one chip per voice, hearing only that voice.
-        std::array<std::unique_ptr<reSIDfp::residfp>, kVoices> taps;
+        std::array<std::unique_ptr<SidChip>, kVoices> taps;
         std::array<Fifo, kVoices> voiceFifo;
         uint64_t clk = 0;
         // A chip nobody has written to since its reset is dormant once its
@@ -184,9 +196,10 @@ private:
         Fifo fifo;
     };
     void catchUp(Chip& c, uint64_t clk);
+    void settleChip(Chip& c);
     void pushSilence(Chip& c, uint64_t cycles);
     void applyTuning(int i, bool force);
-    void setSampling(reSIDfp::residfp& sid) const;
+    void setSampling(SidChip& sid) const;
     // Builds a chip's taps as copies of the chip, each hearing one voice.
     void createTaps(int i);
 

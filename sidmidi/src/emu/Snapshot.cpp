@@ -149,7 +149,8 @@ std::vector<uint8_t> saveSnapshot(const C64& c)
         w.bytes(ch.data);
         w.u32(static_cast<uint32_t>(ch.pos));
     }
-    // SIDs: their registers (always usable) and reSIDfp's state (this build only).
+    // SIDs: their registers (always usable) and the engine's state (this engine
+    // and this build only).
     w.u32(static_cast<uint32_t>(c.sids.count()));
     for (int i = 0; i < c.sids.count(); ++i)
         for (int r = 0; r < 32; ++r)
@@ -371,6 +372,7 @@ bool loadSnapshot(C64& c, const std::vector<uint8_t>& data)
         for (int i = 0; i < c.sids.count() && i < static_cast<int>(nSids); ++i)
             for (int k = 0; k < 25; ++k)
                 c.sids.write(i, static_cast<uint8_t>(k), regs[static_cast<size_t>(i)][static_cast<size_t>(k)], c.clk());
+        c.sids.settle();
     } else {
         for (int i = 0; i < c.sids.count(); ++i)
             for (int k = 0; k < 32; ++k)

@@ -3,7 +3,7 @@
 #include <algorithm>
 #include <cstring>
 
-#include "residfp/residfp.h"
+#include "SidChip.h"
 
 namespace sidmidi::emu {
 
@@ -92,58 +92,49 @@ void SidBank::Fifo::pop(float* out, size_t n)
 
 SidBank::~SidBank() = default;
 
-namespace {
-// Applies a chip's tuning to one reSIDfp instance. Only what changed is
-// touched: a new chip model rebuilds tables, a filter curve does not, and a
-// slider drag must stay cheap. `valid` false applies everything.
-void tune(reSIDfp::residfp& sid, const SidChipConfig& cc, const SidChipConfig& was, bool valid)
-{
-    const bool is8580 = sidVariantIs8580(cc.variant);
-    const bool modelChanged = !valid || sidVariantIs8580(was.variant) != is8580;
-    if (modelChanged)
-        sid.setChipModel(is8580 ? reSIDfp::CSG8580 : reSIDfp::MOS6581);
-    if (modelChanged || was.tuning.combined != cc.tuning.combined) {
-        reSIDfp::CombinedWaveforms cw = reSIDfp::AVERAGE;
-        if (cc.tuning.combined == CombinedWaves::Weak)
-            cw = reSIDfp::WEAK;
-        else if (cc.tuning.combined == CombinedWaves::Strong)
-            cw = reSIDfp::STRONG;
-        sid.setCombinedWaveforms(cw);
-    }
-    if (modelChanged || was.tuning.filterCurve != cc.tuning.filterCurve) {
-        if (is8580)
-            sid.setFilter8580Curve(std::clamp<double>(cc.tuning.filterCurve, 0.0, 1.0));
-        else
-            sid.setFilter6581Curve(std::clamp<double>(cc.tuning.filterCurve, 0.0, 1.0));
-    }
-    if (modelChanged || was.tuning.dacLeakage != cc.tuning.dacLeakage)
-        sid.setDacLeakage(std::clamp<double>(cc.tuning.dacLeakage, 0.0, 1.0));
-    if (modelChanged || was.tuning.digiOffset != cc.tuning.digiOffset)
-        sid.setOffset6581(std::clamp<double>(cc.tuning.digiOffset, 0.0, 1.0));
-    if (modelChanged || was.tuning.filterEnabled != cc.tuning.filterEnabled)
-        sid.enableFilter(cc.tuning.filterEnabled);
-    if (modelChanged || was.tuning.filterRange != cc.tuning.filterRange)
-        sid.setFilter6581Range(std::clamp<double>(cc.tuning.filterRange, 0.0, 1.0));
-    if (modelChanged || was.tuning.oldCaps != cc.tuning.oldCaps)
-        sid.enableOld6581caps(cc.tuning.oldCaps);
-}
-} // namespace
-
 void SidBank::applyTuning(int i, bool force)
 {
     const bool valid = appliedValid_[i] && !force;
-    tune(*chips_[i].sid, cfg_.chips[i], applied_[i], valid);
+    chips_[i].sid->tune(cfg_.chips[i], applied_[i], valid);
     for (auto& t : chips_[i].taps)
         if (t)
-            tune(*t, cfg_.chips[i], applied_[i], valid);
+            t->tune(cfg_.chips[i], applied_[i], valid);
     applied_[i] = cfg_.chips[i];
     appliedValid_[i] = true;
 }
 
-void SidBank::setSampling(reSIDfp::residfp& sid) const
+void SidBank::setSampling(SidChip& sid) const
 {
-    sid.setSamplingParameters(clockHz_, cfg_.resampling == SidResampling::Fast ? reSIDfp::DECIMATE : reSIDfp::RESAMPLE,
-                              sampleRate_);
+    sid.setSampling(clockHz_, cfg_.resampling, sampleRate_);
+}
+
+namespace {
+// How long a chip restarted on a running machine runs unheard first.
+constexpr double kRestartSettleSeconds = 0.5;
+} // namespace
+
+void SidBank::settleChip(Chip& c)
+{
+    // A chip nobody has written to has nothing to settle.
+    if (!c.written)
+        return;
+    auto run = [this](SidChip& sid) {
+        for (auto todo = static_cast<uint64_t>(kRestartSettleSeconds * clockHz_); todo;) {
+            const unsigned n = static_cast<unsigned>(std::min<uint64_t>(todo, 20000));
+            todo -= n;
+            sid.clock(n, scratch_.data());
+        }
+    };
+    run(*c.sid);
+    for (auto& t : c.taps)
+        if (t)
+            run(*t);
+}
+
+void SidBank::settle()
+{
+    for (int i = 0; i < cfg_.count; ++i)
+        settleChip(chips_[i]);
 }
 
 void SidBank::createTaps(int i)
@@ -151,19 +142,15 @@ void SidBank::createTaps(int i)
     auto& c = chips_[i];
     // The chip as it is now: registers, oscillators, envelopes and filter.
     std::vector<char> state(static_cast<size_t>(c.sid->stateSize()));
-    c.sid->saveState(state.data(), static_cast<int>(state.size()));
+    c.sid->saveState(state.data());
     const auto& cc = cfg_.chips[i];
     for (int v = 0; v < kVoices; ++v) {
-        auto t = std::make_unique<reSIDfp::residfp>();
-        tune(*t, cc, cc, false);
+        auto t = makeSidChip(c.sid->engine());
+        t->tune(cc, cc, false);
         setSampling(*t);
         t->reset();
         std::vector<char> copy = state; // restoreState wants a mutable buffer
-        t->restoreState(copy.data(), static_cast<int>(copy.size()));
-        if (!sidVariantIs8580(cc.variant)) {
-            t->setFilter6581Range(std::clamp<double>(cc.tuning.filterRange, 0.0, 1.0));
-            t->enableOld6581caps(cc.tuning.oldCaps);
-        }
+        t->restoreState(copy.data(), static_cast<int>(copy.size()), cc);
         t->setVoiceMask(static_cast<unsigned char>(1u << v));
         c.taps[static_cast<size_t>(v)] = std::move(t);
         // As far behind as the chip's own output, so the voices line up with it.
@@ -185,9 +172,17 @@ void SidBank::configure(const SidBankConfig& cfg, double clockHz, double sampleR
     sampleRate_ = sampleRate;
     for (int i = 0; i < cfg_.count; ++i) {
         auto& c = chips_[i];
-        bool fresh = false;
+        bool fresh = false, switched = false;
+        if (c.sid && c.sid->engine() != cfg_.engine) {
+            switched = true;
+            // A new engine: new chips, which start from the registers last
+            // written (oscillators and envelopes start over).
+            c.sid.reset();
+            for (auto& t : c.taps)
+                t.reset();
+        }
         if (!c.sid) {
-            c.sid = std::make_unique<reSIDfp::residfp>();
+            c.sid = makeSidChip(cfg_.engine);
             fresh = true;
         }
         applyTuning(i, fresh);
@@ -209,6 +204,10 @@ void SidBank::configure(const SidBankConfig& cfg, double clockHz, double sampleR
             c.sid->reset();
             for (int r = 0; r < 25; ++r)
                 c.sid->write(r, regs_[i][r]);
+            // A chip that replaces one on the other engine picks up a running
+            // machine (see settle()).
+            if (switched)
+                settleChip(c);
         }
         if (cfg_.voiceOutputs && !c.taps[0])
             createTaps(i);
@@ -415,7 +414,7 @@ std::vector<char> SidBank::saveState() const
         const size_t at = out.size();
         out.resize(at + 4 + static_cast<size_t>(n));
         std::memcpy(out.data() + at, &n, 4);
-        sid.saveState(out.data() + at + 4, n);
+        sid.saveState(out.data() + at + 4);
     }
     // The voice taps after all chips (older builds stop reading before them).
     for (int i = 0; i < cfg_.count; ++i)
@@ -426,7 +425,7 @@ std::vector<char> SidBank::saveState() const
             const size_t at = out.size();
             out.resize(at + 4 + static_cast<size_t>(n));
             std::memcpy(out.data() + at, &n, 4);
-            t->saveState(out.data() + at + 4, n);
+            t->saveState(out.data() + at + 4);
         }
     return out;
 }
@@ -444,18 +443,10 @@ bool SidBank::restoreState(const std::vector<char>& data, uint64_t clk)
         if (n != c.sid->stateSize() || at + static_cast<size_t>(n) > data.size())
             return false;
         std::vector<char> buf(data.begin() + static_cast<long>(at), data.begin() + static_cast<long>(at + n));
-        c.sid->restoreState(buf.data(), n);
-        // The chip's saved state carries its 6581 range and caps too; the
-        // machine's settings are the authority (they were applied before
-        // this). Not the curve: setting it recomputes the cutoff voltage the
-        // state just restored, which need not equal its formula at that
-        // moment, and the restore already brings back the curve the
-        // settings name.
-        const auto& t = cfg_.chips[static_cast<size_t>(i)].tuning;
-        if (!sidVariantIs8580(cfg_.chips[static_cast<size_t>(i)].variant)) {
-            c.sid->setFilter6581Range(std::clamp<double>(t.filterRange, 0.0, 1.0));
-            c.sid->enableOld6581caps(t.oldCaps);
-        }
+        // Another engine's state (a project saved with the other one) does not
+        // restore: the caller then starts the chips from their registers.
+        if (!c.sid->restoreState(buf.data(), n, cfg_.chips[static_cast<size_t>(i)]))
+            return false;
         at += static_cast<size_t>(n);
         c.clk = clk;
         c.fifo.clear();
@@ -492,12 +483,8 @@ bool SidBank::restoreState(const std::vector<char>& data, uint64_t clk)
             std::memcpy(&n, data.data() + at, 4);
             at += 4;
             std::vector<char> buf(data.begin() + static_cast<long>(at), data.begin() + static_cast<long>(at + n));
-            t.restoreState(buf.data(), n);
+            t.restoreState(buf.data(), n, cc);
             at += static_cast<size_t>(n);
-            if (!sidVariantIs8580(cc.variant)) {
-                t.setFilter6581Range(std::clamp<double>(cc.tuning.filterRange, 0.0, 1.0));
-                t.enableOld6581caps(cc.tuning.oldCaps);
-            }
             c.voiceFifo[static_cast<size_t>(v)].clear();
         }
     }

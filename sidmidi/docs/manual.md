@@ -347,8 +347,18 @@ warp you would neither hear nor really see it.
 more than one find the others at their addresses: click a chip's **Address**
 to change it.
 
-**Resampling** — how the SIDs' output becomes your project's sample rate.
-**Sinc (best)** is clean and is the one to use. **Fast** saves roughly a
+**SID engine** — **Accurate** or **Light**. Accurate emulates the SID chips
+in every detail and is the one to use when your computer can afford it.
+Light is a much simpler emulation that needs about a thirtieth of the
+processing time per SID, for slower computers, many SIDs or many SidMidi
+instances. It sounds close but not the same: the filter is plainer, digis
+(samples played through the volume register) come out rougher, and of the
+chip settings below only the model applies, 6581 or 8580. The other
+settings keep their values for when you switch back. You can change the
+engine while a project plays; the notes that are sounding start over.
+
+**Resampling** — Accurate engine only: how the SIDs' output becomes your
+project's sample rate. **Sinc (best)** is clean and is the one to use. **Fast** saves roughly a
 tenth to a fifth of the processing time of each SID that is playing,
 because it skips the filter that keeps high notes clean; the price is
 aliasing, a harsh, metallic edge on bright sounds. Try it when many SIDs
@@ -385,6 +395,10 @@ your DAW can automate.
 
 Each chip is set on its own: two 6581s in one C64, or in two SidMidi
 instances, can have different filters.
+
+With the **Light** engine only **Model** applies, as 6581 or 8580 (every
+6581 revision is the same 6581 there), together with Level and Pan. Curve,
+Range, Caps and Combined are shown greyed out.
 
 ## 8. CC maps
 
@@ -494,12 +508,15 @@ another.
 
 ## 11. Processor load
 
-The C64 itself costs about a tenth of one processor core, a little more
-while its window is open (the screen is only drawn then). Each SID that
-plays adds a few percent; SIDs that a
-program never touches cost nothing. With all eight SIDs playing, expect
-around a third to two fifths of a core; *Fast* resampling (chapter 7) brings
-that down a little.
+Measured on a 2021 laptop processor, as a share of one core: the C64 itself
+costs a few percent, a little more while its window is open (the screen is
+only drawn then). Each SID that plays adds about 4-6 % on the **Accurate**
+engine (an 8580 a little less than a 6581) and about 0.2 % on **Light**;
+SIDs that a program never touches cost nothing. With all eight SIDs playing,
+expect around a third to a half of a core on Accurate and about a twentieth
+on Light. Voice outputs (chapter 9) multiply
+a SID's share by about four. *Fast* resampling (chapter 7) brings Accurate
+down a little; the **Light** engine is the big step.
 
 When your DAW renders a project offline, SidMidi runs the C64 at a fixed
 pace, so two renders of the same project are identical.
@@ -524,16 +541,24 @@ pace, so two renders of the same project are identical.
 - **The sound changes when the DAW stops.** The DAW sends "reset all
   controllers" on stop, which some programs take as a sound change
   (chapter 6).
+- **Crackles or dropouts with many SIDs or instances.** Your computer is
+  running out of time: switch the **SID engine** to **Light** (chapter 7),
+  turn off voice outputs you do not route, or close SidMidi's windows.
 - **A slot's name did not change in the DAW.** Reopen the plugin's window or
   the track; some DAWs only read parameter names then.
 
 ## 13. Licence and credits
 
 SidMidi is free software under the **GNU General Public License, version 2
-or later**. Its SID emulation is **reSIDfp** (libresidfp) by Dag Lem,
-Antti S. Lankila and Leandro Nini, under the same licence, with two changes
-of SidMidi's own: each SID has its own filter state (range, capacitors and
-the filter's dither), so chips and instances never affect each other. The
+or later**. Its Accurate SID engine is **reSIDfp** (libresidfp) by Dag Lem,
+Antti S. Lankila and Leandro Nini, under the same licence, with changes of
+SidMidi's own: each SID has its own filter state (range, capacitors and
+the filter's dither), so chips and instances never affect each other, and a
+voice can be heard on its own (voice outputs). Its Light engine is
+**SIDLite** from libsidplayfp by Leandro Nini, based on **cRSID** by Mihaly
+Horvath (Hermit), under the same licence, changed so that it keeps exact
+time and pitch at every sample rate, can be saved with a project, and
+has voice outputs too. The
 screen palettes come from the VICE project (GPL). The HerMIDI interface runs
 the original HerMIDI firmware by Mihaly Horvath (Hermit), from the
 SID-Wizard package.

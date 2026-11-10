@@ -153,9 +153,16 @@ public:
     std::string tooltip() const override { return tooltip_; }
     void setTooltip(std::string t) { tooltip_ = std::move(t); }
     std::function<void()> onBegin, onEnd;
+    // Disabled: drawn faint, ignores the mouse, keeps its value.
+    void setEnabled(bool e)
+    {
+        enabled_ = e;
+        repaint();
+    }
 
 private:
     std::string caption_, tooltip_;
+    bool enabled_ = true;
     double lo_, hi_, def_;
     std::function<double()> get_;
     std::function<void(double)> set_;
@@ -179,9 +186,16 @@ public:
         items_ = std::move(items);
         repaint();
     }
+    // Disabled: drawn faint, ignores the mouse, keeps its value.
+    void setEnabled(bool e)
+    {
+        enabled_ = e;
+        repaint();
+    }
 
 private:
     std::string caption_, tooltip_;
+    bool enabled_ = true;
     std::vector<std::string> items_;
     std::function<int()> get_;
     std::function<void(int)> set_;

@@ -14,7 +14,9 @@ program; SidMidi is the computer it runs on.
 
 - **Licence: GPL-2.0-or-later for `sidmidi/` only.** The SID chips are
   reSIDfp (libresidfp 1.2.3, Dag Lem, Antti Lankila, Leandro Nini), vendored
-  in `third_party/libresidfp/` with its `COPYING`; our changes to it are
+  in `third_party/libresidfp/` with its `COPYING`, and for the Light engine
+  SIDLite (libsidplayfp, Leandro Nini, after Hermit's cRSID) in
+  `third_party/sidlite/`; our changes to it are
   kept as patches in `third_party/patches/` and listed in
   `third_party/README.md`. The rest of the
   repository stays MIT; `sidmidi/LICENSE` says so.
@@ -431,7 +433,7 @@ button only cleared its own flag.
   start (anything that calls `Engine::resync()`) warps again. Settings
   changes re-prime the audio through `resyncAudio()` and leave a stopped
   warp stopped.
-- The private loader extension is `/4` (`warping`, `set_warp`);
+- The private loader extension is `/4` (`warping`, `set_warp`; `/5` since 0.8.0 adds `set_sid_engine`);
   `sidmidi-selftest` checks that a start warps, the button stops it, the next
   load warps again and Auto warp off loads in real time. Put back, the
   button check fails.
@@ -465,7 +467,101 @@ The user asked for every SID voice on its own DAW track.
   silent when off, no allocation, a note lands on one voice, a round trip is
   exact for the voices too.
 
+## Status (0.8.0, 2026-11-10)
+
+For slower machines: a second SID engine, **Light** (SIDLite), beside
+**Accurate** (reSIDfp, the default and the reference), one per machine
+(`sid_engine`, 0/1; a project without the key is on reSIDfp).
+
+**Why SIDLite.** libsidplayfp 3.x's port of Hermit's cRSID (Leandro Nini,
+GPL-2.0-or-later). Benchmarked on 2026-11-10 (i7-11800H, a 60 s play-routine
+stream, 48 kHz, one core; `build-bench/`, scratch): reSIDfp 6581 5.35 % per
+SID with Sinc, 4.77 % with Fast; 8580 4.03 / 3.42 %; SIDLite 0.17 % (both
+models). Without AVX2 reSIDfp is about 20 % slower, SIDLite unchanged.
+Envelopes are clocked by the cycle (7-cycle chunks), waveforms and filter
+once per output sample, so a write lands on the next sample: `$D418` digis
+and same-sample gate tricks are rougher, the 6581 filter is a table.
+
+What was built:
+- `third_party/sidlite/`, libsidplayfp `b2f27b5`, three patches
+  (`third_party/README.md`): **0001** exact clock ratio (it made 0.13 % too
+  many samples and played 2 cents flat; a dithered ratio from 16 more bits,
+  a `double` clock, an `unsigned int` rate -- 96000 had wrapped to 30464),
+  **0002** state (field by field through a visitor), **0003** voice mask.
+- `emu/SidChip.*`: the engine interface behind `SidBank`. `ReSidFpChip` is
+  what `SidBank` did before, call for call (`tune` moved there whole);
+  `LiteChip` adds what SIDLite leaves out -- POT registers, the bus value
+  and its fade (reSIDfp's TTLs), and above 48 kHz it runs at host/n and
+  upsamples by n (linear), a whole ratio so nothing drifts. Dormancy,
+  FIFOs, taps and catch-up stay in `SidBank` for both.
+- Switching engines (`configure()`, under `machineLock_`) builds new chips
+  from `regs_`. A fresh chip on a running machine steps its output's DC --
+  a thump 10 dB over the note -- so it runs half a second unheard first
+  (`SidBank::settle`). The snapshot fallback (reset and registers written
+  back, for a state this build or this engine cannot restore) had the same
+  thump since 0.1.0 and settles too.
+- Snapshot: a Light chip's state starts with the magic `SLT1`; a state of
+  the other engine does not restore and the chips start from their
+  registers.
+- Machine page: "SID engine" (Accurate / Light) in the third row; on Light,
+  Curve, Range, Caps, Combined and Resampling are disabled (new
+  `setEnabled` on `Slider` and `Choice`), their values kept. The page
+  rebuilds from the timer when the engine changes.
+- Loader extension `/5`: `set_sid_engine`, the window's path, for the tests.
+  `sidmidi-gui-host` asked for `/3` since 0.6.0 and so never loaded
+  `SIDMIDI_LOAD`; it now includes the header.
+- `sidmidi-run --engine lite`, `sidmidi-gui-snapshot --engine lite`,
+  `make-demos.sh --engine lite` (to `dist/demos/SidMidi-Light/`).
+
+Tests:
+- reSIDfp unchanged: renders bit-identical to 0.7.0 at 44.1/48/96 kHz, 8580,
+  Fast, three SIDs, voice outputs, NTSC (a worktree of 0.7.0, `cmp`).
+- `sidmidi-enginetest` (new, Linux and wine): Light's sample count over ten
+  minutes within one internal sample (PAL, NTSC, 44.1-192 kHz), A4 within
+  0.001 cent, state round trip exact at 48 and 96 kHz, the other engine's
+  state refused, voice taps sum to the chip within -92 dB, a masked voice 3
+  still drives OSC3, runs repeat. Patch 0001 taken out, the count and pitch
+  checks fail.
+- `sidmidi-selftest ... lite` (in `install.sh`): the whole suite on Light,
+  with the filter range required to change nothing. Both modes: an engine
+  switch during a note, levels within 6 dB of a twin that does not switch,
+  no allocation; a project without `sid_engine` plays on reSIDfp, exactly
+  from a reSIDfp project, without a thump from a Light one. Without the
+  settle both thump checks fail.
+- Two Light renders are identical (`install.sh`); Windows and Linux renders
+  are bit-identical on both engines.
+
+Cost in the plugin (`sidmidi-run`, Cynthcart on one SID, window closed):
+9.7 % of a core on Accurate, 3.6 % on Light; with voice outputs 24.7 % and
+4.3 %. The C64 itself is about 3.4 %; with the window open add about 1 %.
+
+Listening material for the user (not shipped): `dist/demos/SidMidi-Light/`
+beside the reSIDfp demos, and `dist/listen-080/` -- a Cynthcart filter sweep
+and a `$D418` digi (a generated 32-step sine at 14 kHz; both engines play it
+at 465.7 Hz, reSIDfp with more second harmonic) on both engines.
+`build-bench/listen.sh` makes them. Light's level is within about 1.5 dB of
+reSIDfp's; its `$D418` step at boot is louder (warp mutes it).
+
+Not done, and why:
+- **reSIDfp's own resamplers drift.** `SincResampler` and
+  `ZeroOrderResampler` keep the clock ratio as `int(clock / rate * 1024)`,
+  so reSIDfp makes 0.02 % (48 kHz) to 0.05 % (96 kHz) too many samples:
+  the engine drops about five every half second at 48 kHz, and pitch is
+  0.4-0.8 cent flat. Found by `sidmidi-enginetest`, which prints it as
+  "info". A patch would change the reference engine's output, so it was left
+  for the user to decide.
+- A baseline `x86-64` build: release binaries need AVX2 (both engines).
+
 ## Next session
+
+Where 0.8.0 was left (2026-11-10):
+- **The user listens** to the Light engine against reSIDfp on the other
+  system: `dist/demos/SidMidi-Light/` against `dist/demos/SidMidi/`, and
+  `dist/listen-080/`.
+- **Decide on reSIDfp's resampler drift** (see the 0.8.0 status): a patch
+  0004 to libresidfp that keeps more fractional bits in `SincResampler` and
+  `ZeroOrderResampler` would end the dropped samples and the flat pitch,
+  and change every reSIDfp render slightly.
 
 Where 0.5.0 was left (2026-11-10):
 - **Feedback from DAW use** goes first. Untested in a host: the symbolic

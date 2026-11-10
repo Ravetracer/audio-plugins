@@ -21,10 +21,13 @@ cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release >/dev/null
 ninja -C build
 tools/fetch-cpu-tests.sh build
 build/sidmidi-keytest
+build/sidmidi-enginetest
 prg="${SIDMIDI_TEST_PRG:-_dev_/cynthcart/bin/cynthcart.prg}"
 roms="${SIDMIDI_TEST_ROMS:-_dev_/roms}"
 if [ -f "$prg" ] && [ -d "$roms" ]; then
     build/sidmidi-selftest build/SidMidi.clap "$prg" 2 "$roms"
+    # The same on the Light SID engine.
+    build/sidmidi-selftest build/SidMidi.clap "$prg" 2 "$roms" lite
     # The true 1541: a disk loaded through the emulated drive, then a state round trip.
     d64="${SIDMIDI_TEST_D64:-_dev_/Station64/sta64.d64}"
     [ -f "$d64" ] && build/sidmidi-selftest build/SidMidi.clap "$d64" 14 "$roms" true1541
@@ -52,6 +55,12 @@ if [ -f "$prg" ] && [ -d "$roms" ]; then
     done
     cmp -s build/repeat-1.wav build/repeat-2.wav && echo "ok    two renders are identical" \
         || { echo "FAIL  two renders differ"; exit 1; }
+    for i in 1 2; do
+        build/sidmidi-run --roms "$roms" --prg "$prg" --seconds 6 --note 4:60:100:1 --no-video --engine lite \
+            --wav build/repeat-lite-$i.wav >/dev/null
+    done
+    cmp -s build/repeat-lite-1.wav build/repeat-lite-2.wav && echo "ok    two Light renders are identical" \
+        || { echo "FAIL  two Light renders differ"; exit 1; }
 else
     echo "no test program ($prg) or ROMs ($roms): plugin self-test skipped"
 fi
