@@ -171,7 +171,8 @@ void MidiCart::write(uint16_t addr, uint8_t v, uint64_t clk)
 
 void MidiCart::takeTransmitted(std::vector<MidiByte>& out)
 {
-    out.insert(out.end(), tx_.begin(), tx_.end());
+    for (size_t i = 0; i < tx_.size() && out.size() < out.capacity(); ++i)
+        out.push_back(tx_[i]);
     tx_.clear();
 }
 

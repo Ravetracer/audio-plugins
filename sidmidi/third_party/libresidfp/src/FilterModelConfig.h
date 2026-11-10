@@ -76,12 +76,17 @@ private:
      * Not sure about the effect of using such small buffer of numbers
      * since the random sequence repeats every 1024 values but for
      * now it seems to do the job.
+     *
+     * SidMidi: the position in the sequence is the caller's, not shared
+     * state here. The model config is a process-wide singleton, its tables
+     * are built on several threads at once, and every chip reads noise from
+     * it per sample: one shared index made the tables differ from run to run
+     * and every chip's output depend on every other chip's.
      */
     class Randomnoise
     {
     private:
         double buffer[1024];
-        mutable int index = 0;
     public:
         Randomnoise()
         {
@@ -90,7 +95,7 @@ private:
             for (int i=0; i<1024; i++)
                 buffer[i] = unif(re);
         }
-        double getNoise() const { index = (index + 1) & 0x3ff; return buffer[index]; }
+        double getNoise(unsigned int& index) const { index = (index + 1) & 0x3ff; return buffer[index]; }
     };
 
 protected:
@@ -183,6 +188,7 @@ protected:
      */
     inline void buildSummerTable(const OpAmp& opampModel)
     {
+        unsigned int noise = 0; // one sequence per table, whichever thread builds it
         const double r_N16 = 1. / N16;
 
         int idx = 0;
@@ -197,7 +203,7 @@ protected:
             for (int vi = 0; vi < size; vi++)
             {
                 const double vin = vmin + vi * r_N16 * r_idiv; /* vmin .. vmax */
-                summer[idx++] = getNormalizedValue(opampModel.solve(n, vin));
+                summer[idx++] = getNormalizedValue(opampModel.solve(n, vin), noise);
             }
         }
     }
@@ -212,6 +218,7 @@ protected:
      */
     inline void buildMixerTable(const OpAmp& opampModel, double nRatio)
     {
+        unsigned int noise = 0; // one sequence per table, whichever thread builds it
         const double r_N16 = 1. / N16;
 
         int idx = 0;
@@ -226,7 +233,7 @@ protected:
             for (int vi = 0; vi < size; vi++)
             {
                 const double vin = vmin + vi * r_N16 * r_idiv; /* vmin .. vmax */
-                mixer[idx++] = getNormalizedValue(opampModel.solve(n, vin));
+                mixer[idx++] = getNormalizedValue(opampModel.solve(n, vin), noise);
             }
         }
     }
@@ -240,6 +247,7 @@ protected:
      */
     inline void buildVolumeTable(const OpAmp& opampModel, double nDivisor)
     {
+        unsigned int noise = 0; // one sequence per table, whichever thread builds it
         const double r_N16 = 1. / N16;
 
         int idx = 0;
@@ -252,7 +260,7 @@ protected:
             for (int vi = 0; vi < size; vi++)
             {
                 const double vin = vmin + vi * r_N16; /* vmin .. vmax */
-                volume[idx++] = getNormalizedValue(opampModel.solve(n, vin));
+                volume[idx++] = getNormalizedValue(opampModel.solve(n, vin), noise);
             }
         }
     }
@@ -266,6 +274,7 @@ protected:
      */
     inline void buildResonanceTable(const OpAmp& opampModel, const double resonance_n[16])
     {
+        unsigned int noise = 0; // one sequence per table, whichever thread builds it
         const double r_N16 = 1. / N16;
 
         int idx = 0;
@@ -277,7 +286,7 @@ protected:
             for (int vi = 0; vi < size; vi++)
             {
                 const double vin = vmin + vi * r_N16; /* vmin .. vmax */
-                resonance[idx++] = getNormalizedValue(opampModel.solve(resonance_n[n8], vin));
+                resonance[idx++] = getNormalizedValue(opampModel.solve(resonance_n[n8], vin), noise);
             }
         }
     }
@@ -294,9 +303,9 @@ public:
 
     // helper functions
 
-    inline uint16_t getNormalizedValue(double value) const
+    inline uint16_t getNormalizedValue(double value, unsigned int& noise) const
     {
-        return to_uint16_dither(N16 * (value - vmin), rnd.getNoise());
+        return to_uint16_dither(N16 * (value - vmin), rnd.getNoise(noise));
     }
 
     template<int N>
@@ -310,9 +319,9 @@ public:
         return to_uint16(N16 * vmin);
     }
 
-    inline int32_t getNormalizedVoice(float value, uint8_t env) const
+    inline int32_t getNormalizedVoice(float value, uint8_t env, unsigned int& noise) const
     {
-        return static_cast<int32_t>(getNormalizedValue(getVoiceVoltage(value, env)));
+        return static_cast<int32_t>(getNormalizedValue(getVoiceVoltage(value, env), noise));
     }
 };
 

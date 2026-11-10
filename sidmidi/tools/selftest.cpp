@@ -8,24 +8,56 @@
 //    the Load button or a drop would), lets it start, plays notes through the
 //    note port, and checks that sound came out.
 // 2. Saves the state, loads it into a second instance, and runs both on: they
-//    must produce the same audio sample for sample -- the snapshot puts the
+//    must produce the same audio, bit for bit -- the snapshot puts the
 //    machine back exactly where it was.
 // 3. Checks the parameters are listed and answer.
+// 4. CC maps: a map in a scratch map folder that names the program is picked
+//    when it loads; the slots carry its names and value labels; a slot that
+//    moves reaches the machine as one message, an unchanged or unused one as
+//    none; the map travels with the state.
+// 5. Counts heap allocations inside process() once the program is running --
+//    this executable's operator new replaces the one the plugin's libstdc++
+//    would use -- through notes, and while a flood
+//    of MIDI, more than the cable queue holds, goes in; the count must stay
+//    zero and the program must still play afterwards.
 //
 // Exit code 0 when everything passed.
 
 #include <clap/clap.h>
 #include <dlfcn.h>
+#include <sys/stat.h>
 
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <new>
 #include <string>
 #include <vector>
 
 #include "plugin/SidMidiPlugin.h" // the loader extension only
+
+// Allocation counter: everything that reaches operator new while `counting`
+// is set, i.e. inside the plugin's process().
+namespace {
+bool counting = false;
+size_t allocations = 0;
+}
+
+void* operator new(std::size_t n)
+{
+    if (counting)
+        ++allocations;
+    if (void* p = std::malloc(n ? n : 1))
+        return p;
+    throw std::bad_alloc();
+}
+void* operator new[](std::size_t n) { return ::operator new(n); }
+void operator delete(void* p) noexcept { std::free(p); }
+void operator delete[](void* p) noexcept { std::free(p); }
+void operator delete(void* p, std::size_t) noexcept { std::free(p); }
+void operator delete[](void* p, std::size_t) noexcept { std::free(p); }
 
 namespace {
 
@@ -44,11 +76,19 @@ clap_host_t host = {CLAP_VERSION_INIT, nullptr, "sidmidi-selftest", "Ravetracer"
 
 struct EventList
 {
+    std::vector<clap_event_param_value_t> params; // at time 0, before the MIDI
     std::vector<clap_event_midi_t> events;
-    static uint32_t size(const clap_input_events_t* l) { return static_cast<uint32_t>(static_cast<EventList*>(l->ctx)->events.size()); }
+    static uint32_t size(const clap_input_events_t* l)
+    {
+        const auto* e = static_cast<EventList*>(l->ctx);
+        return static_cast<uint32_t>(e->params.size() + e->events.size());
+    }
     static const clap_event_header_t* get(const clap_input_events_t* l, uint32_t i)
     {
-        return &static_cast<EventList*>(l->ctx)->events[i].header;
+        auto* e = static_cast<EventList*>(l->ctx);
+        if (i < e->params.size())
+            return &e->params[i].header;
+        return &e->events[i - e->params.size()].header;
     }
 };
 
@@ -85,12 +125,25 @@ struct Instance
         r.resize(512);
         aux.assign(8, std::vector<float>(512));
     }
-    // Runs `blocks` of 512 frames; `notes` adds MIDI at given block numbers.
-    std::vector<float> run(int blocks, const std::vector<std::pair<int, std::vector<uint8_t>>>& midi = {})
+    // Runs `blocks` of 512 frames; `notes` adds MIDI at given block numbers,
+    // `params` parameter values (id, value) in the first block.
+    std::vector<float> run(int blocks, const std::vector<std::pair<int, std::vector<uint8_t>>>& midi = {},
+                           const std::vector<std::pair<clap_id, double>>& params = {})
     {
         std::vector<float> all;
         for (int b = 0; b < blocks; ++b) {
             EventList ev;
+            for (const auto& pv : params) {
+                if (b != 0)
+                    break;
+                clap_event_param_value_t e{};
+                e.header = {sizeof(e), 0, CLAP_CORE_EVENT_SPACE_ID, CLAP_EVENT_PARAM_VALUE, 0};
+                e.param_id = pv.first;
+                e.note_id = -1;
+                e.port_index = e.channel = e.key = -1;
+                e.value = pv.second;
+                ev.params.push_back(e);
+            }
             for (const auto& m : midi) {
                 if (m.first != b)
                     continue;
@@ -119,7 +172,9 @@ struct Instance
             p.in_events = &in;
             p.out_events = &outEv;
             p.steady_time = -1;
+            counting = true;
             plugin->process(plugin, &p);
+            counting = false;
             all.insert(all.end(), l.begin(), l.end());
         }
         return all;
@@ -175,6 +230,21 @@ int main(int argc, char** argv)
     const double ready = argc > 3 ? std::atof(argv[3]) : 3.0;
     if (argc > 4)
         setenv("SIDMIDI_ROM_DIR", argv[4], 1);
+    // A CC map for the program under test, in a scratch folder (this runs in
+    // the build container, whose /tmp goes with it).
+    std::string program = argv[2];
+    program = program.substr(program.find_last_of('/') + 1);
+    program = program.substr(0, program.find('.'));
+    char mapDir[] = "/tmp/sidmidi-selftest-XXXXXX";
+    if (mkdtemp(mapDir)) {
+        setenv("SIDMIDI_CCMAP_DIR", mapDir, 1);
+        const std::string map = "name = Selftest\nprograms = " + program +
+                                "\nchannel = 3\n1 = 74 Cutoff | 0 Closed, 64 Open\n2 = 7@2 Volume\n";
+        if (FILE* f = std::fopen((std::string(mapDir) + "/selftest.ccmap").c_str(), "w")) {
+            std::fputs(map.c_str(), f);
+            std::fclose(f);
+        }
+    }
     void* lib = dlopen(argv[1], RTLD_NOW | RTLD_LOCAL);
     if (!lib) {
         std::fprintf(stderr, "%s\n", dlerror());
@@ -188,7 +258,7 @@ int main(int argc, char** argv)
     Instance a;
     a.create(factory);
     auto* params = static_cast<const clap_plugin_params_t*>(a.plugin->get_extension(a.plugin, CLAP_EXT_PARAMS));
-    check(params && params->count(a.plugin) == 17, "17 parameters");
+    check(params && params->count(a.plugin) == sidmidi::pid::kCount, "17 parameters plus the CC slots");
     double v = -1;
     check(params && params->get_value(a.plugin, 1, &v) && v == 0.0, "volume answers 0 dB");
 
@@ -213,10 +283,69 @@ int main(int argc, char** argv)
 
     const int readyBlocks = static_cast<int>(ready * 48000 / 512) + 200; // + the warp
     a.run(readyBlocks);
+    // Loading allocates (the virtual drive's DOS works in strings and
+    // vectors, and a file operation is rare); playing must not. Count from here.
+    allocations = 0;
     const auto silent = a.run(40);
     const auto note = a.run(80, {{0, {0x90, 60, 100}}, {60, {0x80, 60, 0}}});
     std::printf("      quiet %.1f dB, note %.1f dB\n", rmsDb(silent), rmsDb(note));
     check(rmsDb(note) > -50.0 && rmsDb(note) > rmsDb(silent) + 20.0, "a MIDI note makes the C64 play");
+    check(allocations == 0, ("no allocation in process() so far (" + std::to_string(allocations) + ")").c_str());
+
+    // CC map: picked by the program's name, slots named after it.
+    {
+        auto infoName = [&](clap_id id) {
+            for (uint32_t i = 0; params && i < params->count(a.plugin); ++i) {
+                clap_param_info_t info{};
+                if (params->get_info(a.plugin, i, &info) && info.id == id)
+                    return std::string(info.name);
+            }
+            return std::string("?");
+        };
+        check(infoName(1000) == "Cutoff" && infoName(1001) == "Volume" && infoName(1002) == "Slot 3",
+              ("the program's CC map names the slots (" + infoName(1000) + ", " + infoName(1001) + ", " +
+               infoName(1002) + ")").c_str());
+        char text[64] = {};
+        double back = -1;
+        check(params->value_to_text(a.plugin, 1000, 70.0, text, sizeof(text)) && std::string(text) == "Open" &&
+                  params->text_to_value(a.plugin, 1000, "closed", &back) && back == 0.0,
+              "a slot's values carry the map's labels both ways");
+        const uint32_t m0 = loader->midi_in_count(a.plugin);
+        a.run(2, {}, {{1000, 100.0}});
+        const uint32_t m1 = loader->midi_in_count(a.plugin);
+        a.run(2, {}, {{1000, 100.4}, {1002, 50.0}});
+        const uint32_t m2 = loader->midi_in_count(a.plugin);
+        std::printf("      slot moves reached the machine: %u, then %u\n", m1 - m0, m2 - m1);
+        check(m1 - m0 == 1, "a moved slot sends its controller once");
+        check(m2 == m1, "an unchanged value and an unused slot send nothing");
+        check(allocations == 0, "the CC slots allocate nothing in process()");
+
+        // Heard: CC 7 is the volume in Cynthcart and Station64 alike. A 6581
+        // steps its DC level when the volume changes (what C64 digis play
+        // with), so the step settles before the note is measured.
+        a.run(40, {}, {{1001, 0.0}});
+        const auto off = a.run(60, {{2, {0x90, 60, 100}}, {40, {0x80, 60, 0}}});
+        a.run(40, {}, {{1001, 127.0}});
+        const auto on = a.run(60, {{2, {0x90, 60, 100}}, {40, {0x80, 60, 0}}});
+        std::printf("      Volume slot at 0: %.1f dB, at 127: %.1f dB\n", rmsDb(off), rmsDb(on));
+        check(rmsDb(on) > rmsDb(off) + 20.0, "the program hears the slot (Volume 0 is quiet, 127 is not)");
+    }
+
+    // A flood: 3000 messages (9000 bytes) in one block, more than the
+    // cable queue holds. The rest is dropped, nothing allocates, and once the
+    // cable has drained (about 1.3 s) the program still answers a note.
+    {
+        std::vector<std::pair<int, std::vector<uint8_t>>> flood;
+        for (int i = 0; i < 3000; ++i)
+            flood.push_back({0, {0x80, static_cast<uint8_t>(i & 127), 0}});
+        const size_t before = allocations;
+        a.run(200, flood);
+        const auto after = a.run(80, {{0, {0x90, 60, 100}}, {60, {0x80, 60, 0}}});
+        std::printf("      after a 9000-byte flood: note %.1f dB, %zu allocations\n", rmsDb(after),
+                    allocations - before);
+        check(allocations == before, "a MIDI flood allocates nothing in process()");
+        check(rmsDb(after) > -50.0, "the C64 still plays after a MIDI flood");
+    }
 
     // State round trip.
     auto* state = static_cast<const clap_plugin_state_t*>(a.plugin->get_extension(a.plugin, CLAP_EXT_STATE));
@@ -229,6 +358,17 @@ int main(int argc, char** argv)
     clap_istream_t is{&buf, Buffer::read};
     auto* stateB = static_cast<const clap_plugin_state_t*>(b.plugin->get_extension(b.plugin, CLAP_EXT_STATE));
     check(stateB && stateB->load(b.plugin, &is), "state loads into a second instance");
+    {
+        auto* paramsB = static_cast<const clap_plugin_params_t*>(b.plugin->get_extension(b.plugin, CLAP_EXT_PARAMS));
+        clap_param_info_t info{};
+        bool named = false;
+        double v = -1;
+        for (uint32_t i = 0; paramsB && i < paramsB->count(b.plugin); ++i)
+            if (paramsB->get_info(b.plugin, i, &info) && info.id == 1000)
+                named = std::string(info.name) == "Cutoff";
+        check(named && paramsB->get_value(b.plugin, 1000, &v) && v == 100.0,
+              "the CC map and the slot values travel with the state");
+    }
     const std::vector<std::pair<int, std::vector<uint8_t>>> phrase = {
         {2, {0x90, 64, 110}}, {30, {0x80, 64, 0}}, {35, {0x90, 67, 90}}, {70, {0x80, 67, 0}}};
     const auto outA = a.run(100, phrase);
@@ -237,16 +377,17 @@ int main(int argc, char** argv)
     for (size_t i = 0; i < outA.size(); ++i)
         maxDiff = std::max(maxDiff, static_cast<double>(std::fabs(outA[i] - outB[i])));
     std::printf("      after the round trip: max difference %.3g, level %.1f dB\n", maxDiff, rmsDb(outB));
-    for (size_t seg = 0; maxDiff >= 1e-3 && seg < outA.size(); seg += outA.size() / 10) {
+    for (size_t seg = 0; maxDiff > 0 && seg < outA.size(); seg += outA.size() / 10) {
         double d = 0;
         for (size_t i = seg; i < std::min(outA.size(), seg + outA.size() / 10); ++i)
             d = std::max(d, static_cast<double>(std::fabs(outA[i] - outB[i])));
         std::printf("        from sample %6zu: %.3g\n", seg, d);
     }
-    // reSIDfp restores its chips to within a sample's last bit or two (it
-    // recomputes a cached filter value rather than storing it): -60 dB is the
-    // bar, far below hearing and far above what a wrong restore produces.
-    check(maxDiff < 1e-3 && rmsDb(outB) > -50.0, "the restored machine plays on like the original (within -60 dB)");
+    // Exact: the snapshot carries every chip's dither position too (the
+    // vendored reSIDfp keeps it per chip). Both instances ran in this
+    // process one after the other, so this also proves that one instance's
+    // chips do not move the other's.
+    check(maxDiff == 0.0 && rmsDb(outB) > -50.0, "the restored machine plays on exactly like the original");
 
     a.destroy();
     b.destroy();

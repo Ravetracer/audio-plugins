@@ -12,6 +12,7 @@ Engine::Engine()
     for (auto& f : frames_)
         f.assign(static_cast<size_t>(emu::Vic::kWidth) * emu::Vic::kHeight, 0);
     scratch_.resize(8192);
+    txBytes_.reserve(emu::MidiCart::TxQueue::capacity());
     // A short default pan spread so a second SID is audibly a second SID.
     for (int i = 0; i < emu::SidBank::kMaxChips; ++i)
         mix[i].pan = i == 0 ? 0.0f : ((i & 1) ? 0.5f : -0.5f);
@@ -182,6 +183,8 @@ void Engine::process(uint32_t frames, const MidiEvent* events, size_t numEvents,
         const auto& e = events[i];
         const uint64_t at = clkAt(std::min(e.offset, frames));
         runTo(at);
+        if ((e.ext ? e.extSize : static_cast<uint32_t>(e.size)) > c64_.midiRoom())
+            continue; // whole or not at all
         if (e.ext) {
             for (uint32_t k = 0; k < e.extSize; ++k)
                 c64_.midiReceive(e.ext[k]);
@@ -248,6 +251,8 @@ void Engine::process(uint32_t frames, const MidiEvent* events, size_t numEvents,
     txBytes_.clear();
     c64_.midi.takeTransmitted(txBytes_);
     for (const auto& b : txBytes_) {
+        if (midiOut.size() >= midiOut.capacity())
+            break; // the caller reserves; growing here would allocate in the audio thread
         MidiEvent e;
         const double off = (static_cast<double>(b.clk) - static_cast<double>(start)) / cyclesPerSample_;
         e.offset = static_cast<uint32_t>(std::clamp(off, 0.0, static_cast<double>(frames ? frames - 1 : 0)));

@@ -9,8 +9,8 @@
 // DAW enter the cable at their time and leave it at 31250 baud.
 
 #include <cstdint>
-#include <deque>
 
+#include "FixedQueue.h"
 #include "Pic12F509.h"
 
 namespace sidmidi::emu {
@@ -48,12 +48,14 @@ public:
         uint64_t at;
         uint8_t byte;
     };
-    std::deque<Queued>& queue() { return queue_; }
-    const std::deque<Queued>& queue() const { return queue_; }
+    // As the cartridge's: about 1.3 s of cable, then bytes are dropped.
+    using Queue = FixedQueue<Queued, 4096>;
+    Queue& queue() { return queue_; }
+    const Queue& queue() const { return queue_; }
 
 private:
     bool midiLevel(uint64_t t);
-    std::deque<Queued> queue_;
+    Queue queue_;
 };
 
 } // namespace sidmidi::emu

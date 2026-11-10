@@ -1,8 +1,8 @@
 #include "Snapshot.h"
 
 #include <cstring>
-#include <deque>
 #include <memory>
+#include <vector>
 #include <string>
 #include <type_traits>
 
@@ -121,7 +121,8 @@ std::vector<uint8_t> saveSnapshot(const C64& c)
     w.u32(static_cast<uint32_t>(c.midi.type));
     w.pod(c.midi.s);
     w.u32(static_cast<uint32_t>(c.midi.rxQueue().size()));
-    for (const auto& b : c.midi.rxQueue()) {
+    for (size_t i = 0; i < c.midi.rxQueue().size(); ++i) {
+        const auto& b = c.midi.rxQueue()[i];
         w.u64(b.clk);
         w.u32(b.byte);
     }
@@ -177,7 +178,8 @@ std::vector<uint8_t> saveSnapshot(const C64& c)
     w.pod(c.herMidi.st);
     w.pod(c.herDue);
     w.u32(static_cast<uint32_t>(c.herMidi.queue().size()));
-    for (const auto& q : c.herMidi.queue()) {
+    for (size_t i = 0; i < c.herMidi.queue().size(); ++i) {
+        const auto& q = c.herMidi.queue()[i];
         w.u64(q.at);
         w.u32(q.byte);
     }
@@ -205,13 +207,14 @@ bool loadSnapshot(C64& c, const std::vector<uint8_t>& data)
     const auto midiType = static_cast<MidiInterface>(r.u32());
     MidiCartState midi;
     r.pod(midi);
-    std::deque<MidiByte> rx;
+    std::vector<MidiByte> rx;
     const uint32_t nrx = r.u32();
-    for (uint32_t i = 0; i < nrx && r.ok && i < 100000; ++i) {
+    for (uint32_t i = 0; i < nrx && r.ok; ++i) {
         MidiByte b;
         b.clk = r.u64();
         b.byte = static_cast<uint8_t>(r.u32());
-        rx.push_back(b);
+        if (rx.size() < MidiCart::RxQueue::capacity())
+            rx.push_back(b);
     }
     const auto cartImage = r.bytes();
     const auto cartName = r.str();
@@ -272,13 +275,14 @@ bool loadSnapshot(C64& c, const std::vector<uint8_t>& data)
     r.pod(pic);
     r.pod(herState);
     r.pod(herDue);
-    std::deque<HerMidi::Queued> herQueue;
+    std::vector<HerMidi::Queued> herQueue;
     const uint32_t nq = r.u32();
-    for (uint32_t i = 0; i < nq && r.ok && i < 100000; ++i) {
+    for (uint32_t i = 0; i < nq && r.ok; ++i) {
         HerMidi::Queued q;
         q.at = r.u64();
         q.byte = static_cast<uint8_t>(r.u32());
-        herQueue.push_back(q);
+        if (herQueue.size() < HerMidi::Queue::capacity())
+            herQueue.push_back(q);
     }
     if (!r.ok)
         return false;
@@ -318,7 +322,9 @@ bool loadSnapshot(C64& c, const std::vector<uint8_t>& data)
     c.cia2.s = cia2;
     c.midi.type = midiType;
     c.midi.s = midi;
-    c.midi.rxQueue() = rx;
+    c.midi.rxQueue().clear();
+    for (const auto& b : rx)
+        c.midi.rxQueue().push_back(b);
     c.autostart_ = autostart;
     c.autostartPrg_ = autostartPrg;
     c.pendingTyping_ = typing;
@@ -334,7 +340,9 @@ bool loadSnapshot(C64& c, const std::vector<uint8_t>& data)
     c.driveDue = driveDue;
     c.herMidi.pic.s = pic;
     c.herMidi.st = herState;
-    c.herMidi.queue() = herQueue;
+    c.herMidi.queue().clear();
+    for (const auto& q : herQueue)
+        c.herMidi.queue().push_back(q);
     c.herDue = herDue;
     c.restoreDerivedState();
 

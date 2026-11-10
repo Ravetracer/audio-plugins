@@ -2,7 +2,7 @@
 
 // The SidMidi window: a strip of buttons, the C64's screen, and a status line.
 // The Machine button swaps the screen for the machine page (video, MIDI
-// interface, the SIDs and their mix).
+// interface, the SIDs and their mix), the CC button for the CC map page.
 //
 // A click into the screen gives the C64 the keyboard: from then on every key
 // goes to the emulated machine (see Keymap.h for where they land), until the
@@ -27,6 +27,7 @@ namespace sidmidi::gui {
 
 class ScreenView;
 class MachinePage;
+class CcPage;
 class RomPanel;
 
 class Editor : public RootWidget, public WindowListener
@@ -84,6 +85,8 @@ private:
     void openExportDialog();
     void showDiskMenu();
     void toggleMachinePage();
+    void toggleCcPage();
+    void showPage(Widget* which);
     void sendKeyState();
     void paintStatus(cairo_t* cr);
 
@@ -101,8 +104,10 @@ private:
     Choice* joyChoice_ = nullptr;
     Choice* portChoice_ = nullptr;
     Button* machineButton_ = nullptr;
+    Button* ccButton_ = nullptr;
     ScreenView* screen_ = nullptr;
     MachinePage* page_ = nullptr;
+    CcPage* ccPage_ = nullptr;
     RomPanel* romPanel_ = nullptr;
     double romScanAt_ = 0.0;
 

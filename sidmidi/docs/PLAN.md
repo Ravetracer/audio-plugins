@@ -14,7 +14,9 @@ program; SidMidi is the computer it runs on.
 
 - **Licence: GPL-2.0-or-later for `sidmidi/` only.** The SID chips are
   reSIDfp (libresidfp 1.2.3, Dag Lem, Antti Lankila, Leandro Nini), vendored
-  unchanged in `third_party/libresidfp/` with its `COPYING`. The rest of the
+  in `third_party/libresidfp/` with its `COPYING`; our changes to it are
+  kept as patches in `third_party/patches/` and listed in
+  `third_party/README.md`. The rest of the
   repository stays MIT; `sidmidi/LICENSE` says so.
 - **Standalone, not on `shared/`**, like Aurum and Substrike: a C64 screen,
   a machine settings page and a keyboard grab do not fit `WindowSpec`. The
@@ -141,7 +143,15 @@ saved to it, and can be exported as a `.d64`.
   bytes. Optional MIDI clock, start/stop/continue and song position from the
   host transport, for programs that sync (SID Synth's arp, SID-Wizard).
 - Note out: whatever the ACIA transmits, as CLAP MIDI events.
-- Parameters (automatable): master volume, per-SID level and pan.
+- Parameters (automatable): master volume, per-SID level and pan, and 64
+  CC slots (0.3.0, `plugin/CcMap.*`; Station64 alone has 53): ids 1000-1063, range 0..127, named by
+  the CC map in use and renamed with `CLAP_PARAM_RESCAN_INFO | TEXT` (the
+  VST3 wrapper turns it into `kParamTitlesChanged`; ranges cannot change
+  there, so they never do). A slot's move becomes a CC at its sample
+  offset, sent only when its integer value changed; restoring values
+  (project load, a new map) sends nothing. Factory maps are
+  `ccmaps/*.ccmap`, embedded; the user's live in `CC Maps` beside the ROM
+  folder; the map in use is saved in the project in full.
 - State: a full machine snapshot (CPU, RAM, colour RAM, VIC, CIAs, ACIA,
   every SID's reSIDfp state, cartridge, virtual drive and disk image) plus
   the machine settings, so a project reopens with the program running as it
@@ -234,21 +244,78 @@ Open, in order:
   thread; make them fixed rings.
 - Phase 4: per-chip 6581 filter range, manual, screenshots, demos.
 
+## Status (0.2.1, 2026-11-10)
+
+Fixes, no new features:
+- **No allocation in the audio thread while playing.** The MIDI cable
+  queues (`MidiCart`, `HerMidi`) and the cartridge's transmit queue are
+  fixed rings (`emu/FixedQueue.h`, 4096 bytes in, 1024 out); a MIDI message
+  that does not fit is dropped whole -- a cut one left a stray status byte
+  that Cynthcart's parser never recovered from. The plugin's event list and
+  MIDI out stop at their reserved capacity, the event sort is an in-place
+  insertion sort (`std::stable_sort` takes a heap buffer), and the mix
+  buffer is sized at `activate()`. The self-test counts allocations inside
+  `process()` with its own `operator new` and floods 9000 bytes of MIDI
+  into one block: 0.2.0 allocated 2 times playing and 290 times in the
+  flood, 0.2.1 never. Loading a file through the virtual drive still
+  allocates (its DOS works in strings and vectors); the count starts once
+  the program runs.
+- **Offline renders repeat exactly, and instances are independent.**
+  reSIDfp dithers its filter's float-to-int conversion from a 1024-value
+  noise table whose position was one `mutable` index in the process-wide
+  model config: its tables are built on six threads at once (a race, so
+  they differed from run to run by an LSB), and every chip of every
+  instance advanced the same index per sample. The index is now per filter
+  and in reSIDfp's `State` (patch `third_party/patches/0001-...`). Two
+  renders are bit-identical (`install.sh` checks it), Linux and Windows
+  render the same bits, and the state round trip is exact (it was within
+  -60 dB). A 0.2.0 snapshot's SID state no longer matches in size and
+  takes the existing fallback: a reset with the registers written back.
+
+## Status (0.3.0, 2026-11-10)
+
+**CC maps.** 64 automatable CC slots, named by a map per program:
+- Factory maps (`ccmaps/`) for SID Synth (36, with every value label),
+  Station64 (53), Cynthcart (13) and SID-Wizard (3). The CC numbers and the
+  value ranges were read from the manuals and, where those are silent, from
+  the programs' own handlers (SID Synth and Station64 disassembled from a
+  memory dump, Cynthcart and SID-Wizard from their sources).
+- Loading a program picks the map whose `programs` occur in the file name
+  (*Follow program*, on by default); the user's maps win over the factory's.
+- The CC page: map, follow, channel, save as, folder; per slot the CC (with
+  `@channel`), the name with value labels after `|`, and the value.
+- Self-test: names and labels through the CLAP API, one message per move
+  and none for an unchanged value or an unused slot, no allocation, the map
+  in the state, and heard: the Volume slot at 0 and 127 (CC 7 is the volume
+  in Cynthcart and Station64).
+- SID Synth was driven end to end in `sidmidi-run`: menu item 01 to DATEL,
+  then CC 74 and 71 at 0 and 127 move its CUTOF and RESO bars.
+
+Worth knowing about the programs (all in the factory maps' comments):
+SID Synth's MIDI is off until menu item 01 selects an interface; Cynthcart
+treats CC 16-31 as 0-15 and ignores 32 and up; Station64 listens on
+channels 1-3 and treats CC 64-127 as 0-63 (so a host's CC 121 "reset all
+controllers" switches its LP filter off); SID-Wizard stops its tune on
+CC 121.
+
 ## Next session
 
-Where 0.2.0 was left (2026-11-09):
+Where 0.3.0 was left (2026-11-10):
 - **The user tests it in a DAW** (VST3 on this machine, CLAP on the other).
-  Whatever comes back goes first. Untested so far: keyboard focus in the
+  Whatever comes back goes first. New in 0.3.0 and untested in a host:
+  whether the host renames the CC slots live when the map changes (CLAP
+  rescan INFO; VST3 kParamTitlesChanged through the wrapper). Untested so far: keyboard focus in the
   host's window, the VST3 wrapper's MIDI (CC, pitch bend, SysEx), MIDI out,
   resizing, mouse and paddles from the host mouse, the file chooser.
 - The ROMs are installed for the user's own tests in
   `~/.local/share/SidMidi/ROMs` (copied from `_dev_/roms`, private use).
-- `MidiCart` and `HerMidi` queue incoming bytes in `std::deque`s, which can
-  allocate in the audio thread: replace with fixed rings.
+- Maybe: make the virtual drive allocation-free (fixed buffers for its
+  channels, names and directory) so a program loading a file mid-song
+  cannot allocate in the audio thread either.
 - The user has not yet confirmed that HerMIDI's firmware may stay in
   `third_party/hermidi` (no licence of its own; SID-Wizard declares itself
   WTF-licensed).
-- Phase 4: per-chip 6581 filter range (a vendored reSIDfp patch), the manual
+- Phase 4: per-chip 6581 filter range (a second reSIDfp patch), the manual
   (`docs/manual.md` and SidMidi's own make-manual, the ROM instructions in
   it), screenshots, demos; then drop `NO-RELEASE`.
 - Maybe: a cheaper resampling option for many active SIDs.

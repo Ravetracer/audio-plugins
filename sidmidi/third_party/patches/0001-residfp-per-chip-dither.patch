@@ -1,0 +1,239 @@
+diff --git a/sidmidi/third_party/libresidfp/src/Filter.h b/sidmidi/third_party/libresidfp/src/Filter.h
+index b5342bf..4fb9190 100644
+--- a/sidmidi/third_party/libresidfp/src/Filter.h
++++ b/sidmidi/third_party/libresidfp/src/Filter.h
+@@ -131,9 +131,13 @@ protected:
+ 
+     virtual void restartIntegrators() = 0;
+ 
++    // SidMidi: this chip's own position in the dither sequence (see
++    // FilterModelConfig::Randomnoise), saved with the state.
++    mutable unsigned int noiseIndex = 0;
++
+     inline int32_t getNormalizedVoice(float v, uint8_t env) const
+     {
+-        return m_fmc.getNormalizedVoice(v, env);
++        return m_fmc.getNormalizedVoice(v, env, noiseIndex);
+     }
+ 
+     virtual int32_t getNormalizedMixerVoice(float v, uint8_t env) const = 0;
+diff --git a/sidmidi/third_party/libresidfp/src/FilterModelConfig.h b/sidmidi/third_party/libresidfp/src/FilterModelConfig.h
+index d875653..bd75350 100644
+--- a/sidmidi/third_party/libresidfp/src/FilterModelConfig.h
++++ b/sidmidi/third_party/libresidfp/src/FilterModelConfig.h
+@@ -76,12 +76,17 @@ private:
+      * Not sure about the effect of using such small buffer of numbers
+      * since the random sequence repeats every 1024 values but for
+      * now it seems to do the job.
++     *
++     * SidMidi: the position in the sequence is the caller's, not shared
++     * state here. The model config is a process-wide singleton, its tables
++     * are built on several threads at once, and every chip reads noise from
++     * it per sample: one shared index made the tables differ from run to run
++     * and every chip's output depend on every other chip's.
+      */
+     class Randomnoise
+     {
+     private:
+         double buffer[1024];
+-        mutable int index = 0;
+     public:
+         Randomnoise()
+         {
+@@ -90,7 +95,7 @@ private:
+             for (int i=0; i<1024; i++)
+                 buffer[i] = unif(re);
+         }
+-        double getNoise() const { index = (index + 1) & 0x3ff; return buffer[index]; }
++        double getNoise(unsigned int& index) const { index = (index + 1) & 0x3ff; return buffer[index]; }
+     };
+ 
+ protected:
+@@ -183,6 +188,7 @@ protected:
+      */
+     inline void buildSummerTable(const OpAmp& opampModel)
+     {
++        unsigned int noise = 0; // one sequence per table, whichever thread builds it
+         const double r_N16 = 1. / N16;
+ 
+         int idx = 0;
+@@ -197,7 +203,7 @@ protected:
+             for (int vi = 0; vi < size; vi++)
+             {
+                 const double vin = vmin + vi * r_N16 * r_idiv; /* vmin .. vmax */
+-                summer[idx++] = getNormalizedValue(opampModel.solve(n, vin));
++                summer[idx++] = getNormalizedValue(opampModel.solve(n, vin), noise);
+             }
+         }
+     }
+@@ -212,6 +218,7 @@ protected:
+      */
+     inline void buildMixerTable(const OpAmp& opampModel, double nRatio)
+     {
++        unsigned int noise = 0; // one sequence per table, whichever thread builds it
+         const double r_N16 = 1. / N16;
+ 
+         int idx = 0;
+@@ -226,7 +233,7 @@ protected:
+             for (int vi = 0; vi < size; vi++)
+             {
+                 const double vin = vmin + vi * r_N16 * r_idiv; /* vmin .. vmax */
+-                mixer[idx++] = getNormalizedValue(opampModel.solve(n, vin));
++                mixer[idx++] = getNormalizedValue(opampModel.solve(n, vin), noise);
+             }
+         }
+     }
+@@ -240,6 +247,7 @@ protected:
+      */
+     inline void buildVolumeTable(const OpAmp& opampModel, double nDivisor)
+     {
++        unsigned int noise = 0; // one sequence per table, whichever thread builds it
+         const double r_N16 = 1. / N16;
+ 
+         int idx = 0;
+@@ -252,7 +260,7 @@ protected:
+             for (int vi = 0; vi < size; vi++)
+             {
+                 const double vin = vmin + vi * r_N16; /* vmin .. vmax */
+-                volume[idx++] = getNormalizedValue(opampModel.solve(n, vin));
++                volume[idx++] = getNormalizedValue(opampModel.solve(n, vin), noise);
+             }
+         }
+     }
+@@ -266,6 +274,7 @@ protected:
+      */
+     inline void buildResonanceTable(const OpAmp& opampModel, const double resonance_n[16])
+     {
++        unsigned int noise = 0; // one sequence per table, whichever thread builds it
+         const double r_N16 = 1. / N16;
+ 
+         int idx = 0;
+@@ -277,7 +286,7 @@ protected:
+             for (int vi = 0; vi < size; vi++)
+             {
+                 const double vin = vmin + vi * r_N16; /* vmin .. vmax */
+-                resonance[idx++] = getNormalizedValue(opampModel.solve(resonance_n[n8], vin));
++                resonance[idx++] = getNormalizedValue(opampModel.solve(resonance_n[n8], vin), noise);
+             }
+         }
+     }
+@@ -294,9 +303,9 @@ public:
+ 
+     // helper functions
+ 
+-    inline uint16_t getNormalizedValue(double value) const
++    inline uint16_t getNormalizedValue(double value, unsigned int& noise) const
+     {
+-        return to_uint16_dither(N16 * (value - vmin), rnd.getNoise());
++        return to_uint16_dither(N16 * (value - vmin), rnd.getNoise(noise));
+     }
+ 
+     template<int N>
+@@ -310,9 +319,9 @@ public:
+         return to_uint16(N16 * vmin);
+     }
+ 
+-    inline int32_t getNormalizedVoice(float value, uint8_t env) const
++    inline int32_t getNormalizedVoice(float value, uint8_t env, unsigned int& noise) const
+     {
+-        return static_cast<int32_t>(getNormalizedValue(getVoiceVoltage(value, env)));
++        return static_cast<int32_t>(getNormalizedValue(getVoiceVoltage(value, env), noise));
+     }
+ };
+ 
+diff --git a/sidmidi/third_party/libresidfp/src/FilterModelConfig6581.cpp b/sidmidi/third_party/libresidfp/src/FilterModelConfig6581.cpp
+index 6563640..5b3d9b8 100644
+--- a/sidmidi/third_party/libresidfp/src/FilterModelConfig6581.cpp
++++ b/sidmidi/third_party/libresidfp/src/FilterModelConfig6581.cpp
+@@ -303,11 +303,12 @@ uint16_t* FilterModelConfig6581::getDAC(double adjustment) const
+     const double new_dac_zero = getDacZero(adjustment);
+ 
+     uint16_t* f0_dac = new uint16_t[1 << DAC_BITS];
++    unsigned int noise = 0;
+ 
+     for (unsigned int i = 0; i < (1 << DAC_BITS); i++)
+     {
+         const double fcd = dac.getOutput(i);
+-        f0_dac[i] = getNormalizedValue(new_dac_zero + fcd * dac_scale);
++        f0_dac[i] = getNormalizedValue(new_dac_zero + fcd * dac_scale, noise);
+     }
+ 
+     return f0_dac;
+diff --git a/sidmidi/third_party/libresidfp/src/Integrator6581.h b/sidmidi/third_party/libresidfp/src/Integrator6581.h
+index 1bab4d8..99305ff 100644
+--- a/sidmidi/third_party/libresidfp/src/Integrator6581.h
++++ b/sidmidi/third_party/libresidfp/src/Integrator6581.h
+@@ -183,6 +183,14 @@ private:
+ 
+     FilterModelConfig6581& fmc;
+ 
++    // SidMidi: a fixed draw from the dither sequence (the n-th value), so
++    // the constants do not depend on what was converted before.
++    static uint16_t normalized(FilterModelConfig6581& fmc, double v, unsigned int n)
++    {
++        unsigned int noise = n - 1;
++        return fmc.getNormalizedValue(v, noise);
++    }
++
+ public:
+     explicit Integrator6581(FilterModelConfig6581& new_fmc) :
+         wlSnake(new_fmc.getWL_snake()),
+@@ -190,8 +198,8 @@ public:
+         n(1.4),
+ #endif
+         nVddt_Vw_2(0),
+-        nVddt(new_fmc.getNormalizedValue(new_fmc.getVddt())),
+-        nVt(new_fmc.getNormalizedValue(new_fmc.getVth())),
++        nVddt(normalized(new_fmc, new_fmc.getVddt(), 1)),
++        nVt(normalized(new_fmc, new_fmc.getVth(), 2)),
+         nVmin(new_fmc.getNVmin()),
+         fmc(new_fmc) {}
+ 
+diff --git a/sidmidi/third_party/libresidfp/src/Integrator8580.h b/sidmidi/third_party/libresidfp/src/Integrator8580.h
+index b1a1904..aa0bf8b 100644
+--- a/sidmidi/third_party/libresidfp/src/Integrator8580.h
++++ b/sidmidi/third_party/libresidfp/src/Integrator8580.h
+@@ -91,7 +91,8 @@ public:
+ 
+         // Vg - Vth, normalized so that translated values can be subtracted:
+         // Vgt - x = (Vgt - t) - (x - t)
+-        nVgt = fmc.getNormalizedValue(Vgt);
++        unsigned int noise = 0; // a fixed draw, so the result does not depend on who asked before
++        nVgt = fmc.getNormalizedValue(Vgt, noise);
+     }
+ 
+     int32_t solve(int32_t vi) const override;
+diff --git a/sidmidi/third_party/libresidfp/src/State.cpp b/sidmidi/third_party/libresidfp/src/State.cpp
+index db3aa5b..210ceb5 100644
+--- a/sidmidi/third_party/libresidfp/src/State.cpp
++++ b/sidmidi/third_party/libresidfp/src/State.cpp
+@@ -100,6 +100,7 @@ int State::saveState(SID &s, char* buffer, int size)
+         state.Vhp[i] = f->Vhp;
+         state.Vbp[i] = f->Vbp;
+         state.Vlp[i] = f->Vlp;
++        state.noiseIndex[i] = f->noiseIndex;
+         state.extin[i] = f->extin;
+         state.fc[i] = f->fc;
+         state.filt1[i] = f->filt1;
+@@ -215,6 +216,7 @@ void State::restoreState(SID &s, char* buffer, int size)
+         f->Vhp = state.Vhp[i];
+         f->Vbp = state.Vbp[i];
+         f->Vlp = state.Vlp[i];
++        f->noiseIndex = state.noiseIndex[i] & 0x3ff;
+         f->extin = state.extin[i];
+         f->fc = state.fc[i];
+         f->filt1 = state.filt1[i];
+diff --git a/sidmidi/third_party/libresidfp/src/State.h b/sidmidi/third_party/libresidfp/src/State.h
+index c2ba2cb..4f41fbd 100644
+--- a/sidmidi/third_party/libresidfp/src/State.h
++++ b/sidmidi/third_party/libresidfp/src/State.h
+@@ -164,6 +164,9 @@ struct State
+     int tp_sampleIndex[2];
+     int tp_sampleOffset[2];
+     int32_t tp_outputValue[2];
++
++    // SidMidi: each filter's position in the dither sequence.
++    uint32_t noiseIndex[2];
+ };
+ 
+ 

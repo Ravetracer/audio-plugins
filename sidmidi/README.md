@@ -10,7 +10,7 @@ cartridge arrives in the DAW as MIDI.
 It is not a SID synthesizer with a C64 skin. The instrument is the C64
 program; SidMidi is the computer it runs on.
 
-**Status: 0.2.0, in development.** Not part of a release yet (see
+**Status: 0.3.0, in development.** Not part of a release yet (see
 `NO-RELEASE`). The plan and its phases are in [docs/PLAN.md](docs/PLAN.md).
 
 ## What is emulated
@@ -78,6 +78,17 @@ program; SidMidi is the computer it runs on.
   host's transport, the drive (Virtual, True 1541, None), the control port
   devices, and the SIDs: how many, where, which model, their filter, level
   and pan.
+- **CC** shows the CC map: the controllers the program listens to, as 64
+  automatable parameter slots in the host. Pick a map (SID Synth and the
+  other supported programs have one built in, and loading a program picks
+  its map when *Follow program* is on), or make your own: click a slot's
+  controller to set it (`74`, or `74@2` for channel 2), its name to rename
+  it, with value names after a `|` (`Vib On | 0 Off, 64 On`). *Save as*
+  stores the map as a text file in `~/.local/share/SidMidi/CC Maps`
+  (`%APPDATA%\SidMidi\CC Maps` on Windows). Moving a slot, by hand or by
+  automation, sends its controller to the C64 at that exact sample. The
+  slots keep their parameter ids, so automation stays put when the map
+  changes; the host shows the new names.
 - **Warp** runs the machine flat out, muted — for programs that take a while
   to unpack themselves (Station64 needs about twelve seconds).
 - The project saves the whole machine: reopening it puts the program back
@@ -131,8 +142,8 @@ program, play it a MIDI script, write a WAV and screenshots), `sidmidi-selftest`
 
 **GPL-2.0-or-later** — this folder only. The SID emulation is reSIDfp from
 [libresidfp](https://github.com/libsidplayfp/libresidfp) 1.2.3 (Dag Lem,
-Antti S. Lankila, Leandro Nini), vendored unchanged in `third_party/libresidfp`
-under the GPL, which makes SidMidi as a whole GPL. The palettes in `palettes/`
+Antti S. Lankila, Leandro Nini), vendored in `third_party/libresidfp` with
+one patch of ours (`third_party/patches/`), under the GPL, which makes SidMidi as a whole GPL. The palettes in `palettes/`
 are VICE's (GPL). HerMIDI's firmware in `third_party/hermidi` is Mihaly
 Horvath's, from the WTF-licensed SID-Wizard package. The rest of this
 repository is MIT.

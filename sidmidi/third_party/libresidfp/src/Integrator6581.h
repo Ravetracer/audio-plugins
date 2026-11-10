@@ -183,6 +183,14 @@ private:
 
     FilterModelConfig6581& fmc;
 
+    // SidMidi: a fixed draw from the dither sequence (the n-th value), so
+    // the constants do not depend on what was converted before.
+    static uint16_t normalized(FilterModelConfig6581& fmc, double v, unsigned int n)
+    {
+        unsigned int noise = n - 1;
+        return fmc.getNormalizedValue(v, noise);
+    }
+
 public:
     explicit Integrator6581(FilterModelConfig6581& new_fmc) :
         wlSnake(new_fmc.getWL_snake()),
@@ -190,8 +198,8 @@ public:
         n(1.4),
 #endif
         nVddt_Vw_2(0),
-        nVddt(new_fmc.getNormalizedValue(new_fmc.getVddt())),
-        nVt(new_fmc.getNormalizedValue(new_fmc.getVth())),
+        nVddt(normalized(new_fmc, new_fmc.getVddt(), 1)),
+        nVt(normalized(new_fmc, new_fmc.getVth(), 2)),
         nVmin(new_fmc.getNVmin()),
         fmc(new_fmc) {}
 

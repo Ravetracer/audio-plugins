@@ -43,6 +43,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <map>
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -313,7 +314,8 @@ int main(int argc, char** argv)
         return 1;
     }
 
-    Engine engine;
+    auto enginePtr = std::make_unique<Engine>(); // large; keep it off the stack
+    Engine& engine = *enginePtr;
     engine.realtime = false; // fixed warp: renders repeat exactly
     auto& c64 = engine.machine();
     c64.setRoms(roms);
@@ -362,6 +364,7 @@ int main(int argc, char** argv)
     const Palette& pal = palette(paletteKey);
     std::vector<float> l(static_cast<size_t>(block)), r(static_cast<size_t>(block)), wavData;
     std::vector<MidiEvent> events, midiOut;
+    midiOut.reserve(4096); // Engine::process appends only up to the capacity
     std::vector<uint8_t> frame(static_cast<size_t>(emu::Vic::kWidth) * emu::Vic::kHeight);
     const uint64_t total = static_cast<uint64_t>(seconds * rate);
     uint64_t done = 0;

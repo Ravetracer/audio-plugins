@@ -7,6 +7,7 @@
 
 #include "Keys.h"
 #include "engine/Resources.h"
+#include "plugin/CcMap.h"
 #include "plugin/SidMidiPlugin.h"
 
 namespace sidmidi::gui {
@@ -480,6 +481,233 @@ private:
     int builtCount_ = -1;
 };
 
+// ================================================================= CcPage
+
+// The CC map: which map, whether loading a program picks one, and the 64
+// slots -- controller, name (with value labels after a '|') and value.
+class CcPage : public Widget
+{
+public:
+    explicit CcPage(Editor& ed) : ed_(ed) {}
+
+    // Rebuilds when the map changed (another map, a program that picked one,
+    // a project load, an edit).
+    void sync()
+    {
+        if (ed_.plugin().ccMapSerial() != builtSerial_)
+            build();
+    }
+
+    void build()
+    {
+        clearChildren();
+        auto& pl = ed_.plugin();
+        builtSerial_ = pl.ccMapSerial();
+        maps_ = availableCcMaps();
+        const CcMap& cur = pl.ccMap();
+        const std::string curText = cur.toText();
+
+        // The map list: none, the factory maps, the user's, and the
+        // project's own when it is none of them (edited, or from a file
+        // that is gone).
+        std::vector<std::string> items{"None"};
+        selected_ = cur.empty() && cur.name.empty() ? 0 : -1;
+        for (size_t i = 0; i < maps_.size(); ++i) {
+            items.push_back(maps_[i].map.name + (maps_[i].factory ? "" : "  (yours)"));
+            if (selected_ < 0 && maps_[i].map.toText() == curText)
+                selected_ = static_cast<int>(i + 1);
+        }
+        if (selected_ < 0) {
+            items.push_back((cur.name.empty() ? std::string("Unnamed") : cur.name) + "  (edited)");
+            selected_ = static_cast<int>(items.size() - 1);
+        }
+        add<Choice>("Map", items, [this] { return selected_; },
+                    [this, &pl](int i) {
+                        if (i == 0)
+                            pl.setCcMap(CcMap{});
+                        else if (i - 1 < static_cast<int>(maps_.size()))
+                            pl.setCcMap(maps_[static_cast<size_t>(i - 1)].map);
+                    })
+            ->setTooltip("Which controllers the program listens to. The slots are host parameters named after it.");
+        add<Choice>("Follow program", std::vector<std::string>{"Off", "On"},
+                    [&pl] { return pl.settings().ccFollowProgram ? 1 : 0; },
+                    [&pl](int i) {
+                        MachineSettings s = pl.settings();
+                        s.ccFollowProgram = i == 1;
+                        pl.applySettings(s);
+                    })
+            ->setTooltip("Loading a program picks the map made for it");
+        std::vector<std::string> channels;
+        for (int c = 1; c <= 16; ++c)
+            channels.push_back(std::to_string(c));
+        add<Choice>("Channel", channels, [&pl] { return pl.ccMap().channel; },
+                    [&pl](int c) {
+                        CcMap m = pl.ccMap();
+                        m.channel = c;
+                        pl.setCcMap(m);
+                    })
+            ->setTooltip("The MIDI channel the slots send on (a slot can name its own: CC@channel)");
+        add<Button>("Save as", [this] { saveAs(); })->setTooltip("Save this map into your CC map folder");
+        add<Button>("Folder", [] {
+            makeFolder(ccMapFolder());
+            openFolder(ccMapFolder());
+        })->setTooltip("Open the folder with your CC maps (*.ccmap, plain text)");
+
+        for (int i = 0; i < kCcSlots; ++i) {
+            const auto& s = cur.slots[i];
+            const uint32_t id = pid::CcSlot + static_cast<uint32_t>(i);
+            add<Label>(std::to_string(i + 1), 10.0f, Align::Right, theme::textFaint);
+            auto* cc = add<Button>(s.used() ? std::to_string(s.cc) + (s.channel >= 0 ? "@" + std::to_string(s.channel + 1) : "") : "-",
+                                   [this, i] { editCc(i); });
+            cc->fontSize = 10.5f;
+            cc->setTooltip("The controller this slot sends, as CC or CC@channel; empty clears the slot");
+            auto* name = add<Button>(s.used() ? cur.slotName(i) : "", [this, i] { editName(i); });
+            name->fontSize = 10.5f;
+            name->setEnabled(s.used());
+            name->setTooltip("The slot's name; value names after a '|': Vib On | 0 Off, 64 On");
+            auto* val = add<Slider>("", 0.0, 127.0, 0.0, [&pl, id] { return pl.paramValue(id); },
+                                    [&pl, id](double v) { pl.guiSetParam(id, std::round(v)); },
+                                    [&pl, i](double v) { return pl.ccMap().valueText(i, static_cast<int>(std::lround(v))); });
+            val->onBegin = [&pl, id] { pl.guiBeginParam(id); };
+            val->onEnd = [&pl, id] { pl.guiEndParam(id); };
+        }
+        layout();
+        if (root())
+            root()->markDirty();
+    }
+
+    void layout() override
+    {
+        const auto& ch = children();
+        if (ch.empty())
+            return;
+        const float x0 = bounds_.x + 12, y0 = bounds_.y + 12;
+        const float w = bounds_.w - 24;
+        const float rowH = 26, gap = 8;
+        size_t k = 0;
+        // Map, follow, channel, save as, folder.
+        const float widths[5] = {w * 0.36f, w * 0.22f, w * 0.16f, w * 0.12f, w * 0.14f - 4 * gap};
+        float x = x0;
+        for (int i = 0; i < 5 && k < ch.size(); ++i, ++k) {
+            ch[k]->setBounds({x, y0, widths[i], rowH});
+            x += widths[i] + gap;
+        }
+        // Three columns of slots.
+        constexpr int rows = (kCcSlots + 2) / 3;
+        const float top = y0 + rowH + 10;
+        const float colGap = 14;
+        const float cw = (w - 2 * colGap) / 3;
+        const float sh = std::max(14.0f, std::min(24.0f, (bounds_.bottom() - 8 - top) / rows - 2));
+        for (int i = 0; i < kCcSlots && k + 3 < ch.size(); ++i) {
+            const float cx = x0 + static_cast<float>(i / rows) * (cw + colGap);
+            const float cy = top + static_cast<float>(i % rows) * (sh + 2);
+            ch[k++]->setBounds({cx, cy, 18, sh});
+            ch[k++]->setBounds({cx + 22, cy, 40, sh});
+            ch[k++]->setBounds({cx + 66, cy, cw * 0.45f, sh});
+            ch[k++]->setBounds({cx + 70 + cw * 0.45f, cy, cw - 70 - cw * 0.45f, sh});
+        }
+    }
+
+    void paint(cairo_t* cr) override
+    {
+        fillRounded(cr, bounds_, 6, theme::panel);
+        strokeRounded(cr, bounds_, 6, theme::outline);
+    }
+
+private:
+    // A one-line text field over the clicked control.
+    void ask(int childIndex, const std::string& initial, std::function<void(const std::string&)> done)
+    {
+        const auto& ch = children();
+        if (childIndex < 0 || childIndex >= static_cast<int>(ch.size()) || !root())
+            return;
+        Rect r = ch[static_cast<size_t>(childIndex)]->bounds();
+        r.w = std::max(r.w, 220.0f);
+        r.h = std::max(r.h, 26.0f);
+        auto te = std::make_unique<TextEditor>(initial, std::move(done));
+        te->setBounds(r);
+        Widget* raw = te.get();
+        root()->pushOverlay(std::move(te));
+        root()->setKeyFocus(raw);
+        if (root()->grabKeyboard)
+            root()->grabKeyboard();
+    }
+
+    static constexpr int kHeaderControls = 5;
+    int slotChild(int slot, int part) const { return kHeaderControls + slot * 4 + part; }
+
+    void editCc(int slot)
+    {
+        const auto& s = ed_.plugin().ccMap().slots[slot];
+        const std::string cur = s.used() ? std::to_string(s.cc) + (s.channel >= 0 ? "@" + std::to_string(s.channel + 1) : "") : "";
+        ask(slotChild(slot, 1), cur, [this, slot](const std::string& text) {
+            auto& pl = ed_.plugin();
+            CcSlot s = pl.ccMap().slots[slot];
+            std::string t;
+            for (char c : text)
+                if (c != ' ')
+                    t += c;
+            if (t.empty() || t == "-") {
+                pl.setCcSlot(slot, CcSlot{});
+                return;
+            }
+            // Parsed the way a map file is.
+            const CcMap probe = CcMap::fromText("1 = " + t + " x");
+            if (!probe.slots[0].used()) {
+                ed_.notify("A controller is 0..127, optionally with @channel (1..16)", true);
+                return;
+            }
+            s.cc = probe.slots[0].cc;
+            s.channel = probe.slots[0].channel;
+            pl.setCcSlot(slot, s);
+        });
+    }
+
+    void editName(int slot)
+    {
+        const auto& s = ed_.plugin().ccMap().slots[slot];
+        std::string cur = s.name;
+        if (!s.labels.empty()) {
+            cur += " |";
+            for (size_t k = 0; k < s.labels.size(); ++k)
+                cur += (k ? ", " : " ") + std::to_string(s.labels[k].first) + " " + s.labels[k].second;
+        }
+        ask(slotChild(slot, 2), cur, [this, slot](const std::string& text) {
+            auto& pl = ed_.plugin();
+            CcSlot s = pl.ccMap().slots[slot];
+            const CcMap probe = CcMap::fromText("1 = " + std::to_string(s.cc) + " " + text);
+            s.name = probe.slots[0].name;
+            s.labels = probe.slots[0].labels;
+            pl.setCcSlot(slot, s);
+        });
+    }
+
+    void saveAs()
+    {
+        const CcMap& cur = ed_.plugin().ccMap();
+        ask(3, cur.name.empty() ? std::string("My map") : cur.name, [this](const std::string& name) {
+            if (name.empty())
+                return;
+            auto& pl = ed_.plugin();
+            CcMap m = pl.ccMap();
+            m.name = name;
+            std::string err;
+            const std::string path = saveUserCcMap(m, err);
+            if (path.empty()) {
+                ed_.notify(err, true);
+                return;
+            }
+            pl.setCcMap(m);
+            ed_.notify("Saved " + path);
+        });
+    }
+
+    Editor& ed_;
+    std::vector<CcMapEntry> maps_;
+    int selected_ = 0;
+    uint32_t builtSerial_ = ~0u;
+};
+
 // ================================================================= Editor
 
 Editor::Editor(SidMidiPlugin& plugin) : plugin_(plugin), window_(this)
@@ -524,10 +752,14 @@ Editor::Editor(SidMidiPlugin& plugin) : plugin_(plugin), window_(this)
                               });
     machineButton_ = add<Button>("Machine", [this] { toggleMachinePage(); });
     machineButton_->setTooltip("Video, palette, MIDI clock, the SIDs and their mix");
+    ccButton_ = add<Button>("CC", [this] { toggleCcPage(); });
+    ccButton_->setTooltip("The CC map: the program's controllers as host parameters");
 
     screen_ = add<ScreenView>(*this);
     page_ = add<MachinePage>(*this);
     page_->setVisible(false);
+    ccPage_ = add<CcPage>(*this);
+    ccPage_->setVisible(false);
     romPanel_ = add<RomPanel>(*this);
     romPanel_->setVisible(!plugin_.hasRoms());
     screen_->setVisible(plugin_.hasRoms());
@@ -557,13 +789,15 @@ void Editor::layout()
     place(powerButton_, 54);
     place(warpButton_, 50);
     x += 8;
-    place(midiChoice_, 170);
-    place(joyChoice_, 128);
+    place(midiChoice_, 150);
+    place(joyChoice_, 118);
     place(portChoice_, 64);
     machineButton_->setBounds({bounds_.w - pad - 74, y, 74, h});
+    ccButton_->setBounds({bounds_.w - pad - 74 - 6 - 40, y, 40, h});
     const Rect content{pad, kBarH + pad, bounds_.w - 2 * pad, bounds_.h - kBarH - kStatusH - 2 * pad};
     screen_->setBounds(content);
     page_->setBounds(content);
+    ccPage_->setBounds(content);
     romPanel_->setBounds(content);
 }
 
@@ -751,14 +985,29 @@ void Editor::showDiskMenu()
 
 void Editor::toggleMachinePage()
 {
-    const bool show = !page_->isVisible();
-    page_->setVisible(show);
-    screen_->setVisible(!show && plugin_.hasRoms());
-    romPanel_->setVisible(!show && !plugin_.hasRoms());
-    machineButton_->setActive(show);
-    if (show) {
+    showPage(page_->isVisible() ? nullptr : page_);
+}
+
+void Editor::toggleCcPage()
+{
+    showPage(ccPage_->isVisible() ? nullptr : ccPage_);
+}
+
+// One of the pages over the screen, or none (the screen).
+void Editor::showPage(Widget* which)
+{
+    page_->setVisible(which == page_);
+    ccPage_->setVisible(which == ccPage_);
+    screen_->setVisible(!which && plugin_.hasRoms());
+    romPanel_->setVisible(!which && !plugin_.hasRoms());
+    machineButton_->setActive(which == page_);
+    ccButton_->setActive(which == ccPage_);
+    if (which) {
         giveKeyboardToC64(false);
-        page_->build();
+        if (which == page_)
+            page_->build();
+        else
+            ccPage_->build();
     }
     markDirty();
 }
@@ -810,15 +1059,18 @@ void Editor::onTimer()
             notify("ROMs found: the C64 is starting");
         markDirty();
     }
-    if (romPanel_->isVisible() == plugin_.hasRoms()) {
+    const bool pageShown = page_->isVisible() || ccPage_->isVisible();
+    if (!pageShown && romPanel_->isVisible() == plugin_.hasRoms()) {
         romPanel_->setVisible(!plugin_.hasRoms());
-        screen_->setVisible(plugin_.hasRoms() && !page_->isVisible());
+        screen_->setVisible(plugin_.hasRoms());
         markDirty();
     }
     if (screen_->isVisible() && screen_->update())
         markAnimDirty();
     if (page_->isVisible())
         page_->sync();
+    if (ccPage_->isVisible())
+        ccPage_->sync();
 
     auto& engine = plugin_.engine();
     const uint32_t in = engine.midiInCount.load(std::memory_order_relaxed);

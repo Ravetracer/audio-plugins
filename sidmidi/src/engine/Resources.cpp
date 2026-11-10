@@ -113,15 +113,13 @@ bool writeFile(const std::string& path, const std::vector<uint8_t>& data)
     return static_cast<bool>(f);
 }
 
-std::string romFolder()
+std::string dataFolder()
 {
-    if (const char* o = std::getenv("SIDMIDI_ROM_DIR"); o && *o)
-        return o;
 #if defined(_WIN32)
     std::string base = envUtf8(L"APPDATA");
     if (base.empty())
         base = envUtf8(L"USERPROFILE");
-    return fromPath(toPath(base) / "SidMidi" / "ROMs");
+    return fromPath(toPath(base) / "SidMidi");
 #else
     std::string base;
     if (const char* x = std::getenv("XDG_DATA_HOME"); x && *x)
@@ -130,8 +128,52 @@ std::string romFolder()
         base = std::string(h) + "/.local/share";
     else
         base = "/tmp";
-    return base + "/SidMidi/ROMs";
+    return base + "/SidMidi";
 #endif
+}
+
+std::string romFolder()
+{
+    if (const char* o = std::getenv("SIDMIDI_ROM_DIR"); o && *o)
+        return o;
+    return joinPath(dataFolder(), "ROMs");
+}
+
+bool makeFolder(const std::string& path)
+{
+    std::error_code ec;
+    fs::create_directories(toPath(path), ec);
+    return fs::is_directory(toPath(path), ec);
+}
+
+std::vector<std::string> listFiles(const std::string& folder, const std::string& ext)
+{
+    std::vector<std::string> out;
+    std::error_code ec;
+    auto lower = [](std::string s) {
+        for (auto& c : s)
+            c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+        return s;
+    };
+    const std::string want = lower(ext);
+    for (fs::directory_iterator it(toPath(folder), ec), end; !ec && it != end; it.increment(ec)) {
+        if (!it->is_regular_file(ec))
+            continue;
+        if (lower(fromPath(it->path().extension())) == want)
+            out.push_back(fromPath(it->path()));
+    }
+    std::sort(out.begin(), out.end());
+    return out;
+}
+
+std::string fileStem(const std::string& path)
+{
+    return fromPath(toPath(path).stem());
+}
+
+std::string joinPath(const std::string& folder, const std::string& name)
+{
+    return fromPath(toPath(folder) / toPath(name));
 }
 
 std::string romInstructions()

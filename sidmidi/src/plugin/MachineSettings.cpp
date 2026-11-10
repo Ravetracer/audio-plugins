@@ -21,6 +21,7 @@ std::string MachineSettings::toText() const
     o << "drive_mode = " << static_cast<int>(driveMode) << "\n";
     o << "warp_disk = " << (warpOnDiskAccess ? 1 : 0) << "\n";
     o << "screen_scale = " << screenScale << "\n";
+    o << "cc_follow = " << (ccFollowProgram ? 1 : 0) << "\n";
     o << "sid_count = " << sids.count << "\n";
     for (int i = 0; i < 8; ++i) {
         const auto& c = sids.chips[static_cast<size_t>(i)];
@@ -73,6 +74,8 @@ void MachineSettings::fromText(const std::string& text)
             warpOnDiskAccess = iv != 0;
         else if (key == "screen_scale")
             screenScale = std::clamp(iv, 1, 3);
+        else if (key == "cc_follow")
+            ccFollowProgram = iv != 0;
         else if (key == "sid_count")
             sids.count = std::clamp(iv, 1, 8);
         else if (key.size() == 4 && key.rfind("sid", 0) == 0 && key[3] >= '1' && key[3] <= '8') {

@@ -164,6 +164,9 @@ struct State
     int tp_sampleIndex[2];
     int tp_sampleOffset[2];
     int32_t tp_outputValue[2];
+
+    // SidMidi: each filter's position in the dither sequence.
+    uint32_t noiseIndex[2];
 };
 
 

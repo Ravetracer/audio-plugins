@@ -131,9 +131,13 @@ protected:
 
     virtual void restartIntegrators() = 0;
 
+    // SidMidi: this chip's own position in the dither sequence (see
+    // FilterModelConfig::Randomnoise), saved with the state.
+    mutable unsigned int noiseIndex = 0;
+
     inline int32_t getNormalizedVoice(float v, uint8_t env) const
     {
-        return m_fmc.getNormalizedVoice(v, env);
+        return m_fmc.getNormalizedVoice(v, env, noiseIndex);
     }
 
     virtual int32_t getNormalizedMixerVoice(float v, uint8_t env) const = 0;

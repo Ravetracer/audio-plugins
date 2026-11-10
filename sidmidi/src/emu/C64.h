@@ -96,6 +96,14 @@ public:
 
     // MIDI from the host, to whichever interface is fitted.
     void midiReceive(uint8_t byte);
+    // Bytes the cable queue of the active interface can still take. A
+    // message that does not fit is dropped whole: a cut one would leave a
+    // stray status byte that some programs' parsers never recover from.
+    size_t midiRoom() const
+    {
+        return herMidiActive() ? herMidi.queue().capacity() - herMidi.queue().size()
+                               : midi.rxQueue().capacity() - midi.rxQueue().size();
+    }
     void midiFlush();
     // The serial bus as everybody drives it (true = line low).
     void iecLines(bool& atn, bool& clk, bool& data) const;

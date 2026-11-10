@@ -100,6 +100,7 @@ int State::saveState(SID &s, char* buffer, int size)
         state.Vhp[i] = f->Vhp;
         state.Vbp[i] = f->Vbp;
         state.Vlp[i] = f->Vlp;
+        state.noiseIndex[i] = f->noiseIndex;
         state.extin[i] = f->extin;
         state.fc[i] = f->fc;
         state.filt1[i] = f->filt1;
@@ -215,6 +216,7 @@ void State::restoreState(SID &s, char* buffer, int size)
         f->Vhp = state.Vhp[i];
         f->Vbp = state.Vbp[i];
         f->Vlp = state.Vlp[i];
+        f->noiseIndex = state.noiseIndex[i] & 0x3ff;
         f->extin = state.extin[i];
         f->fc = state.fc[i];
         f->filt1 = state.filt1[i];

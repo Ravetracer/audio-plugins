@@ -14,8 +14,9 @@
 // autodetection depends on exactly that.
 
 #include <cstdint>
-#include <deque>
 #include <vector>
+
+#include "FixedQueue.h"
 
 namespace sidmidi::emu {
 
@@ -78,15 +79,22 @@ public:
     // A byte from the DAW, arriving on the cable at `clk`. Its frame completes
     // at the earliest one frame time later, and after the frame before it.
     void receive(uint8_t byte, uint64_t clk);
-    // Bytes the program transmitted since the last call, oldest first.
+    // Bytes the program transmitted since the last call, oldest first. Appends
+    // only up to out.capacity(), so a reserved vector never reallocates; what
+    // does not fit is dropped.
     void takeTransmitted(std::vector<MidiByte>& out);
     size_t pendingReceive() const { return rx_.size(); }
     // Drops everything in flight (a reset of the machine).
     void flush();
 
+    // About 1.3 s of cable at 31250 baud; a byte that arrives with the
+    // queue full is dropped.
+    using RxQueue = FixedQueue<MidiByte, 4096>;
+    using TxQueue = FixedQueue<MidiByte, 1024>;
+
     // For the snapshot.
-    const std::deque<MidiByte>& rxQueue() const { return rx_; }
-    std::deque<MidiByte>& rxQueue() { return rx_; }
+    const RxQueue& rxQueue() const { return rx_; }
+    RxQueue& rxQueue() { return rx_; }
 
 private:
     void service(uint64_t clk);
@@ -94,8 +102,8 @@ private:
     uint16_t base() const;
     bool fourRegisters() const;
 
-    std::deque<MidiByte> rx_;
-    std::vector<MidiByte> tx_;
+    RxQueue rx_;
+    TxQueue tx_;
 };
 
 } // namespace sidmidi::emu

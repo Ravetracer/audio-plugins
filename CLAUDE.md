@@ -61,7 +61,7 @@ audio-plugins/
 | 3 | **Aurum** | `aurum/` | 0.3.1 | Linux, Windows | CLAP, VST3 | a clean-room algorithmic reverb (FDN, allpass ring, plate) with a per-frequency decay contour; own DSP and GUI, see *Aurum* below |
 | 4 | **Substrike** | `substrike/` | 1.1.0 | Linux, Windows | CLAP, VST3 | a layered kick drum designer for every style; standalone like Aurum, see *Substrike* below |
 | 5 | **Shapeau** | `shapeau/` | 0.4.0 | Linux, Windows | CLAP, VST3 | a multiband drawing rack: a reorderable chain of shape-driven effects per band, beat-synced or triggered by MIDI or a sidechain hit, with the audio drawn behind the shape; see *Shapeau* below |
-| 6 | **SidMidi** | `sidmidi/` | 0.2.0 | Linux, Windows | CLAP, VST3 | a Commodore 64 running the original C64 MIDI programs, played from the DAW through an emulated MIDI cartridge, with up to eight reSIDfp SIDs; GPL, standalone, see *SidMidi* below |
+| 6 | **SidMidi** | `sidmidi/` | 0.3.0 | Linux, Windows | CLAP, VST3 | a Commodore 64 running the original C64 MIDI programs, played from the DAW through an emulated MIDI cartridge, with up to eight reSIDfp SIDs; GPL, standalone, see *SidMidi* below |
 
 Naming follows the plugin, not a pattern: the CMake project, the installed
 artifact and the display name are CamelCase (`SaeureKiste`), the folder is
@@ -562,15 +562,27 @@ instrument. It is the third plugin **not built on `shared/`** (a C64 screen
 and a keyboard grab do not fit `WindowSpec`); the window backends and widgets
 are copied from Substrike. The *Rule for a shared change* does not cover it.
 `docs/PLAN.md` is the source of truth: four phases, 1-3 done (the machine, the
-plugin, the true 1541 + mouse/paddles + HerMIDI), 0.2.0, `NO-RELEASE` until it
+plugin, the true 1541 + mouse/paddles + HerMIDI), 0.3.0, `NO-RELEASE` until it
 has been in a DAW and has its manual.
 
 What to know before working there:
 
 - **It is GPL-2.0-or-later, the rest of the repository MIT.** The SIDs are
-  reSIDfp (libresidfp 1.2.3, vendored unchanged in `third_party/libresidfp`,
-  its two generated headers written by hand). `sidmidi/LICENSE` says so. Do
-  not copy SidMidi code into an MIT plugin.
+  reSIDfp (libresidfp 1.2.3, vendored in `third_party/libresidfp`, its two
+  generated headers written by hand, with our patches applied and kept in
+  `third_party/patches/`, listed in `third_party/README.md`). `sidmidi/LICENSE`
+  says so. Do not copy SidMidi code into an MIT plugin.
+- **reSIDfp's filter dither is per chip** (patch 0001, 0.2.1): upstream
+  shares one noise index across the process, which made renders differ run
+  to run and let instances move each other. Offline renders are now
+  bit-identical (`install.sh` checks it) and the state round trip is exact;
+  keep both true. The self-test also counts allocations in `process()` while
+  playing -- it must stay 0.
+- **CC maps** (0.3.0, `src/plugin/CcMap.*`, factory maps in `ccmaps/`): 64
+  parameter slots, ids 1000-1063, fixed range 0..127, renamed per program by
+  a map (`CLAP_PARAM_RESCAN_INFO`; VST3 can rename but never change ranges,
+  so ranges never change). Never renumber the slots. The CC numbers in the
+  factory maps were read from the programs themselves, not guessed.
 - **`sidmidi/_dev_/` is gitignored** (`*/_dev_/` at the root): the C64
   programs, their manuals and the user's Commodore ROMs (`_dev_/roms/C64`,
   `_dev_/roms/DRIVES`, VICE's files) -- **for development and the user's
@@ -609,7 +621,7 @@ What to know before working there:
   emulated drive and a state round trip). `sidmidi-run` boots, autostarts, plays a MIDI
   script, writes WAV and PNG (`--sidregs` dumps SID 1). GUI shots: a private
   Xvfb in the devbox with `sidmidi-gui-host` (`SIDMIDI_LOAD=<file>` loads a
-  program through the plugin's `de.ravetracer.sidmidi.loader/1` extension).
+  program through the plugin's `de.ravetracer.sidmidi.loader/2` extension).
 
 ## Build and install
 

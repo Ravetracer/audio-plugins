@@ -1,0 +1,9 @@
+# SidMidi CC map: slot = CC[@channel] name [| value label, value label ...]
+# SID-Wizard 1.93 (Hermit): its three controllers. MIDI is off at start; set
+# OMNI or a channel in its menu.
+name = SID-Wizard
+programs = sid-wizard, sidwizard, swm
+channel = 1
+1 = 74 Cutoff
+2 = 1 Vibrato
+3 = 7 Volume

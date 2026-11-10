@@ -51,6 +51,12 @@ public:
     const emu::C64& machine() const { return c64_; }
 
     void setSampleRate(double rate);
+    // Sizes the mix buffer for the largest block, so process() never grows it.
+    void setMaxFrames(uint32_t frames)
+    {
+        if (scratch_.size() < frames)
+            scratch_.resize(frames);
+    }
     double sampleRate() const { return rate_; }
     // Re-applies the SID configuration (models, addresses, count).
     void configureSids(const emu::SidBankConfig& cfg);

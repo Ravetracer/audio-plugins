@@ -17,6 +17,10 @@
 
 namespace sidmidi {
 
+// SidMidi's own folder: $XDG_DATA_HOME/SidMidi (~/.local/share/SidMidi) on
+// Linux, %APPDATA%\SidMidi on Windows.
+std::string dataFolder();
+
 // Where the ROMs go: $XDG_DATA_HOME/SidMidi/ROMs (~/.local/share/SidMidi/ROMs)
 // on Linux, %APPDATA%\SidMidi\ROMs on Windows. SIDMIDI_ROM_DIR overrides it.
 std::string romFolder();
@@ -47,5 +51,13 @@ bool readFile(const std::string& path, std::vector<uint8_t>& out);
 bool writeFile(const std::string& path, const std::vector<uint8_t>& data);
 // Opens a folder in the desktop's file manager.
 void openFolder(const std::string& path);
+// Creates a folder (and its parents). True when it exists afterwards.
+bool makeFolder(const std::string& path);
+// The files in `folder` whose extension is `ext` (".ccmap"), any case, sorted.
+std::vector<std::string> listFiles(const std::string& folder, const std::string& ext);
+// The file name without folder and extension.
+std::string fileStem(const std::string& path);
+// `folder` + separator + `name`.
+std::string joinPath(const std::string& folder, const std::string& name);
 
 } // namespace sidmidi

@@ -29,6 +29,7 @@ struct MachineSettings
     emu::DriveMode driveMode = emu::DriveMode::Virtual;
     bool warpOnDiskAccess = true;  // the true 1541: warp while its motor runs
     int screenScale = 2;           // 1..3, the screen's pixel size at GUI scale 1
+    bool ccFollowProgram = true;   // loading a program picks its CC map
 
     std::string toText() const;
     void fromText(const std::string& text);

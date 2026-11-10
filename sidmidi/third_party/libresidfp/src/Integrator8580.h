@@ -91,7 +91,8 @@ public:
 
         // Vg - Vth, normalized so that translated values can be subtracted:
         // Vgt - x = (Vgt - t) - (x - t)
-        nVgt = fmc.getNormalizedValue(Vgt);
+        unsigned int noise = 0; // a fixed draw, so the result does not depend on who asked before
+        nVgt = fmc.getNormalizedValue(Vgt, noise);
     }
 
     int32_t solve(int32_t vi) const override;

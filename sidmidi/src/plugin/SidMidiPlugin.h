@@ -12,6 +12,7 @@
 
 #include <clap/clap.h>
 
+#include <array>
 #include <atomic>
 #include <memory>
 #include <mutex>
@@ -19,6 +20,7 @@
 #include <vector>
 
 #include "engine/Engine.h"
+#include "plugin/CcMap.h"
 #include "plugin/MachineSettings.h"
 #include "plugin/SpscRing.h"
 
@@ -28,17 +30,22 @@ namespace gui {
 class Editor;
 }
 
-// A plugin-specific extension: load a program as the Load button does. For
-// test harnesses and automation.
-inline constexpr char kExtLoader[] = "de.ravetracer.sidmidi.loader/1";
+// A plugin-specific extension: load a program as the Load button does, and
+// count what reached the machine. For test harnesses and automation.
+inline constexpr char kExtLoader[] = "de.ravetracer.sidmidi.loader/2";
 struct ExtLoader
 {
     bool (*load_file)(const clap_plugin_t* plugin, const char* path);
+    // MIDI messages handed to the C64 so far (notes, CCs, CC slots, ...).
+    uint32_t (*midi_in_count)(const clap_plugin_t* plugin);
 };
 
 namespace pid {
-enum : uint32_t { Master = 1, Level = 100, Pan = 200 };
-constexpr int kCount = 1 + 2 * 8;
+// CcSlot + i is CC slot i (0..kCcSlots-1): ids never change, the map only
+// renames them.
+enum : uint32_t { Master = 1, Level = 100, Pan = 200, CcSlot = 1000 };
+constexpr int kCount = 1 + 2 * 8 + kCcSlots;
+inline bool isCcSlot(uint32_t id) { return id >= CcSlot && id < CcSlot + kCcSlots; }
 } // namespace pid
 
 struct ParamInfo
@@ -47,6 +54,7 @@ struct ParamInfo
     const char* module;
     std::string name;
     double lo, hi, def;
+    bool stepped = false;
 };
 
 class SidMidiPlugin
@@ -129,6 +137,16 @@ public:
     void guiSetParam(uint32_t id, double value);
     void guiEndParam(uint32_t id);
 
+    // ------------------------------------------------------------ CC maps (main thread)
+    const CcMap& ccMap() const { return ccMap_; }
+    // Renames the slots and tells the host. Values stay; nothing is sent
+    // until a slot moves.
+    void setCcMap(const CcMap& map);
+    // One slot changed in the map being edited.
+    void setCcSlot(int slot, const CcSlot& s);
+    // Counts map changes, so the editor knows when to rebuild.
+    uint32_t ccMapSerial() const { return ccMapSerial_; }
+
     std::string mediaSummary();
     bool hasRoms() const { return hasRoms_.load(); }
     // Looks into the ROM folder again (main thread). Starts the machine when
@@ -153,7 +171,13 @@ private:
     };
 
     int paramIndex(uint32_t id) const;
-    void applyParam(uint32_t id, double v);
+    // `send`: a CC slot that moved sends its controller (not when values are
+    // only being restored).
+    void applyParam(uint32_t id, double v, bool send = true);
+    void publishCcRoutes();
+    void followProgram(const std::string& fileName);
+    // Audio thread: a CC slot's message, at `offset`, when its value changed.
+    void emitCcSlot(int slot, uint32_t offset);
     void applyParamsToEngine();
     void handleInputEvents();
     void drainGuiParams(const clap_output_events_t* out);
@@ -184,6 +208,14 @@ private:
 
     std::vector<ParamInfo> params_;
     std::unique_ptr<std::atomic<double>[]> values_;
+
+    CcMap ccMap_;
+    uint32_t ccMapSerial_ = 0;
+    // For the audio thread: per slot (channel << 8) | cc, or -1.
+    std::array<std::atomic<int32_t>, kCcSlots> ccRoute_{};
+    std::atomic<uint64_t> ccDirty_{0};       // slots moved outside process(), one bit each
+    static_assert(kCcSlots <= 64, "the dirty mask holds 64 slots");
+    std::array<int16_t, kCcSlots> ccSent_{}; // audio thread: last value sent
     SpscRing<InputEvent, 1024> input_;
     SpscRing<GuiParamEvent, 512> guiParams_;
 

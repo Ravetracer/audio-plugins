@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.21)
-project(SidMidi VERSION 0.2.0 LANGUAGES C CXX)
+project(SidMidi VERSION 0.3.0 LANGUAGES C CXX)
 
 # SidMidi builds as a CLAP and, through the clap-wrapper, as a VST3, for Linux
 # and Windows (cross-compiled with mingw-w64). Like Aurum and Substrike it does
@@ -46,8 +46,9 @@ find_package(Threads REQUIRED)
 
 # ---------------------------------------------------------------- reSIDfp
 #
-# libresidfp 1.2.3, vendored unchanged. Its two generated headers
-# (siddefs-fp.h, residfp/sidversion.h) are written out in the tree.
+# libresidfp 1.2.3, vendored with one patch (third_party/patches/, see
+# third_party/README.md). Its two generated headers (siddefs-fp.h,
+# residfp/sidversion.h) are written out in the tree.
 file(GLOB RESIDFP_SOURCES
     "${CMAKE_CURRENT_SOURCE_DIR}/third_party/libresidfp/src/*.cpp"
     "${CMAKE_CURRENT_SOURCE_DIR}/third_party/libresidfp/src/resample/*.cpp"
@@ -63,12 +64,14 @@ target_link_libraries(sidmidi-residfp PUBLIC Threads::Threads)
 set(SIDMIDI_GENERATED "${CMAKE_CURRENT_BINARY_DIR}/generated")
 set(SIDMIDI_EMBED_HEADER "${SIDMIDI_GENERATED}/EmbeddedData.h")
 file(GLOB SIDMIDI_PALETTES CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/palettes/*.vpl")
+file(GLOB SIDMIDI_CCMAPS CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/ccmaps/*.ccmap")
 add_custom_command(
     OUTPUT "${SIDMIDI_EMBED_HEADER}"
     COMMAND "${CMAKE_COMMAND}" "-DPALETTE_DIR=${CMAKE_CURRENT_SOURCE_DIR}/palettes"
+            "-DCCMAP_DIR=${CMAKE_CURRENT_SOURCE_DIR}/ccmaps"
             "-DOUTPUT=${SIDMIDI_EMBED_HEADER}" -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/embed_data.cmake"
-    DEPENDS ${SIDMIDI_PALETTES} "${CMAKE_CURRENT_SOURCE_DIR}/cmake/embed_data.cmake"
-    COMMENT "Embedding the palettes")
+    DEPENDS ${SIDMIDI_PALETTES} ${SIDMIDI_CCMAPS} "${CMAKE_CURRENT_SOURCE_DIR}/cmake/embed_data.cmake"
+    COMMENT "Embedding the palettes and the factory CC maps")
 # HerMIDI's PIC firmware (WTF-licensed, from SID-Wizard), run on the emulated PIC.
 set(SIDMIDI_HERMIDI_HEADER "${SIDMIDI_GENERATED}/HerMidiFirmware.h")
 add_custom_command(

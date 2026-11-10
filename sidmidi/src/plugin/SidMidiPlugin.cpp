@@ -179,6 +179,10 @@ struct Glue
             std::fprintf(stderr, "SidMidi: %s\n", err.c_str());
         return ok;
     }
+    static uint32_t loaderMidiIn(const clap_plugin_t* p)
+    {
+        return self(p)->engine().midiInCount.load(std::memory_order_relaxed);
+    }
     static const ExtLoader loader;
     // Offline bounces warp by a fixed amount, so they render the same every time.
     static bool renderHardRealtime(const clap_plugin_t*) { return false; }
@@ -190,7 +194,7 @@ struct Glue
     static const clap_plugin_render_t render;
 };
 const clap_plugin_render_t Glue::render = {renderHardRealtime, renderSetMode};
-const ExtLoader Glue::loader = {loaderLoad};
+const ExtLoader Glue::loader = {loaderLoad, loaderMidiIn};
 
 const clap_plugin_audio_ports_t Glue::audioPorts = {portsCount, portsGet};
 const clap_plugin_note_ports_t Glue::notePorts = {notePortsCount, notePortsGet};
@@ -227,6 +231,11 @@ SidMidiPlugin::SidMidiPlugin(const clap_host_t* host) : host_(host)
     for (int i = 0; i < 8; ++i)
         params_.push_back({pid::Pan + i, "SIDs", "SID " + std::to_string(i + 1) + " Pan", -1.0, 1.0,
                            static_cast<double>(engine_.mix[static_cast<size_t>(i)].pan)});
+    for (int i = 0; i < kCcSlots; ++i)
+        params_.push_back({pid::CcSlot + static_cast<uint32_t>(i), "CC", ccMap_.slotName(i), 0.0, 127.0, 0.0, true});
+    for (auto& r : ccRoute_)
+        r.store(-1);
+    ccSent_.fill(-1);
     values_ = std::make_unique<std::atomic<double>[]>(params_.size());
     for (size_t i = 0; i < params_.size(); ++i)
         values_[i].store(params_[i].def);
@@ -303,6 +312,7 @@ bool SidMidiPlugin::activate(double sampleRate, uint32_t, uint32_t maxFrames)
 {
     std::lock_guard<std::mutex> lock(machineLock_);
     engine_.setSampleRate(sampleRate);
+    engine_.setMaxFrames(maxFrames);
     if (silence_.size() < maxFrames)
         silence_.assign(maxFrames, 0.0f);
     activated_ = true;
@@ -431,7 +441,7 @@ bool SidMidiPlugin::paramsInfo(uint32_t index, clap_param_info_t* info) const
     const auto& p = params_[index];
     std::memset(info, 0, sizeof(*info));
     info->id = p.id;
-    info->flags = CLAP_PARAM_IS_AUTOMATABLE;
+    info->flags = CLAP_PARAM_IS_AUTOMATABLE | (p.stepped ? CLAP_PARAM_IS_STEPPED : 0);
     std::snprintf(info->name, sizeof(info->name), "%s", p.name.c_str());
     std::snprintf(info->module, sizeof(info->module), "%s", p.module);
     info->min_value = p.lo;
@@ -458,6 +468,11 @@ double SidMidiPlugin::paramValue(uint32_t id) const
 
 bool SidMidiPlugin::paramsToText(clap_id id, double v, char* display, uint32_t size) const
 {
+    if (pid::isCcSlot(id)) {
+        std::snprintf(display, size, "%s",
+                      ccMap_.valueText(static_cast<int>(id - pid::CcSlot), static_cast<int>(std::lround(v))).c_str());
+        return true;
+    }
     if (id >= pid::Pan && id < pid::Pan + 8) {
         if (std::fabs(v) < 0.005)
             std::snprintf(display, size, "C");
@@ -479,6 +494,13 @@ bool SidMidiPlugin::paramsFromText(clap_id id, const char* display, double* valu
     const int i = paramIndex(id);
     if (i < 0)
         return false;
+    if (pid::isCcSlot(id)) {
+        int cv;
+        if (!ccMap_.valueFromText(static_cast<int>(id - pid::CcSlot), display, cv))
+            return false;
+        *value = cv;
+        return true;
+    }
     double v = std::atof(display);
     if (id >= pid::Pan && id < pid::Pan + 8) {
         if (std::strchr(display, 'L') || std::strchr(display, 'l'))
@@ -489,13 +511,18 @@ bool SidMidiPlugin::paramsFromText(clap_id id, const char* display, double* valu
     return true;
 }
 
-void SidMidiPlugin::applyParam(uint32_t id, double v)
+void SidMidiPlugin::applyParam(uint32_t id, double v, bool send)
 {
     const int i = paramIndex(id);
     if (i < 0)
         return;
+    if (pid::isCcSlot(id))
+        v = std::clamp(std::round(v), 0.0, 127.0); // stepped: whole controller values
     values_[static_cast<size_t>(i)].store(v);
-    if (id == pid::Master)
+    if (pid::isCcSlot(id)) {
+        if (send)
+            ccDirty_.fetch_or(uint64_t{1} << (id - pid::CcSlot), std::memory_order_acq_rel);
+    } else if (id == pid::Master)
         engine_.masterGain = static_cast<float>(dbToGain(v));
     else if (id >= pid::Level && id < pid::Level + 8)
         engine_.mix[id - pid::Level].level = static_cast<float>(dbToGain(v));
@@ -506,7 +533,65 @@ void SidMidiPlugin::applyParam(uint32_t id, double v)
 void SidMidiPlugin::applyParamsToEngine()
 {
     for (size_t i = 0; i < params_.size(); ++i)
-        applyParam(params_[i].id, values_[i].load());
+        applyParam(params_[i].id, values_[i].load(), false);
+}
+
+// ------------------------------------------------------------------ CC maps
+
+void SidMidiPlugin::publishCcRoutes()
+{
+    for (int i = 0; i < kCcSlots; ++i) {
+        const auto& s = ccMap_.slots[i];
+        ccRoute_[static_cast<size_t>(i)].store(s.used() ? (ccMap_.channelOf(i) << 8) | s.cc : -1);
+        params_[static_cast<size_t>(paramIndex(pid::CcSlot + static_cast<uint32_t>(i)))].name = ccMap_.slotName(i);
+    }
+    ++ccMapSerial_;
+    if (hostParams_)
+        hostParams_->rescan(host_, CLAP_PARAM_RESCAN_INFO | CLAP_PARAM_RESCAN_TEXT);
+}
+
+void SidMidiPlugin::setCcMap(const CcMap& map)
+{
+    ccMap_ = map;
+    publishCcRoutes();
+}
+
+void SidMidiPlugin::setCcSlot(int slot, const CcSlot& s)
+{
+    if (slot < 0 || slot >= kCcSlots)
+        return;
+    ccMap_.slots[slot] = s;
+    publishCcRoutes();
+}
+
+void SidMidiPlugin::followProgram(const std::string& fileName)
+{
+    if (!settings_.ccFollowProgram)
+        return;
+    // The user's own maps first: one made for a program replaces the factory's.
+    const auto maps = availableCcMaps();
+    for (int pass = 0; pass < 2; ++pass)
+        for (const auto& e : maps)
+            if (e.factory == (pass == 1) && e.map.matchesProgram(fileName)) {
+                setCcMap(e.map);
+                return;
+            }
+}
+
+void SidMidiPlugin::emitCcSlot(int slot, uint32_t offset)
+{
+    const int32_t route = ccRoute_[static_cast<size_t>(slot)].load(std::memory_order_relaxed);
+    const int v = std::clamp(static_cast<int>(std::lround(values_[static_cast<size_t>(pid::kCount - kCcSlots + slot)].load())), 0, 127);
+    if (route < 0 || v == ccSent_[static_cast<size_t>(slot)] || events_.size() >= events_.capacity())
+        return;
+    ccSent_[static_cast<size_t>(slot)] = static_cast<int16_t>(v);
+    MidiEvent e;
+    e.offset = offset;
+    e.size = 3;
+    e.data[0] = static_cast<uint8_t>(0xb0 | ((route >> 8) & 15));
+    e.data[1] = static_cast<uint8_t>(route & 127);
+    e.data[2] = static_cast<uint8_t>(v);
+    events_.push_back(e);
 }
 
 void SidMidiPlugin::guiBeginParam(uint32_t id)
@@ -656,7 +741,7 @@ bool SidMidiPlugin::loadData(const std::string& name, const std::vector<uint8_t>
         return false;
     }
     const std::string ext = lowerExt(name);
-    std::lock_guard<std::mutex> lock(machineLock_);
+    std::unique_lock<std::mutex> lock(machineLock_);
     auto& c64 = engine_.machine();
     bool ok = false;
     if (ext == "prg" || ext == "p00") {
@@ -677,6 +762,9 @@ bool SidMidiPlugin::loadData(const std::string& name, const std::vector<uint8_t>
         engine_.resync();
     }
     lastError_ = ok ? std::string() : error;
+    lock.unlock();
+    if (ok)
+        followProgram(name); // reads the map folder: not under the machine lock
     return ok;
 }
 
@@ -799,7 +887,8 @@ void SidMidiPlugin::collectEvents(const clap_process_t* p)
             }
             e.data[1] = static_cast<uint8_t>(ne->key);
             e.size = 3;
-            events_.push_back(e);
+            if (events_.size() < events_.capacity()) // reserved: never grow in process()
+                events_.push_back(e);
             break;
         }
         case CLAP_EVENT_MIDI: {
@@ -818,32 +907,49 @@ void SidMidiPlugin::collectEvents(const clap_process_t* p)
                 e.size = 1;
             else
                 e.size = 3;
-            events_.push_back(e);
+            if (events_.size() < events_.capacity()) // reserved: never grow in process()
+                events_.push_back(e);
             break;
         }
         case CLAP_EVENT_MIDI_SYSEX: {
             const auto* se = reinterpret_cast<const clap_event_midi_sysex_t*>(h);
-            if (!se->buffer || !se->size || sysexIn_.size() + se->size > sysexIn_.capacity())
+            if (!se->buffer || !se->size || sysexIn_.size() + se->size > sysexIn_.capacity()
+                || events_.size() >= events_.capacity())
                 break;
             const size_t at = sysexIn_.size();
             sysexIn_.insert(sysexIn_.end(), se->buffer, se->buffer + se->size);
             e.ext = sysexIn_.data() + at; // capacity is reserved, so this stays valid
             e.extSize = se->size;
-            events_.push_back(e);
+            if (events_.size() < events_.capacity()) // reserved: never grow in process()
+                events_.push_back(e);
             break;
         }
         case CLAP_EVENT_PARAM_VALUE: {
             const auto* pv = reinterpret_cast<const clap_event_param_value_t*>(h);
-            applyParam(pv->param_id, pv->value);
+            applyParam(pv->param_id, pv->value, false);
+            if (pid::isCcSlot(pv->param_id))
+                emitCcSlot(static_cast<int>(pv->param_id - pid::CcSlot), h->time); // at its sample
             break;
         }
         default:
             break;
         }
     }
+    // Slots moved from the window or in a flush since the last block.
+    for (uint64_t dirty = ccDirty_.exchange(0, std::memory_order_acq_rel); dirty; dirty &= dirty - 1)
+        emitCcSlot(__builtin_ctzll(dirty), 0);
     if (settings_.sendClock)
         generateClock(p);
-    std::stable_sort(events_.begin(), events_.end(), [](const MidiEvent& a, const MidiEvent& b) { return a.offset < b.offset; });
+    // Stable and in place: std::stable_sort takes a temporary buffer from the
+    // heap. The host's events arrive sorted and the clock's are sorted among
+    // themselves, so this is close to linear.
+    for (size_t i = 1; i < events_.size(); ++i) {
+        const MidiEvent e = events_[i];
+        size_t j = i;
+        for (; j > 0 && events_[j - 1].offset > e.offset; --j)
+            events_[j] = events_[j - 1];
+        events_[j] = e;
+    }
 }
 
 // MIDI clock (24 per quarter note), start/continue/stop and the song position
@@ -857,7 +963,8 @@ void SidMidiPlugin::generateClock(const clap_process_t* p)
         e.offset = off;
         e.size = 1;
         e.data[0] = b;
-        events_.push_back(e);
+        if (events_.size() < events_.capacity())
+            events_.push_back(e);
     };
     if (!playing) {
         if (wasPlaying_)
@@ -879,7 +986,8 @@ void SidMidiPlugin::generateClock(const clap_process_t* p)
         e.data[0] = 0xf2;
         e.data[1] = static_cast<uint8_t>(spp & 0x7f);
         e.data[2] = static_cast<uint8_t>((spp >> 7) & 0x7f);
-        events_.push_back(e);
+        if (events_.size() < events_.capacity())
+            events_.push_back(e);
         push1(0, pos < 1e-6 ? 0xfa : 0xfb);
         nextClockTick_ = std::ceil(pos * 24.0 - 1e-9);
     }
@@ -935,7 +1043,7 @@ void SidMidiPlugin::emitMidiOut(const clap_output_events_t* out)
                 if (b == 0xf7)
                     continue;
             } else {
-                if (sysexOut_.size() < sysexOut_.capacity())
+                if (sysexOut_.size() + 1 < sysexOut_.capacity()) // room for the closing F7
                     sysexOut_.push_back(b);
                 continue;
             }
@@ -1040,6 +1148,9 @@ bool SidMidiPlugin::stateSave(const clap_ostream_t* stream)
     putBlob(out, lastFileName_.data(), lastFileName_.size());
     putBlob(out, lastFileData_.data(), lastFileData_.size());
     putBlob(out, audio.data(), audio.size());
+    // The CC map in full, so the project keeps its slot names without the file.
+    const std::string map = ccMap_.toText();
+    putBlob(out, map.data(), map.size());
 
     size_t at = 0;
     while (at < out.size()) {
@@ -1067,12 +1178,14 @@ bool SidMidiPlugin::stateLoad(const clap_istream_t* stream)
         return false;
     size_t at = 8;
     uint32_t version;
-    std::vector<uint8_t> settings, params, snap, fileName, fileData, audio;
+    std::vector<uint8_t> settings, params, snap, fileName, fileData, audio, ccMapText;
     if (!getU32(in, at, version) || !getBlob(in, at, settings) || !getBlob(in, at, params) || !getBlob(in, at, snap))
         return false;
     getBlob(in, at, fileName);
     getBlob(in, at, fileData);
     getBlob(in, at, audio);
+    getBlob(in, at, ccMapText); // absent before 0.3.0: no map
+    setCcMap(CcMap::fromText(std::string(ccMapText.begin(), ccMapText.end())));
 
     MachineSettings s;
     s.fromText(std::string(settings.begin(), settings.end()));

@@ -27,6 +27,13 @@ if [ -f "$prg" ] && [ -d "$roms" ]; then
     # The true 1541: a disk loaded through the emulated drive, then a state round trip.
     d64="${SIDMIDI_TEST_D64:-_dev_/Station64/sta64.d64}"
     [ -f "$d64" ] && build/sidmidi-selftest build/SidMidi.clap "$d64" 14 "$roms" true1541
+    # Offline renders repeat exactly, across processes too.
+    for i in 1 2; do
+        build/sidmidi-run --roms "$roms" --prg "$prg" --seconds 6 --note 4:60:100:1 --no-video \
+            --wav build/repeat-$i.wav >/dev/null
+    done
+    cmp -s build/repeat-1.wav build/repeat-2.wav && echo "ok    two renders are identical" \
+        || { echo "FAIL  two renders differ"; exit 1; }
 else
     echo "no test program ($prg) or ROMs ($roms): plugin self-test skipped"
 fi
