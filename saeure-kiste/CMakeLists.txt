@@ -1,7 +1,15 @@
 cmake_minimum_required(VERSION 3.16)
-project(SaeureKiste VERSION 0.17.0 LANGUAGES CXX)
+# macOS: std::filesystem needs 10.15. Set before project(), ignored elsewhere.
+set(CMAKE_OSX_DEPLOYMENT_TARGET "10.15" CACHE STRING "Minimum macOS version")
+project(SaeureKiste VERSION 0.18.0 LANGUAGES CXX)
+if(APPLE)
+   # The window's Cocoa view and the file panels (src/gui/*.mm).
+   enable_language(OBJCXX)
+endif()
 
-# SaeureKiste builds as a CLAP and as a VST3, for Linux and for Windows.
+# SaeureKiste builds as a CLAP and as a VST3, for Linux and for Windows, and on
+# macOS as a CLAP, a VST3 and an Audio Unit. macOS is built natively on
+# GitHub's runners (.github/workflows/saeurekiste-macos.yml), never here.
 #
 # It is built on the PluginCore shared library -- the parameter model, the
 # preset format, the window -- and expects it at ../shared. See README.md for
@@ -20,23 +28,31 @@ if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
    set(CMAKE_BUILD_TYPE Release CACHE STRING "Build type" FORCE)
 endif()
 
-if(NOT CMAKE_SYSTEM_NAME STREQUAL "Linux" AND NOT CMAKE_SYSTEM_NAME STREQUAL "Windows")
+if(NOT CMAKE_SYSTEM_NAME MATCHES "^(Linux|Windows|Darwin)$")
    message(FATAL_ERROR
-      "SaeureKiste builds for Linux and for Windows. Nothing in it is specific to "
-      "either beyond the window, which has a backend for both, so another platform "
-      "is a matter of a third backend -- but it has never been built or run there, "
-      "and a plugin nobody has run is worse than one that refuses to configure.")
+      "SaeureKiste builds for Linux, Windows and macOS. Nothing in it is specific to "
+      "any of them beyond the window, which has a backend for each, so another "
+      "platform is a matter of another backend -- but it has never been built or run "
+      "there, and a plugin nobody has run is worse than one that refuses to configure.")
 endif()
 
 option(SAEUREKISTE_BUILD_TOOLS "Build the offline render/verification host" ON)
 option(SAEUREKISTE_BUILD_GUI "Build the plugin window (X11+Cairo, or win32+Cairo)" ON)
 option(SAEUREKISTE_BUILD_VST3 "Also build a VST3 through the clap-wrapper" OFF)
+option(SAEUREKISTE_BUILD_AUV2 "Also build an Audio Unit through the clap-wrapper (macOS only)" OFF)
+if(NOT APPLE)
+   set(SAEUREKISTE_BUILD_AUV2 OFF)
+endif()
 
 # CLAP plugins live in ~/.clap on Linux, so default there rather than /usr/local.
 # A cross build has no business guessing a path on the target machine, so it is
 # left to whoever runs cmake --install (release.sh sets it to a staging tree).
 if(CMAKE_INSTALL_PREFIX_INITIALIZED_TO_DEFAULT AND NOT CMAKE_CROSSCOMPILING)
-   set(CMAKE_INSTALL_PREFIX "$ENV{HOME}/.clap" CACHE PATH "Install prefix" FORCE)
+   if(APPLE)
+      set(CMAKE_INSTALL_PREFIX "$ENV{HOME}/Library/Audio/Plug-Ins/CLAP" CACHE PATH "Install prefix" FORCE)
+   else()
+      set(CMAKE_INSTALL_PREFIX "$ENV{HOME}/.clap" CACHE PATH "Install prefix" FORCE)
+   endif()
 endif()
 
 # The shared code, beside this plugin at the repository root.
@@ -129,7 +145,34 @@ if(SAEUREKISTE_BUILD_GUI AND CMAKE_SYSTEM_NAME STREQUAL "Windows")
    endif()
 endif()
 
-if(SAEUREKISTE_BUILD_GUI AND NOT SAEUREKISTE_GUI_FOUND_WIN)
+if(SAEUREKISTE_BUILD_GUI AND APPLE)
+   # A static, universal Cairo with its Quartz backend (fonts) and pixman, from
+   # ../shared/cmake/build-macos-cairo.sh. Nothing from Homebrew: its libraries
+   # are dylibs for one architecture and for that machine's macOS version.
+   # A hard failure, unlike Windows: no release path builds a Mac plugin
+   # without a window, and one that silently lost it would still ship.
+   set(SAEUREKISTE_MAC_CAIRO "${CMAKE_CURRENT_SOURCE_DIR}/../macbuild/cairo-macos"
+      CACHE PATH "Static Cairo for macOS (shared/cmake/build-macos-cairo.sh)")
+   if(NOT EXISTS "${SAEUREKISTE_MAC_CAIRO}/lib/libcairo.a")
+      message(FATAL_ERROR
+         "SaeureKiste: no macOS Cairo at SAEUREKISTE_MAC_CAIRO=${SAEUREKISTE_MAC_CAIRO}; "
+         "run ../shared/cmake/build-macos-cairo.sh, or configure with -DSAEUREKISTE_BUILD_GUI=OFF")
+   endif()
+   set(SAEUREKISTE_GUI_DEPS_INCLUDE_DIRS
+      "${SAEUREKISTE_MAC_CAIRO}/include" "${SAEUREKISTE_MAC_CAIRO}/include/cairo")
+   set(SAEUREKISTE_GUI_DEPS_LIBRARIES
+      "${SAEUREKISTE_MAC_CAIRO}/lib/libcairo.a" "${SAEUREKISTE_MAC_CAIRO}/lib/libpixman-1.a"
+      "-framework Cocoa" "-framework CoreGraphics" "-framework CoreText"
+      "-framework CoreFoundation" "-framework ApplicationServices")
+   # The drag and the file chooser are Cocoa's, in the .mm files, in place of
+   # dragfile.cpp and filedialog.cpp.
+   set(SAEUREKISTE_GUI_SOURCES src/gui/gui.cpp src/gui/seqwindow.cpp src/gui/cocoaview.mm
+       src/gui/filedialog_mac.mm)
+   set(SAEUREKISTE_GUI_FOUND_MAC TRUE)
+   message(STATUS "SaeureKiste: building the plugin window (Cocoa + Cairo)")
+endif()
+
+if(SAEUREKISTE_BUILD_GUI AND NOT SAEUREKISTE_GUI_FOUND_WIN AND NOT SAEUREKISTE_GUI_FOUND_MAC)
    find_package(PkgConfig QUIET)
    if(PkgConfig_FOUND)
       pkg_check_modules(SAEUREKISTE_GUI_DEPS QUIET x11 cairo)
@@ -153,6 +196,10 @@ if(SAEUREKISTE_BUILD_GUI)
    set(PLUGINCORE_GUI_DEFINES ${SAEUREKISTE_GUI_DEFINES})
 endif()
 
+# The window is this plugin's own fork (src/gui/seqwindow.cpp), so the shared
+# one is not compiled. It would not link into the plugin anyway, being unused,
+# but on macOS it would not even compile: it has no Cocoa backend.
+set(PLUGINCORE_SHARED_WINDOW OFF)
 add_subdirectory("${PLUGINCORE_SHARED_DIR}" plugincore-shared)
 
 # --------------------------------------------------------- the implementation
@@ -186,6 +233,12 @@ target_include_directories(SaeureKiste-impl PUBLIC
    "${CMAKE_CURRENT_SOURCE_DIR}/src"
    "${CMAKE_CURRENT_BINARY_DIR}/generated"
 )
+
+if(APPLE)
+   # Every retain in the .mm files has its release written out.
+   set_source_files_properties(src/gui/cocoaview.mm src/gui/filedialog_mac.mm PROPERTIES
+      COMPILE_OPTIONS "-fno-objc-arc")
+endif()
 
 target_compile_options(SaeureKiste-impl PRIVATE
    -Wall -Wextra
@@ -230,6 +283,10 @@ if(WIN32)
       "-static-libgcc" "-static-libstdc++"
       "-Wl,-Bstatic,--whole-archive" "-lwinpthread" "-Wl,--no-whole-archive,-Bdynamic"
    )
+elseif(APPLE)
+   # Only clap_entry is exported. Undefined symbols are an error by default
+   # with Apple's linker, so there is nothing to add for that.
+   target_link_options(SaeureKiste PRIVATE "-Wl,-exported_symbol,_clap_entry")
 else()
    # Only clap_entry is exported; everything else stays internal to the DSO.
    target_link_options(SaeureKiste PRIVATE
@@ -238,11 +295,25 @@ else()
    )
 endif()
 
-set_target_properties(SaeureKiste PROPERTIES
-   PREFIX ""
-   OUTPUT_NAME "SaeureKiste"
-   SUFFIX ".clap"
-)
+if(APPLE)
+   # A bundle, SaeureKiste.clap/Contents/MacOS/SaeureKiste, as hosts expect a
+   # CLAP on macOS and as the clap-wrapper lays its own out.
+   set_target_properties(SaeureKiste PROPERTIES
+      BUNDLE TRUE
+      BUNDLE_EXTENSION clap
+      LIBRARY_OUTPUT_NAME "SaeureKiste"
+      MACOSX_BUNDLE_GUI_IDENTIFIER "de.ravetracer.saeurekiste"
+      MACOSX_BUNDLE_BUNDLE_NAME "SaeureKiste"
+      MACOSX_BUNDLE_BUNDLE_VERSION "${PROJECT_VERSION}"
+      MACOSX_BUNDLE_SHORT_VERSION_STRING "${PROJECT_VERSION}"
+   )
+else()
+   set_target_properties(SaeureKiste PROPERTIES
+      PREFIX ""
+      OUTPUT_NAME "SaeureKiste"
+      SUFFIX ".clap"
+   )
+endif()
 
 # ------------------------------------------------------------- offline test host
 if(SAEUREKISTE_BUILD_TOOLS)
@@ -285,7 +356,7 @@ if(SAEUREKISTE_BUILD_TOOLS)
    # it is a CLAP host and nothing more -- so a Windows cross build still gets
    # that one, which is how the Windows plugin gets its self-test run under wine.
    find_package(PkgConfig QUIET)
-   if(PkgConfig_FOUND AND NOT CMAKE_SYSTEM_NAME STREQUAL "Windows")
+   if(PkgConfig_FOUND AND NOT CMAKE_SYSTEM_NAME STREQUAL "Windows" AND NOT APPLE)
       pkg_check_modules(GUIHOST_X11 QUIET x11)
    endif()
    if(GUIHOST_X11_FOUND OR CMAKE_SYSTEM_NAME STREQUAL "Windows")
@@ -315,29 +386,44 @@ endif()
 # Needs CLAP/clap-wrapper and CLAP/vst3sdk (VST 3.8 or newer, which is the first
 # MIT-licensed one), and the wrapper needs shared/patches/ applied to build
 # against 3.8 at all. The repository README has the commands.
-if(SAEUREKISTE_BUILD_VST3)
+if(SAEUREKISTE_BUILD_VST3 OR SAEUREKISTE_BUILD_AUV2)
    get_filename_component(SAEUREKISTE_CLAP_DIR "${CLAP_INCLUDE_DIR}/../.." ABSOLUTE)
    set(SAEUREKISTE_WRAPPER_DIR "${SAEUREKISTE_CLAP_DIR}/clap-wrapper"
       CACHE PATH "Directory containing a clap-wrapper checkout")
    set(SAEUREKISTE_VST3_SDK_DIR "${SAEUREKISTE_CLAP_DIR}/vst3sdk"
       CACHE PATH "Directory containing a VST3 SDK checkout")
+   set(SAEUREKISTE_AU_SDK_DIR "${SAEUREKISTE_CLAP_DIR}/AudioUnitSDK"
+      CACHE PATH "Directory containing Apple's AudioUnitSDK checkout")
 
    if(NOT EXISTS "${SAEUREKISTE_WRAPPER_DIR}/cmake/wrap_vst3.cmake")
       message(FATAL_ERROR "SaeureKiste: no clap-wrapper at ${SAEUREKISTE_WRAPPER_DIR}")
    endif()
-   if(NOT EXISTS "${SAEUREKISTE_VST3_SDK_DIR}/public.sdk/source/main/pluginfactory.cpp")
-      message(FATAL_ERROR "SaeureKiste: no VST3 SDK at ${SAEUREKISTE_VST3_SDK_DIR}")
-   endif()
 
-   # The wrapper resolves both SDKs itself; hand it the checkouts beside this
+   # The wrapper resolves the SDKs itself; hand it the checkouts beside this
    # plugin rather than letting it download its own.
    set(CLAP_SDK_ROOT "${SAEUREKISTE_CLAP_DIR}/clap" CACHE PATH "" FORCE)
-   set(VST3_SDK_ROOT "${SAEUREKISTE_VST3_SDK_DIR}" CACHE PATH "" FORCE)
    set(CLAP_WRAPPER_DOWNLOAD_DEPENDENCIES FALSE CACHE BOOL "" FORCE)
    set(CLAP_WRAPPER_OUTPUT_NAME "SaeureKiste" CACHE STRING "" FORCE)
    set(CLAP_WRAPPER_BUILD_TESTS FALSE CACHE BOOL "" FORCE)
+   if(SAEUREKISTE_BUILD_VST3)
+      if(NOT EXISTS "${SAEUREKISTE_VST3_SDK_DIR}/public.sdk/source/main/pluginfactory.cpp")
+         message(FATAL_ERROR "SaeureKiste: no VST3 SDK at ${SAEUREKISTE_VST3_SDK_DIR}")
+      endif()
+      set(VST3_SDK_ROOT "${SAEUREKISTE_VST3_SDK_DIR}" CACHE PATH "" FORCE)
+   endif()
+   if(SAEUREKISTE_BUILD_AUV2)
+      # Apple's AudioUnitSDK (Apache 2.0), checked out beside the others:
+      #   git clone --branch AudioUnitSDK-1.1.0 https://github.com/apple/AudioUnitSDK.git CLAP/AudioUnitSDK
+      if(NOT EXISTS "${SAEUREKISTE_AU_SDK_DIR}/src/AudioUnitSDK")
+         message(FATAL_ERROR "SaeureKiste: no AudioUnitSDK at ${SAEUREKISTE_AU_SDK_DIR}")
+      endif()
+      set(AUDIOUNIT_SDK_ROOT "${SAEUREKISTE_AU_SDK_DIR}" CACHE PATH "" FORCE)
+   endif()
 
    add_subdirectory("${SAEUREKISTE_WRAPPER_DIR}" clap-wrapper EXCLUDE_FROM_ALL)
+endif()
+
+if(SAEUREKISTE_BUILD_VST3)
 
    # The bundle is assembled in place, so point it somewhere predictable rather
    # than at whatever the generator picks per configuration. release.sh looks
@@ -372,6 +458,28 @@ if(SAEUREKISTE_BUILD_VST3)
          "-Wl,-Bstatic,--whole-archive" "-lwinpthread" "-Wl,--no-whole-archive,-Bdynamic"
       )
    endif()
+endif()
+
+# ------------------------------------------------------------------------ AUv2
+#
+# macOS only: the same plugin as an Audio Unit instrument ("aumu"), with the
+# CLAP entry linked in as the VST3 has it. The manufacturer and subtype codes
+# are SaeureKiste's for good: Logic and every other AU host keep projects by
+# them, exactly as CLAP hosts keep them by the plugin id.
+if(SAEUREKISTE_BUILD_AUV2)
+   add_library(SaeureKiste-auv2 MODULE src/entry.cpp)
+   target_link_libraries(SaeureKiste-auv2 PRIVATE SaeureKiste-impl)
+   target_compile_options(SaeureKiste-auv2 PRIVATE -Wall -Wextra)
+   target_add_auv2_wrapper(
+      TARGET SaeureKiste-auv2
+      OUTPUT_NAME "SaeureKiste"
+      BUNDLE_IDENTIFIER "de.ravetracer.saeurekiste.auv2"
+      BUNDLE_VERSION "${PROJECT_VERSION}"
+      MANUFACTURER_NAME "Ravetracer"
+      MANUFACTURER_CODE "Rvtr"
+      SUBTYPE_CODE "Saek"
+      INSTRUMENT_TYPE "aumu"
+   )
 endif()
 
 # ---------------------------------------------------------------------- install

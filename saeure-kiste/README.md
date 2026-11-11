@@ -1,6 +1,7 @@
 # SäureKiste
 
-A monophonic acid bass synthesiser for Linux, as a native **CLAP** plugin.
+A monophonic acid bass synthesiser for Linux, Windows and macOS, as a native
+**CLAP** plugin, a VST3, and on macOS an Audio Unit.
 
 It models the Roland TB-303's main board from the February 1982 service notes:
 the relaxation-oscillator VCO, the four-stage transistor ladder with the unequal
@@ -80,6 +81,24 @@ VST3 is the same plugin behind free-audio's clap-wrapper and needs
 cleanly and they import only what Windows already has. That is not the same as
 working, and the window is the part most likely to surprise.
 
+### macOS
+
+macOS cannot be built on the development machine -- Apple's SDK may only be
+used on Apple hardware -- so `.github/workflows/saeurekiste-macos.yml` builds it
+on GitHub's macOS runners: a static universal Cairo
+(`shared/cmake/build-macos-cairo.sh`), then the CLAP, the VST3 and an Audio Unit
+instrument (`aumu`, subtype `Saek`, manufacturer `Rvtr` -- permanent, AU hosts
+keep projects by them), universal arm64 + x86_64, macOS 10.15+. It runs the
+whole self-test against the built `.clap` on arm64 and under Rosetta, signs the
+bundles ad hoc, runs `auval` and uploads `SaeureKiste-<version>-macOS.zip`,
+which is attached to a published `saeurekiste-v*` release. Not notarized: users
+clear the quarantine with `xattr`, as INSTALL.txt and the manual say.
+
+The window's macOS backend is `src/gui/cocoaview.mm`, an NSView child that puts
+the window's Cairo image surface on screen at the Retina factor; the drag of a
+pattern as a `.mid` and the file chooser are Cocoa's (`cocoaview.mm`,
+`filedialog_mac.mm`). **No Mac DAW has loaded it yet.**
+
 ## The controls
 
 Eight are the machine's front panel. The rest are not, and every one of them
@@ -89,7 +108,7 @@ says so in its own tooltip.
 |---|---|---|
 | **Waveform** | S1 | Sawtooth or square. The square arrives at the filter 6.7 dB down, because on the hardware it does. Sine, Triangle, Pulse, Wavetable and Noise come after them and are not the machine's. |
 | **Pulse Width / WT Position / Tri Skew / Sine Bend / Noise Grain** | -- | One control per added waveform, each its own automatable parameter. The oscillator display edits the one belonging to the selected waveform. None of them touches the saw or the square. |
-| **Table** | -- | Eight built-in wavetables, or User: a WAV from `~/.config/SaeureKiste/wavetables` (`%APPDATA%\SaeureKiste\wavetables` on Windows), picked in a tree that the chip opens. The table in use is saved in the project and in presets. |
+| **Table** | -- | Eight built-in wavetables, or User: a WAV from `~/.config/SaeureKiste/wavetables` (`%APPDATA%\SaeureKiste\wavetables` on Windows, `~/Library/Application Support/SaeureKiste/wavetables` on macOS), picked in a tree that the chip opens. The table in use is saved in the project and in presets. |
 | **Voices / Detune / Spread** | -- | Unison, 1 to 16 voices. With Spread above zero each side gets its own ladder and drive. One voice is the machine. |
 | **Tuning** | VR2 | +/- 700 cents, which is the range the service notes give. |
 | **Cutoff** | VR3 | 100 Hz to 2.5 kHz. The centre is 500 Hz because the factory alignment procedure puts it there. |

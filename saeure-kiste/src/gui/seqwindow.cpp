@@ -44,6 +44,8 @@
 #   ifndef M_PI
 #      define M_PI 3.14159265358979323846
 #   endif
+#elif defined(__APPLE__)
+#   include "cocoaview.h"
 #else
 #   include <X11/Xlib.h>
 #   include <X11/Xutil.h>
@@ -59,7 +61,11 @@ namespace {
 
 // --------------------------------------------------------------- the window
 
-class PluginWindow final : public Gui {
+class PluginWindow final : public Gui
+#if defined(__APPLE__)
+   , private CocoaViewListener
+#endif
+{
 public:
    PluginWindow(GuiDelegate &delegate, const WindowSpec &spec)
       : mDelegate(delegate), mSpec(spec),
@@ -186,6 +192,27 @@ public:
          SetWindowTextA(mWindow, title);
    }
 
+#elif defined(__APPLE__)
+   // The view is made here and put into the host's view by embed(), the same
+   // two steps as the Win32 popup that becomes a child.
+   bool open() override {
+      if (mView.isOpen())
+         return true;
+      if (!mView.create(static_cast<int>(pixelW()), static_cast<int>(pixelH())))
+         return false;
+      allocateBuffer();
+      return true;
+   }
+
+   bool embed(uintptr_t parentWindow) override { return mView.embed(parentWindow); }
+
+   bool setTransientFor(uintptr_t) override {
+      // A child view has no transient hint; floating windows are not offered.
+      return mView.isOpen();
+   }
+
+   void setTitle(const char *) override {}
+
 #else
    bool open() override {
       if (mWindow)
@@ -288,12 +315,18 @@ public:
    // a scale change and for the collapsible section, which changes the height
    // at a fixed scale; both are the same job once the numbers have moved.
    void applySize() {
+#if defined(_WIN32)
       if (!mWindow)
          return;
-#if defined(_WIN32)
       SetWindowPos(mWindow, nullptr, 0, 0, static_cast<int>(pixelW()),
                    static_cast<int>(pixelH()), SWP_NOMOVE | SWP_NOZORDER);
+#elif defined(__APPLE__)
+      if (!mView.isOpen())
+         return;
+      mView.setSize(static_cast<int>(pixelW()), static_cast<int>(pixelH()));
 #else
+      if (!mWindow)
+         return;
       XResizeWindow(mDisplay, mWindow, pixelW(), pixelH());
       cairo_xlib_surface_set_size(mTarget, pixelW(), pixelH());
 #endif
@@ -307,11 +340,17 @@ public:
    }
 
    void show() override {
+#if defined(_WIN32)
       if (!mWindow)
          return;
-#if defined(_WIN32)
       ShowWindow(mWindow, SW_SHOWNA);
+#elif defined(__APPLE__)
+      if (!mView.isOpen())
+         return;
+      mView.show();
 #else
+      if (!mWindow)
+         return;
       XMapWindow(mDisplay, mWindow);
       XFlush(mDisplay);
 #endif
@@ -319,13 +358,20 @@ public:
    }
 
    void hide() override {
+#if defined(__APPLE__)
+      if (!mView.isOpen())
+         return;
+#else
       if (!mWindow)
          return;
+#endif
       if (mSaveOpen)
          closeSaveDialog();
       closeEntry();
 #if defined(_WIN32)
       ShowWindow(mWindow, SW_HIDE);
+#elif defined(__APPLE__)
+      mView.hide();
 #else
       XUnmapWindow(mDisplay, mWindow);
       XFlush(mDisplay);
@@ -345,6 +391,11 @@ public:
       // is safe from any thread and the owning thread does the work.
       if (needsRepaint())
          InvalidateRect(mWindow, nullptr, FALSE);
+#elif defined(__APPLE__)
+      // As on Windows, the frame is drawn when the system asks for it
+      // (drawRect:), and the clock only says that one is due.
+      if (mView.isOpen() && needsRepaint())
+         mView.invalidate();
 #else
       if (!mDisplay)
          return;
@@ -369,8 +420,10 @@ private:
          cairo_surface_destroy(mBuffer);
          mBuffer = nullptr;
       }
-      mBuffer = cairo_image_surface_create(CAIRO_FORMAT_RGB24, static_cast<int>(pixelW()),
-                                           static_cast<int>(pixelH()));
+      // mBacking is the Retina factor on macOS and 1 everywhere else.
+      mBuffer = cairo_image_surface_create(CAIRO_FORMAT_RGB24,
+                                           static_cast<int>(pixelW() * mBacking + 0.5),
+                                           static_cast<int>(pixelH() * mBacking + 0.5));
       mBufferCr = cairo_create(mBuffer);
    }
 
@@ -395,6 +448,9 @@ private:
             UnregisterClassW(windowClassName(), moduleInstance());
       }
       mWindow = nullptr;
+#elif defined(__APPLE__)
+      releaseKeyboard();
+      mView.destroy();
 #else
       if (mDisplay) {
          // Closing the display would drop the grab anyway, but say so plainly
@@ -1034,7 +1090,7 @@ private:
          mWaveKey = mSpec.host->windowWaveKey();
 
       cairo_save(cr);
-      cairo_scale(cr, mScale, mScale);
+      cairo_scale(cr, mScale * mBacking, mScale * mBacking);
       cairo_set_line_join(cr, CAIRO_LINE_JOIN_ROUND);
 
       drawBackground(cr);
@@ -1062,10 +1118,13 @@ private:
 
       cairo_restore(cr);
 
+      // On macOS there is no target: the view puts mBuffer on screen itself.
+      if (!mTargetCr)
+         return;
       cairo_set_source_surface(mTargetCr, mBuffer, 0, 0);
       cairo_paint(mTargetCr);
       cairo_surface_flush(mTarget);
-#if !defined(_WIN32)
+#if !defined(_WIN32) && !defined(__APPLE__)
       XFlush(mDisplay);
 #endif
    }
@@ -2218,8 +2277,13 @@ private:
    // may hold one. The dialog says so and saving under the offered name still
    // works with the mouse.
    void grabKeyboard() {
+#if defined(__APPLE__)
+      if (!mView.isOpen() || mKeyboardGrabbed)
+         return;
+#else
       if (!mWindow || mKeyboardGrabbed)
          return;
+#endif
       // Said before the keyboard actually moves, because from here on the key
       // releases for anything the host is playing from its own computer
       // keyboard go to this window instead of to the host.
@@ -2231,6 +2295,10 @@ private:
       // its shortcuts, and focus returns on its own when the dialog closes.
       mPrevFocus = SetFocus(mWindow);
       mKeyboardGrabbed = GetFocus() == mWindow;
+#elif defined(__APPLE__)
+      // The same as on Windows: the view becomes the first responder, and the
+      // host has its shortcuts back once the dialog closes.
+      mKeyboardGrabbed = mView.takeKeyboard();
 #else
       if (!mDisplay)
          return;
@@ -2250,6 +2318,9 @@ private:
       if (mPrevFocus && IsWindow(mPrevFocus))
          SetFocus(mPrevFocus);
       mPrevFocus = nullptr;
+#elif defined(__APPLE__)
+      mKeyboardGrabbed = false; // before the view lets go, which reports it
+      mView.releaseKeyboard();
 #else
       if (mDisplay) {
          XErrorHandler previous = XSetErrorHandler(&ignoreXError);
@@ -4364,6 +4435,9 @@ private:
          return; // an empty pattern, or nowhere to write it
 #if defined(_WIN32)
       dragFileOut(nullptr, reinterpret_cast<uintptr_t>(mWindow), path);
+#elif defined(__APPLE__)
+      // Not modal here: the drag runs on after this returns.
+      dragFileOut(nullptr, reinterpret_cast<uintptr_t>(mView.nsView()), path);
 #else
       dragFileOut(mDisplay, static_cast<uintptr_t>(mWindow), path);
 #endif
@@ -4908,6 +4982,67 @@ private:
       }
       return DefWindowProcW(mWindow, msg, wp, lp);
    }
+#elif defined(__APPLE__)
+   // CocoaViewListener: the view hands its events over here, on the main
+   // thread. Everything below this block is shared again.
+   cairo_surface_t *cocoaRender(double backing) override {
+      if (backing < 1.0)
+         backing = 1.0;
+      if (std::fabs(backing - mBacking) > 1.0e-6 || !mBuffer) {
+         mBacking = backing;
+         allocateBuffer();
+      }
+      mDirty = true; // a paint request is not conditional on anything
+      paint();
+      return mBuffer;
+   }
+
+   void cocoaMouseDown(double x, double y, unsigned button, unsigned long timeMs,
+                       bool shift) override {
+      onPointerDown(x, y, button, timeMs, shift);
+   }
+
+   void cocoaMouseUp() override { onButtonRelease(); }
+
+   void cocoaMouseMoved(double x, double y, bool shift) override {
+      onMotion(x / mScale, y / mScale, shift);
+   }
+
+   void cocoaMouseExited() override {
+      if (mDrag < 0) {
+         mHover = -1;
+         mHoverWidget = Widget::NoWidget;
+         mDirty = true;
+      }
+   }
+
+   bool cocoaKey(CocoaViewListener::Key key, const char *text, int length) override {
+      KeyCommand cmd = KeyCommand::NoCommand;
+      switch (key) {
+      case CocoaViewListener::Key::Escape: cmd = KeyCommand::Escape; break;
+      case CocoaViewListener::Key::Accept: cmd = KeyCommand::Accept; break;
+      case CocoaViewListener::Key::Backspace: cmd = KeyCommand::Backspace; break;
+      case CocoaViewListener::Key::Up: cmd = KeyCommand::Up; break;
+      case CocoaViewListener::Key::Down: cmd = KeyCommand::Down; break;
+      case CocoaViewListener::Key::None: break;
+      }
+      if (mSaveOpen)
+         onSaveKey(cmd, text, length);
+      else if (mEntryParam >= 0)
+         onEntryKey(cmd, text, length);
+      else if (cmd != KeyCommand::NoCommand)
+         onOverlayKey(cmd);
+      else
+         return false;
+      return true;
+   }
+
+   // Somebody clicked into another view or window while a field was taking
+   // the keyboard. The field stays open, as on Windows; the keyboard simply
+   // has to be taken again, which the next click into the field does.
+   void cocoaFocusLost() override { mKeyboardGrabbed = false; }
+
+   void pumpEvents() {}
 #else
    void pumpEvents() {
       XEvent ev;
@@ -5671,6 +5806,8 @@ private:
    HWND mWindow = nullptr;
    HWND mPrevFocus = nullptr;
    bool mTrackingLeave = false;
+#elif defined(__APPLE__)
+   CocoaView mView{*this};
 #else
    Display *mDisplay = nullptr;
    Window mWindow = 0;
@@ -5682,6 +5819,9 @@ private:
    cairo_surface_t *mBuffer = nullptr;
    cairo_t *mBufferCr = nullptr;
    double mScale = 1.0;
+   // Device pixels per point of the buffer: the Retina factor on macOS, where
+   // the view draws the buffer at its size in points; 1 everywhere else.
+   double mBacking = 1.0;
 
    std::vector<Panel> mPanels;
    std::vector<Cell> mCells;

@@ -3,6 +3,14 @@
 Versions follow `X.Y.Z`: major / new features / bug fixes. Dates are the day
 the version was committed.
 
+## 0.18.0 -- 2026-11-11
+
+- **macOS**: CLAP, VST3 and Audio Unit, universal (Apple Silicon and Intel),
+  macOS 10.15 or later, built by a GitHub workflow. The window draws at the
+  Retina resolution; dragging a pattern out as a MIDI file and the file
+  choosers use the system's own. User presets and wavetables live in
+  `~/Library/Application Support/SaeureKiste/`.
+
 ## 0.17.0 -- 2026-10-29
 
 - **FX**: an effect chain of up to sixteen inserts, on a page of its own behind

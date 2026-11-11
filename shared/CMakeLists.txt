@@ -21,6 +21,7 @@
 #   PLUGINCORE_GUI_LIBRARY_DIRS
 #   PLUGINCORE_GUI_LIBRARIES
 #   PLUGINCORE_GUI_DEFINES
+#   PLUGINCORE_SHARED_WINDOW      OFF to leave out src/gui/window.cpp (default ON)
 #
 # The GUI dependencies are discovered by the plugin, not here: a cross build
 # must not consult this machine's pkg-config.
@@ -33,7 +34,12 @@ set(PLUGINCORE_SOURCES
    src/preset_provider.cpp
 )
 
-if(PLUGINCORE_WITH_GUI)
+# A plugin with its own fork of the window (SaeureKiste, RumpelKiste) can set
+# PLUGINCORE_SHARED_WINDOW OFF; the shared one has no macOS backend.
+if(NOT DEFINED PLUGINCORE_SHARED_WINDOW)
+   set(PLUGINCORE_SHARED_WINDOW ON)
+endif()
+if(PLUGINCORE_WITH_GUI AND PLUGINCORE_SHARED_WINDOW)
    list(APPEND PLUGINCORE_SOURCES src/gui/window.cpp)
 endif()
 

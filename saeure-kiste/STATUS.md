@@ -1,12 +1,17 @@
 # SäureKiste -- status
 
-Version 0.17.0. Linux and Windows, CLAP and VST3. 252 parameters, 30 presets,
+Version 0.18.0. Linux, Windows and macOS; CLAP and VST3, and an Audio Unit on
+macOS. 252 parameters, 30 presets,
 builds clean, self-test passes with no failures on Linux and under wine, and
 every factory preset renders bit for bit what 0.16.0 rendered at 44.1, 48 and
 96 kHz.
 
 Six of seven fixes were confirmed by backing the bug out and watching the suite
 fail; the seventh has no contract to assert. See `TODO.md` §3.
+
+0.18.0 adds **macOS** (CLAP, VST3, AU), built and self-tested only by
+`.github/workflows/saeurekiste-macos.yml` -- see README.md. Nothing on the
+Linux or Windows side changed behaviour; no Mac DAW has loaded it yet.
 
 0.17.0 adds **the FX**: an effect chain of up to sixteen inserts, each of which
 sits in front of the ladder (Pre), after the amplifier (Post) or after the

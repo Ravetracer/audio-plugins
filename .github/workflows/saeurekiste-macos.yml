@@ -1,0 +1,207 @@
+# SaeureKiste for macOS: CLAP, VST3 and Audio Unit, universal (Apple Silicon
+# and Intel), macOS 10.15 or later.
+#
+# Built here because it cannot be built on the development machine: the
+# macOS SDK may only be used on Apple hardware, and GitHub's macOS runners are
+# that hardware. The bundles are signed ad hoc, not notarized; INSTALL.txt in
+# the archive explains the one command that clears the quarantine.
+#
+# The same shape as resident-macos.yml, plus what SaeureKiste can do that
+# ReSIDent cannot: its whole self-test needs nothing that may not go on a
+# server, so the built .clap goes through it on arm64 and under Rosetta.
+#
+# Every run uploads SaeureKiste-<version>-macOS.zip as a workflow artifact.
+# When a GitHub release tagged saeurekiste-v* is published, the archive is
+# also attached to that release.
+
+name: SaeureKiste macOS
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "saeure-kiste/**"
+      - "shared/**"
+      - ".github/workflows/saeurekiste-macos.yml"
+  pull_request:
+    paths:
+      - "saeure-kiste/**"
+      - "shared/**"
+      - ".github/workflows/saeurekiste-macos.yml"
+  release:
+    types: [published]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: saeurekiste-macos-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    if: github.event_name != 'release' || startsWith(github.event.release.tag_name, 'saeurekiste-v')
+    runs-on: macos-15
+    permissions:
+      contents: write # attaching the archive to a release
+    env:
+      MACOSX_DEPLOYMENT_TARGET: "10.15"
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build tools
+        run: brew install meson ninja pkgconf
+
+      # CLAP/ is gitignored (third-party SDKs, see CLAUDE.md): the same
+      # versions the Linux and Windows builds use, plus Apple's AudioUnitSDK.
+      - name: SDKs
+        run: |
+          mkdir -p CLAP && cd CLAP
+          git clone --depth 1 --branch 1.2.10 https://github.com/free-audio/clap.git
+          git clone --depth 1 --branch v0.16.0 https://github.com/free-audio/clap-wrapper.git
+          git clone --depth 1 --branch v3.8.1_build_84 https://github.com/steinbergmedia/vst3sdk.git
+          git -C vst3sdk submodule update --init base pluginterfaces public.sdk
+          git clone --depth 1 --branch AudioUnitSDK-1.1.0 https://github.com/apple/AudioUnitSDK.git
+          git -C clap-wrapper apply ../../shared/patches/clap-wrapper-vst3-sdk-3.8.patch
+          git -C clap-wrapper apply ../../shared/patches/clap-wrapper-auv2-main-bus-channels.patch
+
+      # The same key as ReSIDent's workflow, so the two share one Cairo.
+      # Restored and saved in two steps, so a Cairo that was built is kept
+      # even when a later step fails.
+      - name: Cairo cache
+        id: cairo
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            macbuild/cairo-macos/include
+            macbuild/cairo-macos/lib
+          key: cairo-macos-${{ env.MACOSX_DEPLOYMENT_TARGET }}-${{ hashFiles('shared/cmake/build-macos-cairo.sh') }}
+
+      - name: Cairo
+        if: steps.cairo.outputs.cache-hit != 'true'
+        run: shared/cmake/build-macos-cairo.sh macbuild/cairo-macos
+
+      - name: Cairo cache save
+        if: steps.cairo.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            macbuild/cairo-macos/include
+            macbuild/cairo-macos/lib
+          key: ${{ steps.cairo.outputs.cache-primary-key }}
+
+      - name: Configure
+        run: >
+          cmake -S saeure-kiste -B saeure-kiste/build -G Ninja
+          -DCMAKE_BUILD_TYPE=Release
+          -DCMAKE_OSX_ARCHITECTURES="arm64;x86_64"
+          -DSAEUREKISTE_BUILD_VST3=ON
+          -DSAEUREKISTE_BUILD_AUV2=ON
+          -DSAEUREKISTE_BUILD_TOOLS=ON
+
+      - name: Build
+        run: >
+          cmake --build saeure-kiste/build
+          --target SaeureKiste SaeureKiste-vst3 SaeureKiste-auv2 saeurekiste-render
+          -- -k 0
+
+      # The wrapper decides where its bundles land on macOS (not where the
+      # Linux build puts the VST3), so they are looked up rather than assumed.
+      - name: Bundles
+        id: bundles
+        working-directory: saeure-kiste/build
+        run: |
+          for ext in clap vst3 component; do
+            b="$(find . -maxdepth 3 -type d -name "SaeureKiste.${ext}" -not -path '*/CMakeFiles/*' | head -1)"
+            [ -n "$b" ] || { echo "no SaeureKiste.${ext} in the build tree"; exit 1; }
+            echo "${ext}=$b" | tee -a "$GITHUB_OUTPUT"
+            lipo -info "$b/Contents/MacOS/SaeureKiste"
+          done
+
+      # The renderer loads the built .clap as a host does and runs the whole
+      # suite through it. The x86_64 half runs under Rosetta.
+      - name: Self-test
+        working-directory: saeure-kiste/build
+        run: |
+          plugin="${{ steps.bundles.outputs.clap }}/Contents/MacOS/SaeureKiste"
+          lipo -info saeurekiste-render
+          echo "--- arm64"
+          ./saeurekiste-render --plugin "$plugin" --selftest
+          if arch -x86_64 /usr/bin/true 2>/dev/null; then
+            echo "--- x86_64 (Rosetta)"
+            arch -x86_64 ./saeurekiste-render --plugin "$plugin" --selftest
+          else
+            echo "no Rosetta on this runner: x86_64 not run"
+          fi
+
+      - name: Sign (ad hoc)
+        working-directory: saeure-kiste/build
+        run: |
+          for b in "${{ steps.bundles.outputs.clap }}" "${{ steps.bundles.outputs.vst3 }}" "${{ steps.bundles.outputs.component }}"; do
+            codesign --force --deep --sign - "$b"
+            codesign --verify --deep --strict --verbose=2 "$b"
+          done
+
+      # Loads the Audio Unit the way Logic does and runs Apple's validation:
+      # instantiation, render at several rates, parameters, state.
+      - name: Audio Unit validation
+        run: |
+          mkdir -p ~/Library/Audio/Plug-Ins/Components
+          cp -R "saeure-kiste/build/${{ steps.bundles.outputs.component }}" ~/Library/Audio/Plug-Ins/Components/
+          killall -9 AudioComponentRegistrar 2>/dev/null || true
+          auval -a | grep -i "Rvtr" || true
+          auval -v aumu Saek Rvtr
+
+      - name: Package
+        id: package
+        run: |
+          ver="$(sed -n 's/^project(SaeureKiste VERSION \([0-9.]*\).*/\1/p' saeure-kiste/CMakeLists.txt)"
+          name="SaeureKiste-${ver}-macOS"
+          d="dist/${name}"
+          mkdir -p "$d"
+          for b in "${{ steps.bundles.outputs.clap }}" "${{ steps.bundles.outputs.vst3 }}" "${{ steps.bundles.outputs.component }}"; do
+            cp -R "saeure-kiste/build/$b" "$d/"
+          done
+          cp saeure-kiste/LICENSE saeure-kiste/README.md "$d/"
+          cat > "$d/INSTALL.txt" <<EOF
+          SaeureKiste ${ver} for macOS (10.15 or later, Apple Silicon and Intel)
+
+          1. Copy the plugin format(s) your DAW uses:
+
+               SaeureKiste.clap       ->  ~/Library/Audio/Plug-Ins/CLAP/
+               SaeureKiste.vst3       ->  ~/Library/Audio/Plug-Ins/VST3/
+               SaeureKiste.component  ->  ~/Library/Audio/Plug-Ins/Components/
+
+             (~/Library is hidden in the Finder: Go > Go to Folder... and type the path.)
+
+          2. SaeureKiste is free and not notarized by Apple, so macOS blocks files
+             downloaded from the internet until you clear their quarantine flag.
+             Open Terminal and run:
+
+               xattr -dr com.apple.quarantine ~/Library/Audio/Plug-Ins/CLAP/SaeureKiste.clap
+               xattr -dr com.apple.quarantine ~/Library/Audio/Plug-Ins/VST3/SaeureKiste.vst3
+               xattr -dr com.apple.quarantine ~/Library/Audio/Plug-Ins/Components/SaeureKiste.component
+
+             Without this the DAW does not load the plugin, or reports it as damaged.
+
+          3. Restart the DAW and let it rescan its plugins.
+
+          The factory presets are built into the plugin. Your own presets and
+          wavetables live in
+            ~/Library/Application Support/SaeureKiste/
+          EOF
+          ditto -c -k --keepParent "$d" "dist/${name}.zip"
+          echo "zip=dist/${name}.zip" >> "$GITHUB_OUTPUT"
+          echo "name=${name}" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.package.outputs.name }}
+          path: ${{ steps.package.outputs.zip }}
+
+      - name: Attach to the release
+        if: github.event_name == 'release'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release upload "${{ github.event.release.tag_name }}" "${{ steps.package.outputs.zip }}" --clobber

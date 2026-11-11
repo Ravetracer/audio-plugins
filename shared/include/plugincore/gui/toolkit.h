@@ -2,9 +2,10 @@
 
 // The drawing toolkit every plugin window here is built from.
 //
-// Both platforms draw through Cairo -- on Linux against X11, on Windows against
-// Cairo's win32 backend -- so everything here is platform independent except
-// the X error handler, which is guarded.
+// Every platform draws through Cairo -- on Linux against X11, on Windows against
+// Cairo's win32 backend, on macOS into an image surface a Cocoa view puts on
+// screen -- so everything here is platform independent except the X error
+// handler, which is guarded.
 //
 // A plugin keeps its own palette and its own panel layout; what lives here is
 // the machinery they are drawn with.
@@ -22,7 +23,7 @@
 #   define M_PI 3.14159265358979323846
 #endif
 
-#if !defined(_WIN32)
+#if !defined(_WIN32) && !defined(__APPLE__)
 #   include <X11/Xlib.h>
 #endif
 
@@ -61,7 +62,7 @@ constexpr unsigned kWheelDown = 5;
 
 enum class Align { Left, Center, Right };
 
-#if !defined(_WIN32)
+#if !defined(_WIN32) && !defined(__APPLE__)
 // Asking an embedded window for the keyboard focus can fail for reasons that
 // are none of the plugin's business. A failure must not reach Xlib's default
 // handler, which exits the host.

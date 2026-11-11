@@ -56,7 +56,7 @@ audio-plugins/
 
 | # | Plugin | Folder | Status | Platforms | Formats | What it is |
 |---|--------|--------|--------|-----------|---------|------------|
-| 1 | **SäureKiste** | `saeure-kiste/` | 0.17.0 | Linux, Windows | CLAP, VST3 | a Roland TB-303 model, from the 1982 service notes, plus Robin Whittle's Devil Fish modification |
+| 1 | **SäureKiste** | `saeure-kiste/` | 0.18.0 | Linux, Windows, macOS | CLAP, VST3, AU (macOS) | a Roland TB-303 model, from the 1982 service notes, plus Robin Whittle's Devil Fish modification |
 | 2 | **RumpelKiste** | `rumpel-kiste/` | 0.2.1 | Linux, Windows | CLAP, VST3 | a Roland TR-909 model, from the 1984 service notes, with SäureKiste's sequencer and drive stage |
 | 3 | **Aurum** | `aurum/` | 0.3.1 | Linux, Windows | CLAP, VST3 | a clean-room algorithmic reverb (FDN, allpass ring, plate) with a per-frequency decay contour; own DSP and GUI, see *Aurum* below |
 | 4 | **Substrike** | `substrike/` | 1.1.0 | Linux, Windows | CLAP, VST3 | a layered kick drum designer for every style; standalone like Aurum, see *Substrike* below |
@@ -795,9 +795,47 @@ forever. Exclude the two with `-x "preset-discovery-(crawl|load)"`.
 `clap-wrapper` needs one patch to build against VST3 3.8; it is kept in
 `shared/patches/` because `CLAP/` is gitignored and a fresh clone would lose it.
 
-ReSIDent's macOS build also needs Apple's AudioUnitSDK beside them
-(`git clone --branch AudioUnitSDK-1.1.0 https://github.com/apple/AudioUnitSDK.git`);
-only the GitHub workflow uses it.
+The macOS builds (ReSIDent, SäureKiste) also need Apple's AudioUnitSDK beside
+them (`git clone --branch AudioUnitSDK-1.1.0 https://github.com/apple/AudioUnitSDK.git`);
+only the GitHub workflows use it.
+
+### macOS builds
+
+Two plugins build for macOS, each through its own workflow on GitHub's macOS
+runners (`.github/workflows/<name>-macos.yml`): ReSIDent (see *ReSIDent*) and
+SäureKiste (0.18.0, `saeurekiste-macos.yml`). Nothing macOS can be built or
+run on the development machine. Lessons both workflows carry, so a third
+plugin starts from one of them rather than from scratch:
+
+- SDKs cloned into `CLAP/` at the versions below, both `shared/patches/`
+  applied to clap-wrapper (the AUv2 main-bus patch matters for any plugin
+  with auxiliary ports).
+- A static universal Cairo from `shared/cmake/build-macos-cairo.sh`, cached
+  under one key shared by all workflows, restored and saved in two steps so a
+  later failure keeps it.
+- `-- -k 0` on the build so one run reports every compile error.
+- The wrapper puts the `.vst3` and `.component` straight into `build/`,
+  not into `ASSET_OUTPUT_DIRECTORY`; SäureKiste's workflow looks the bundles
+  up with `find` instead of assuming.
+- `codesign --sign -` (ad hoc), `auval -v <type> <subtype> Rvtr`, a zip with
+  an INSTALL.txt that explains `xattr -dr com.apple.quarantine`.
+- In the code: `CLAP_WINDOW_API_COCOA`, `set_scale` returns false (logical
+  sizes, the view applies the Retina factor), the NSView subclass is
+  registered at run time under a name with the module's load address, no
+  ARC, `-Wl,-exported_symbol,_clap_entry`, `CMAKE_OSX_DEPLOYMENT_TARGET`
+  10.15 before `project()` (std::filesystem). GUI work only on the main
+  thread: SäureKiste's fallback GUI clock is a CFRunLoopTimer on macOS, not
+  the thread it uses elsewhere.
+- User data under `~/Library/Application Support/<Name>/`. For the PluginCore
+  plugins that is `shared/src/preset.cpp`'s `userPresetDir()`, which still
+  honours `XDG_CONFIG_HOME` first so the self-tests stay out of the real
+  folder.
+
+SäureKiste's macOS window is `saeure-kiste/src/gui/cocoaview.mm` behind the
+forked `seqwindow.cpp`; the shared `window.cpp` has **no** macOS backend, so a
+plugin on the shared window (Shapeau) needs one written before it can build
+there. A plugin with its own fork sets `PLUGINCORE_SHARED_WINDOW OFF` so the
+shared window is not compiled.
 
 If the checkout lives anywhere else, point CMake at it explicitly with
 `-DCLAP_INCLUDE_DIR=/path/to/clap/include`.

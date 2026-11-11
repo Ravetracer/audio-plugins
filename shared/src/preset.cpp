@@ -102,6 +102,13 @@ std::string userPresetDir(const PresetContext &ctx) {
    if (xdg && xdg[0] == '/')
       return std::string(xdg) + "/" + ctx.pluginName + "/presets";
    const char *home = std::getenv("HOME");
+#   if defined(__APPLE__)
+   // Where macOS applications keep their data. XDG_CONFIG_HOME above still
+   // wins when it is set, which nothing on a Mac does by itself but the
+   // self-tests do, to keep their files out of the real folder.
+   if (home && home[0] == '/')
+      return std::string(home) + "/Library/Application Support/" + ctx.pluginName + "/presets";
+#   endif
    if (home && home[0] == '/')
       return std::string(home) + "/.config/" + ctx.pluginName + "/presets";
    return {};

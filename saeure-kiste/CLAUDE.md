@@ -12,7 +12,8 @@ of truth for what works and what does not.
 
 ## What it is, in one paragraph
 
-Linux and Windows, CLAP and VST3, 252 parameters, 30 presets. VCO → four-stage
+Linux, Windows and macOS; CLAP and VST3, plus an Audio Unit on macOS. 252
+parameters, 30 presets. VCO → four-stage
 transistor ladder → VCA, with the decay envelope, the accent circuit and the
 slide lag around it, then a drive stage of ten models and a delay after all of
 it. The oscillator also has an experimental end that is not the machine's: five
@@ -550,7 +551,7 @@ tool names and an environment variable from the folder name, and
 ./install.sh --no-selftest
 ```
 
-Four binaries: CLAP and VST3, Linux and Windows. `./release.sh 0.2.0` at the
+Four binaries: CLAP and VST3, Linux and Windows, plus CLAP, VST3 and AU on macOS from the GitHub workflow. `./release.sh 0.2.0` at the
 repository root builds all of them and packs the archives with the manual.
 
 Windows is cross-compiled with mingw-w64 against a Cairo built by
@@ -567,6 +568,18 @@ degrade that `release.sh --windows-no-gui` depends on. Compare against
 
 **Nobody has loaded the Windows build in a DAW.** It compiles and it imports
 only system DLLs. That is not the same as working.
+
+**macOS** (0.18.0) is built only by `.github/workflows/saeurekiste-macos.yml`
+(see README.md and the root CLAUDE.md's *macOS builds*). The window's backend
+is `src/gui/cocoaview.{h,mm}`: `seqwindow.cpp` stays C++, draws into its image
+surface at `mScale * mBacking` (`mBacking` is the Retina factor, 1 elsewhere)
+and the view blits it. Unlike the other two platforms the pattern drag is
+**not modal** -- it starts inside the mouse-down and runs on. Keys reach the
+view only while a text field holds the keyboard (`acceptsFirstResponder`
+follows that), so the host keeps its shortcuts. Typed text is ASCII only,
+because the fields edit byte by byte. AU codes `Rvtr`/`Saek` are permanent.
+The CI runs the whole self-test against the built `.clap` on arm64 and under
+Rosetta. **No Mac DAW has loaded it yet.**
 
 ## Trademarks
 

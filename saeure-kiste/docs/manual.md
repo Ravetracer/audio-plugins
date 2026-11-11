@@ -1,14 +1,15 @@
 ---
 accent: #7CB814
 tagline: Acid, from the schematic up
-subtitle: CLAP and VST3 instrument for Linux and Windows
+subtitle: CLAP, VST3 and Audio Unit instrument for Linux, Windows and macOS
 ---
 
 # SäureKiste — manual
 
-*A monophonic acid bass synthesiser. Linux and Windows, CLAP and VST3.*
+*A monophonic acid bass synthesiser. Linux, Windows and macOS; CLAP and VST3,
+and an Audio Unit on macOS.*
 
-Version 0.17.0
+Version 0.18.0
 
 ---
 
@@ -53,6 +54,25 @@ Not affiliated with or endorsed by Roland Corporation. *TB-303* is their
 trademark, used here only to name what was modelled. Not affiliated with or
 endorsed by Robin Whittle; *Devil Fish* is his, and is used only to name the
 modification that was modelled.
+
+### On macOS
+
+The macOS download holds three bundles: `SaeureKiste.clap` for
+`~/Library/Audio/Plug-Ins/CLAP/`, `SaeureKiste.vst3` for
+`~/Library/Audio/Plug-Ins/VST3/` and the Audio Unit, `SaeureKiste.component`,
+for `~/Library/Audio/Plug-Ins/Components/`. Each is a folder -- copy it whole.
+It runs on macOS 10.15 (Catalina) or later, natively on Apple Silicon and on
+Intel.
+
+SäureKiste is free and not notarized by Apple, so macOS blocks a downloaded
+plugin until its quarantine flag is cleared. In Terminal, once per bundle:
+
+```
+xattr -dr com.apple.quarantine ~/Library/Audio/Plug-Ins/CLAP/SaeureKiste.clap
+```
+
+and the same for the `.vst3` and the `.component`. Without it the DAW does not
+load the plugin, or calls it damaged.
 
 ## 2. Playing it
 
@@ -174,6 +194,7 @@ plainest frame at WT Position 0 % to its most extreme at 100 %:
 
 - Linux: `~/.config/SaeureKiste/wavetables` (under `$XDG_CONFIG_HOME` if that is set)
 - Windows: `%APPDATA%\SaeureKiste\wavetables`
+- macOS: `~/Library/Application Support/SaeureKiste/wavetables`
 
 The folder is made the first time the selector opens. Put WAV files in it, in
 subfolders if you like, and they appear in the selector the next time it opens.
@@ -903,8 +924,8 @@ Measured over 400 seeds: the root is **44 %** of all generated notes, rests are
 ## 8. Presets, folders and packs
 
 Presets are text files in your own preset directory
-(`$XDG_CONFIG_HOME/SaeureKiste/presets`, or `%APPDATA%\SaeureKiste\presets` on
-Windows), and the thirty factory presets are compiled into the plugin.
+(`$XDG_CONFIG_HOME/SaeureKiste/presets`, `%APPDATA%\SaeureKiste\presets` on
+Windows, `~/Library/Application Support/SaeureKiste/presets` on macOS), and the thirty factory presets are compiled into the plugin.
 
 ![The preset bar: SCENE and PATCH, each with arrows that step through its presets, a name that opens the browser and its own SAVE; then ADVANCED, RESET and the FX page.](images/preset-bar.png)
 
@@ -963,7 +984,7 @@ browser has three buttons:
 | Button | |
 |---|---|
 | **EXPORT** | Writes the selected folder to `…/SaeureKiste/packs/<folder>.saeurekistepack` and says where it went. |
-| **EXPORT AS…** | The same, through the desktop's own file chooser, for handing the pack to somebody else. Only shown when there is a chooser to open — zenity or kdialog on Linux, the system one on Windows. |
+| **EXPORT AS…** | The same, through the desktop's own file chooser, for handing the pack to somebody else. Only shown when there is a chooser to open — zenity or kdialog on Linux, the system one on Windows and macOS. |
 | **IMPORT…** | Lists the packs in the packs folder, plus *Other file…* for one from anywhere else and *Pattern folder…* for patterns written by another instrument. |
 
 An import never overwrites anything: the pack becomes a new folder named after
