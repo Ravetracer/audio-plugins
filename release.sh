@@ -553,7 +553,7 @@ for plugin in "${plugins[@]}"; do
    fi
    own="$(plugin_license "$plugin")"
    cp "${own:-${here}/LICENSE}" "${d}/LICENSE"
-   # A licence whose LICENSE refers to a full text kept beside it (SidMidi's
+   # A licence whose LICENSE refers to a full text kept beside it (ReSIDent's
    # GPL) ships that text too: the binaries may not go out without it.
    [ -f "${here}/${plugin}/COPYING" ] && cp "${here}/${plugin}/COPYING" "${d}/COPYING"
    [ -f "${here}/${plugin}/README.md" ] && cp "${here}/${plugin}/README.md" "${d}/"

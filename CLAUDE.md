@@ -49,7 +49,7 @@ audio-plugins/
 ├── aurum/            Aurum — an algorithmic reverb, NOT built on shared/
 ├── substrike/        Substrike — a kick drum designer, NOT built on shared/
 ├── shapeau/          Shapeau — a multiband drawing rack, see *Shapeau* below
-└── sidmidi/          SidMidi — a C64 emulator for C64 MIDI programs, GPL, see *SidMidi* below
+└── resident/         ReSIDent — a C64 emulator for C64 MIDI programs, GPL, see *ReSIDent* below
 ```
 
 ## The plugins
@@ -61,7 +61,7 @@ audio-plugins/
 | 3 | **Aurum** | `aurum/` | 0.3.1 | Linux, Windows | CLAP, VST3 | a clean-room algorithmic reverb (FDN, allpass ring, plate) with a per-frequency decay contour; own DSP and GUI, see *Aurum* below |
 | 4 | **Substrike** | `substrike/` | 1.1.0 | Linux, Windows | CLAP, VST3 | a layered kick drum designer for every style; standalone like Aurum, see *Substrike* below |
 | 5 | **Shapeau** | `shapeau/` | 0.4.0 | Linux, Windows | CLAP, VST3 | a multiband drawing rack: a reorderable chain of shape-driven effects per band, beat-synced or triggered by MIDI or a sidechain hit, with the audio drawn behind the shape; see *Shapeau* below |
-| 6 | **SidMidi** | `sidmidi/` | 0.8.1 | Linux, Windows | CLAP, VST3 | a Commodore 64 running the original C64 MIDI programs, played from the DAW through an emulated MIDI cartridge, with up to eight SIDs on reSIDfp or the light SIDLite engine; GPL, standalone, see *SidMidi* below |
+| 6 | **ReSIDent** | `resident/` | 1.0.0 | Linux, Windows | CLAP, VST3 | a Commodore 64 running the original C64 MIDI programs, played from the DAW through an emulated MIDI cartridge, with up to eight SIDs on reSIDfp or the light SIDLite engine; GPL, standalone, see *ReSIDent* below |
 
 Naming follows the plugin, not a pattern: the CMake project, the installed
 artifact and the display name are CamelCase (`SaeureKiste`), the folder is
@@ -554,9 +554,9 @@ Rules specific to Shapeau:
   the self-test under wine; the win32 editor can be opened with Aurum's
   `clap_gui_host.exe`, which loads any CLAP plugin.
 
-## SidMidi
+## ReSIDent
 
-`sidmidi/` is a Commodore 64 emulator written for this repository, running the
+`resident/` is a Commodore 64 emulator written for this repository, running the
 original C64 MIDI programs (Cynthcart, Station64, SID-Wizard, SID Synth) as an
 instrument. It is the third plugin **not built on `shared/`** (a C64 screen
 and a keyboard grab do not fit `WindowSpec`); the window backends and widgets
@@ -565,13 +565,23 @@ are copied from Substrike. The *Rule for a shared change* does not cover it.
 plugin, the true 1541 + mouse/paddles + HerMIDI, polish), released at 0.4.0
 with its manual, screenshots and demos.
 
+It was called **SidMidi** up to 0.8.1 (folder `sidmidi/`, releases tagged
+`sidmidi-v*`) and became **ReSIDent** in 1.0.0 (tags `resident-v*`, tagline
+"Original C64 MIDI software, live in your DAW"). Kept on purpose, because
+hosts and saved projects depend on them: the plugin id
+`de.ravetracer.sidmidi` (the VST3 class id is derived from it), the loader
+extension id, and every state magic (`SIDMIDI1`, `SMSNAP01`, `SMDA`,
+`SLT1`). Never change those. The first `dataFolder()` call that finds no
+`ReSIDent` data folder copies the old `SidMidi` one into it and leaves the
+old one alone; `install.sh` tests it.
+
 What to know before working there:
 
 - **It is GPL-2.0-or-later, the rest of the repository MIT.** The SIDs are
   reSIDfp (libresidfp 1.2.3, vendored in `third_party/libresidfp`, its two
   generated headers written by hand, with our patches applied and kept in
-  `third_party/patches/`, listed in `third_party/README.md`). `sidmidi/LICENSE`
-  says so. Do not copy SidMidi code into an MIT plugin.
+  `third_party/patches/`, listed in `third_party/README.md`). `resident/LICENSE`
+  says so. Do not copy ReSIDent code into an MIT plugin.
 - **reSIDfp's 6581 filter range and caps are per chip** (patch 0002, 0.4.0),
   and `Params` have defaults: upstream they were uninitialised and a chip
   state restore applied them to the process-wide 6581 model, so opening a
@@ -594,7 +604,7 @@ What to know before working there:
   reSIDfp path must stay bit-identical: render before and after with `cmp`.
   A chip restarted on a running machine (engine switch, snapshot fallback)
   runs half a second unheard first, or its DC step thumps
-  (`SidBank::settle`). `sidmidi-enginetest` tests both engines chip by chip,
+  (`SidBank::settle`). `resident-enginetest` tests both engines chip by chip,
   sample count over ten minutes and pitch included: reSIDfp's resamplers
   drifted 0.02-0.05 % until patch 0004 (0.8.1), which keeps their phase to
   25-29 fractional bits instead of 10.
@@ -612,13 +622,13 @@ What to know before working there:
   a map (`CLAP_PARAM_RESCAN_INFO`; VST3 can rename but never change ranges,
   so ranges never change). Never renumber the slots. The CC numbers in the
   factory maps were read from the programs themselves, not guessed.
-- **`sidmidi/_dev_/` is gitignored** (`*/_dev_/` at the root): the C64
+- **`resident/_dev_/` is gitignored** (`*/_dev_/` at the root): the C64
   programs, their manuals and the user's Commodore ROMs (`_dev_/roms/C64`,
   `_dev_/roms/DRIVES`, VICE's files) -- **for development and the user's
   private use only**. Never commit, never ship, **never compile the ROMs in**.
   The plugin reads ROMs only from its ROM folder
-  (`~/.local/share/SidMidi/ROMs`, `%APPDATA%\SidMidi\ROMs`, recognised by
-  content); tests point `SIDMIDI_ROM_DIR` at `_dev_/roms`.
+  (`~/.local/share/ReSIDent/ROMs`, `%APPDATA%\ReSIDent\ROMs`, recognised by
+  content); tests point `RESIDENT_ROM_DIR` at `_dev_/roms`.
 - **HerMIDI** runs Hermit's real PIC12F509 firmware
   (`third_party/hermidi`, WTF-licensed via SID-Wizard) on `emu/Pic12F509`.
   The 1541 (`emu/Drive1541`, `Via6522`, `Gcr`) and HerMIDI share one serial
@@ -633,13 +643,13 @@ What to know before working there:
   clocking, a FIFO per chip); `VirtualDrive` + `D64` (KERNAL serial traps at
   the 901227-03 entry points, checked by ROM signature).
   `src/engine/Engine` runs the machine per host block and is what the plugin
-  and `sidmidi-run` share.
+  and `resident-run` share.
 - **Media** (0.5.0): the plugin keeps the disk (`diskFileName_/Data_/Start_`)
   apart from the program or cartridge (`lastFileName_/Data_`); a disk can be
   only inserted, and a cartridge and a disk can be in at once. Anything that
   restarts media goes through `restartMedia()`. `--media` mode of the
   self-test covers it. The keyboard is **symbolic** by default (the layout's
-  keysym arrives with every raw press) or positional; `sidmidi-keytest`.
+  keysym arrives with every raw press) or positional; `resident-keytest`.
 - **Freezer cartridges and fast loaders** (0.5.0): Action Replay, Final
   Cartridge III and I in `emu/Cartridge.*`. A C64 write to $DD00 reaches the
   drive one cycle late (`C64::endCycle`, as VICE's `store_ciapa` clk+1) --
@@ -649,26 +659,26 @@ What to know before working there:
   (`C64::freezerWriting`): only its own code reaches it, so a MIDI program
   probing every interface's address cannot freeze the machine. VICE's sources are the reference for hardware
   behaviour (read them, write our own code).
-- **Release material** comes from SidMidi's own scripts (`tools/`):
+- **Release material** comes from ReSIDent's own scripts (`tools/`):
   `make-manual.sh` (own docgen; the CC map library stands in for a preset
-  library), `make-screenshots.sh` (offscreen through `sidmidi-gui-snapshot`;
+  library), `make-screenshots.sh` (offscreen through `resident-gui-snapshot`;
   the ROM page is shot with HOME=/home/user so no developer path shows),
   `make-demos.sh` (Cynthcart, SID Synth, Station64 from `_dev_`).
 - **Threads:** structural changes under `machineLock_`, which the audio
   thread takes with a 1.5 ms spin; keys, joystick and GUI parameter moves
   through lock-free rings. The state is a full machine snapshot plus the
-  engine's audio state; `sidmidi-selftest` proves a round trip continues
+  engine's audio state; `resident-selftest` proves a round trip continues
   within -60 dB (reSIDfp restores to within 1-2 LSB).
 - **CPU:** dormant SIDs are skipped, the VIC skips pixels with no window
   (`Engine::videoWanted`), warp skips SID clocking. Realtime warp is budgeted
-  by the clock (half a block); offline (`CLAP_EXT_RENDER`, `sidmidi-run`) is
+  by the clock (half a block); offline (`CLAP_EXT_RENDER`, `resident-run`) is
   a fixed 24x, so renders and tests repeat exactly.
 - **Tests:** `./install.sh` runs Klaus Dormann's CPU test
   (`tools/fetch-cpu-tests.sh` fetches it into `build/`, GPL-3, never commit)
   and the plugin self-test (also once with `true1541`: a `.d64` through the
-  emulated drive and a state round trip). `sidmidi-run` boots, autostarts, plays a MIDI
+  emulated drive and a state round trip). `resident-run` boots, autostarts, plays a MIDI
   script, writes WAV and PNG (`--sidregs` dumps SID 1). GUI shots: a private
-  Xvfb in the devbox with `sidmidi-gui-host` (`SIDMIDI_LOAD=<file>` loads a
+  Xvfb in the devbox with `resident-gui-host` (`RESIDENT_LOAD=<file>` loads a
   program through the plugin's `de.ravetracer.sidmidi.loader/5` extension, which also inserts a disk and
   starts from one for the tests).
 
@@ -858,7 +868,7 @@ public copy: the brand-name rules for the website and the manuals apply.
 
 A plugin whose `LICENSE` refers to a full licence text keeps that text as
 `<plugin>/COPYING`; `release.sh` puts it into the plugin's archive (and into
-the collection as `COPYING-<Name>`). SidMidi's GPL depends on it.
+the collection as `COPYING-<Name>`). ReSIDent's GPL depends on it.
 
 **This script came from Verdalis unchanged**, and as of 0.2.0 this repository
 delivers everything it assumes: it builds Windows and VST3 for every plugin, and

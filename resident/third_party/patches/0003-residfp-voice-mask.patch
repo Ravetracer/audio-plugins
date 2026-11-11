@@ -1,0 +1,147 @@
+diff --git a/resident/third_party/libresidfp/src/Filter.h b/resident/third_party/libresidfp/src/Filter.h
+index 4fb9190..43af3b2 100644
+--- a/resident/third_party/libresidfp/src/Filter.h
++++ b/resident/third_party/libresidfp/src/Filter.h
+@@ -89,6 +89,18 @@ private:
+     /// Switch voice 3 off.
+     bool voice3off = false;
+ 
++    /// Voices heard (ReSIDent): a chip that renders one voice of another for
++    /// a separate output silences the other two and EXT IN as a closed
++    /// envelope would -- they stay connected, so the summers and the mixer
++    /// see as many inputs as on the real chip, carrying no signal. Not part
++    /// of the chip's state; all on by default.
++    //@{
++    bool on1 = true;
++    bool on2 = true;
++    bool on3 = true;
++    bool onE = true;
++    //@}
++
+     /// Highpass, bandpass, and lowpass filter modes.
+     //@{
+     bool hp = false;
+@@ -206,6 +218,17 @@ public:
+      */
+     void input(int16_t input) { extin = input/65535.f; }
+ 
++    /**
++     * Voices heard (ReSIDent): bit 0-2 voice 1-3, bit 3 EXT IN.
++     */
++    void setVoiceMask(uint8_t mask)
++    {
++        on1 = mask & 1;
++        on2 = mask & 2;
++        on3 = mask & 4;
++        onE = mask & 8;
++    }
++
+     void restart() { restartIntegrators(); Vhp = 0; Vlp = 0; Vbp = 0; }
+ };
+ 
+@@ -220,21 +243,22 @@ RESIDFP_INLINE
+ uint16_t Filter::clock(Voice& voice1, Voice& voice2, Voice& voice3)
+ {
+     // Waveform outputs
+-    const float wav1 = voice1.output();
+-    const float wav2 = voice2.output();
+-    const float wav3 = voice3.output();
++    const float wav1 = on1 ? voice1.output() : 0.f;
++    const float wav2 = on2 ? voice2.output() : 0.f;
++    const float wav3 = on3 ? voice3.output() : 0.f;
+ 
+     // Envelope outputs
+-    const uint8_t env1 = voice1.envelope()->output();
+-    const uint8_t env2 = voice2.envelope()->output();
+-    const uint8_t env3 = voice3.envelope()->output();
++    const uint8_t env1 = on1 ? voice1.envelope()->output() : 0;
++    const uint8_t env2 = on2 ? voice2.envelope()->output() : 0;
++    const uint8_t env3 = on3 ? voice3.envelope()->output() : 0;
++    const float ext = onE ? extin : 0.f;
+ 
+     // Voltage summer for filter input
+     int32_t Vsum = 0;
+     Vsum += filt1 ? getNormalizedVoice(wav1, env1) : 0;
+     Vsum += filt2 ? getNormalizedVoice(wav2, env2) : 0;
+     Vsum += filt3 ? getNormalizedVoice(wav3, env3) : 0;
+-    Vsum += filtE ? getNormalizedVoice(extin, 0) : 0;
++    Vsum += filtE ? getNormalizedVoice(ext, 0) : 0;
+     Vsum += Vlp;
+     Vsum += currentResonance[Vbp];
+ 
+@@ -254,7 +278,7 @@ uint16_t Filter::clock(Voice& voice1, Voice& voice2, Voice& voice3)
+     Vmix += filt2 ? 0 : getNormalizedMixerVoice(wav2, env2);
+     // Voice 3 is silenced by voice3off if it is not routed through the filter
+     Vmix += (filt3 || voice3off) ? 0 : getNormalizedMixerVoice(wav3, env3);
+-    Vmix += filtE ? 0 : getNormalizedMixerVoice(extin, 0);
++    Vmix += filtE ? 0 : getNormalizedMixerVoice(ext, 0);
+     Vmix += Vfilt;
+ 
+     return currentVolume[currentMixer[Vmix]];
+diff --git a/resident/third_party/libresidfp/src/SID.cpp b/resident/third_party/libresidfp/src/SID.cpp
+index f17f861..c0a06f1 100644
+--- a/resident/third_party/libresidfp/src/SID.cpp
++++ b/resident/third_party/libresidfp/src/SID.cpp
+@@ -196,6 +196,12 @@ void SID::enableFilter(bool enable)
+     filter8580->enable(enable);
+ }
+ 
++void SID::setVoiceMask(uint8_t mask)
++{
++    filter6581->setVoiceMask(mask);
++    filter8580->setVoiceMask(mask);
++}
++
+ void SID::enableOld6581caps(bool enable)
+ {
+     p->old6581caps = enable;
+diff --git a/resident/third_party/libresidfp/src/SID.h b/resident/third_party/libresidfp/src/SID.h
+index c2cddea..43fae2e 100644
+--- a/resident/third_party/libresidfp/src/SID.h
++++ b/resident/third_party/libresidfp/src/SID.h
+@@ -354,6 +354,11 @@ public:
+      */
+     void enableFilter(bool enable);
+ 
++    /**
++     * Voices heard (ReSIDent): bit 0-2 voice 1-3, bit 3 EXT IN.
++     */
++    void setVoiceMask(uint8_t mask);
++
+     /**
+      * Enable/disable old caps (2200pF) for 6581 model.
+      */
+diff --git a/resident/third_party/libresidfp/src/residfp/residfp.cpp b/resident/third_party/libresidfp/src/residfp/residfp.cpp
+index e6e7733..9d744ab 100644
+--- a/resident/third_party/libresidfp/src/residfp/residfp.cpp
++++ b/resident/third_party/libresidfp/src/residfp/residfp.cpp
+@@ -150,6 +150,11 @@ void residfp::enableFilter(bool enable)
+     sid.enableFilter(enable);
+ }
+ 
++void residfp::setVoiceMask(unsigned char mask)
++{
++    sid.setVoiceMask(mask);
++}
++
+ void residfp::enableOld6581caps(bool enable)
+ {
+     sid.enableOld6581caps(enable);
+diff --git a/resident/third_party/libresidfp/src/residfp/residfp.h b/resident/third_party/libresidfp/src/residfp/residfp.h
+index 2fcc999..c55f957 100644
+--- a/resident/third_party/libresidfp/src/residfp/residfp.h
++++ b/resident/third_party/libresidfp/src/residfp/residfp.h
+@@ -233,6 +233,13 @@ public:
+      */
+     void enableFilter(bool enable);
+ 
++    /**
++     * Voices heard (ReSIDent): bit 0-2 voice 1-3, bit 3 EXT IN. A chip that
++     * renders one voice for a separate output hears only that one. Not part
++     * of the saved state.
++     */
++    void setVoiceMask(unsigned char mask);
++
+     /**
+      * Enable/disable old caps for 6581 model.
+      * When enabled the filter cutoff is lower.

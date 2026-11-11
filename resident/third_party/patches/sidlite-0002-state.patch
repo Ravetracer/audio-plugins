@@ -1,0 +1,195 @@
+diff -ruN a/src/sidlite/ADSR.h b/src/sidlite/ADSR.h
+--- a/src/sidlite/ADSR.h	2026-11-10 20:10:05.474987509 +0100
++++ b/src/sidlite/ADSR.h	2026-11-10 20:10:05.475987512 +0100
+@@ -35,6 +35,11 @@
+ 
+     inline unsigned char counter(int channel) const { return EnvelopeCounter[channel]; }
+ 
++    template<class V> void state(V& v)
++    {
++        v(RateCounter); v(ADSRstate); v(EnvelopeCounter); v(ExponentCounter);
++    }
++
+ private:
+     unsigned char *m_regs;
+ 
+diff -ruN a/src/sidlite/Filter.h b/src/sidlite/Filter.h
+--- a/src/sidlite/Filter.h	2026-11-10 20:10:05.474987509 +0100
++++ b/src/sidlite/Filter.h	2026-11-10 20:10:05.475987512 +0100
+@@ -39,6 +39,11 @@
+ 
+     void rebuildCutoffTables(unsigned short samplerate);
+ 
++    template<class V> void state(V& v)
++    {
++        v(PrevVolume); v(PrevLowPass); v(PrevBandPass); v(Level); v(VUmeterUpdateCounter);
++    }
++
+ private:
+     unsigned char *m_regs;
+     settings      *m_settings;
+diff -ruN a/src/sidlite/SID.cpp b/src/sidlite/SID.cpp
+--- a/src/sidlite/SID.cpp	2026-11-10 20:10:05.474987509 +0100
++++ b/src/sidlite/SID.cpp	2026-11-10 20:10:05.475987512 +0100
+@@ -26,6 +26,7 @@
+ #include "sl_constants.h"
+ #include "filt_tables.h"
+ #include "cw_tables.h"
++#include "sl_state.h"
+ 
+ #include <algorithm>
+ #include <iterator>
+@@ -151,6 +152,40 @@
+     s.sid8580 = model == model_t::MOS8580;
+ }
+ 
++constexpr unsigned char STATE_VERSION = 1;
++
++template<class V> void SID::state(V& v)
++{
++    v(regs); v(SampleCycleCnt); v(RatioRemainder);
++    s.state(v);
++    adsr.state(v);
++    wavgen.state(v);
++    filter.state(v);
++}
++
++int SID::stateSize() const
++{
++    StateSizer sz;
++    const_cast<SID*>(this)->state(sz);
++    return 1 + sz.size;
++}
++
++void SID::saveState(unsigned char* out) const
++{
++    out[0] = STATE_VERSION;
++    StateWriter w{out + 1};
++    const_cast<SID*>(this)->state(w);
++}
++
++bool SID::restoreState(const unsigned char* in, int size)
++{
++    if (size != stateSize() || in[0] != STATE_VERSION)
++        return false;
++    StateReader r{in + 1};
++    state(r);
++    return true;
++}
++
+ void SID::setRealSIDmode(bool mode)
+ {
+     s.RealSIDmode = mode;
+diff -ruN a/src/sidlite/SID.h b/src/sidlite/SID.h
+--- a/src/sidlite/SID.h	2026-11-10 20:10:05.474987509 +0100
++++ b/src/sidlite/SID.h	2026-11-10 20:10:05.475987512 +0100
+@@ -56,6 +56,14 @@
+ 
+     int getLevel() const { return filter.getLevel(); }
+ 
++    // State: everything that changes while the chip runs (registers,
++    // envelopes, oscillators, filter, the sample clock), not the
++    // configuration (model, sampling parameters), which the caller sets
++    // first. Only readable by the same build.
++    int stateSize() const;
++    void saveState(unsigned char* out) const;
++    bool restoreState(const unsigned char* in, int size);
++
+ private:
+     unsigned char regs[0x20] = {0};
+ 
+@@ -77,6 +85,7 @@
+ private:
+     inline bool generateSample(unsigned int &cycles, short &output);
+     inline void nextSampleRatio();
++    template<class V> void state(V& v);
+ };
+ 
+ }
+diff -ruN a/src/sidlite/sl_settings.h b/src/sidlite/sl_settings.h
+--- a/src/sidlite/sl_settings.h	2026-11-10 20:10:05.474987509 +0100
++++ b/src/sidlite/sl_settings.h	2026-11-10 20:10:05.475987512 +0100
+@@ -37,6 +37,8 @@
+     inline unsigned int getSampleClockRatio() const { return SampleClockRatio; }
+     inline bool getRealSIDmode() const { return RealSIDmode; }
+ 
++    template<class V> void state(V& v) { v(SampleClockRatio); }
++
+ private:
+     unsigned int   SampleClockRatio = 0; // ratio of CPU-clock and samplerate, this sample's
+     bool           sid8580     = true;  // SID model 8580 or 6581
+diff -ruN a/src/sidlite/sl_state.h b/src/sidlite/sl_state.h
+--- a/src/sidlite/sl_state.h	1970-01-01 01:00:00.000000000 +0100
++++ b/src/sidlite/sl_state.h	2026-11-10 20:10:05.475987512 +0100
+@@ -0,0 +1,55 @@
++/*
++ * This file is part of ReSIDent's copy of SIDLite (libsidplayfp).
++ *
++ *  This program is free software; you can redistribute it and/or modify
++ *  it under the terms of the GNU General Public License as published by
++ *  the Free Software Foundation; either version 2 of the License, or
++ *  (at your option) any later version.
++ */
++
++// State visitors: a class lists the fields that change while it runs once,
++// in state(V&), and these size, write and read them. The bytes are the
++// fields' own representation, so a state is only readable by the same build.
++
++#ifndef SIDLITE_STATE_H
++#define SIDLITE_STATE_H
++
++#include <cstring>
++#include <type_traits>
++
++namespace SIDLite
++{
++
++struct StateSizer
++{
++    int size = 0;
++    template<class T> void operator()(const T&)
++    {
++        static_assert(std::is_trivially_copyable<T>::value, "state fields must be plain data");
++        size += static_cast<int>(sizeof(T));
++    }
++};
++
++struct StateWriter
++{
++    unsigned char* p;
++    template<class T> void operator()(const T& t)
++    {
++        std::memcpy(p, &t, sizeof(T));
++        p += sizeof(T);
++    }
++};
++
++struct StateReader
++{
++    const unsigned char* p;
++    template<class T> void operator()(T& t)
++    {
++        std::memcpy(&t, p, sizeof(T));
++        p += sizeof(T);
++    }
++};
++
++}
++
++#endif // SIDLITE_STATE_H
+diff -ruN a/src/sidlite/WavGen.h b/src/sidlite/WavGen.h
+--- a/src/sidlite/WavGen.h	2026-11-10 20:10:05.475987512 +0100
++++ b/src/sidlite/WavGen.h	2026-11-10 20:10:05.475987512 +0100
+@@ -43,6 +43,12 @@
+     inline unsigned char getOsc3() const { return oscReg; }
+     inline unsigned char getEnv3() const { return envReg; }
+ 
++    template<class V> void state(V& v)
++    {
++        v(PhaseAccu); v(PrevPhaseAccu); v(NoiseLFSR); v(PrevWavGenOut); v(PrevWavData);
++        v(PrevSounDemonDigiWF); v(RingSourceMSB); v(SyncSourceMSBrise); v(oscReg); v(envReg);
++    }
++
+ private:
+     unsigned char *m_regs;
+     settings      *m_settings;

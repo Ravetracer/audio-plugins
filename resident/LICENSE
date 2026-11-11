@@ -1,0 +1,22 @@
+ReSIDent -- a Commodore 64 running its MIDI programs inside a plugin
+Copyright (c) 2026 Christian Nielebock
+
+This folder (resident/) is licensed under the GNU General Public License,
+version 2 or (at your option) any later version, because it links reSIDfp
+(third_party/libresidfp, GPL-2.0-or-later) and SIDLite (third_party/sidlite,
+GPL-2.0-or-later). The full licence text is in
+COPYING beside this file (the same text as third_party/libresidfp/COPYING),
+and it ships with every release archive of ReSIDent. The source code of a
+release is in https://github.com/Ravetracer/audio-plugins under that
+release's tag.
+
+This program is free software; you can redistribute it and/or modify it under
+the terms of the GNU General Public License as published by the Free Software
+Foundation; either version 2 of the License, or (at your option) any later
+version.
+
+This program is distributed in the hope that it will be useful, but WITHOUT
+ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS
+FOR A PARTICULAR PURPOSE. See the GNU General Public License for more details.
+
+The rest of the audio-plugins repository remains under its MIT licence.
