@@ -1,0 +1,32 @@
+diff --git a/src/wrapasauv2.cpp b/src/wrapasauv2.cpp
+index ca783d1..c0646f4 100644
+--- a/src/wrapasauv2.cpp
++++ b/src/wrapasauv2.cpp
+@@ -1574,19 +1574,23 @@ UInt32 WrapAsAUV2::SupportedNumChannels(const AUChannelInfo **outInfo)
+   {
+     std::set<int> inSets, outSets;
+ 
++    // AUChannelInfo describes the main busses (element 0) only. With a main
++    // port, the other ports' channel counts must not be listed: a plugin with
++    // a stereo main output and mono auxiliary outputs would advertise a mono
++    // main output it cannot be set to, and fail auval's format tests.
+     bool hasInMain{false};
++    for (const auto &p : _inputPortCache) hasInMain |= p.isMain;
+     for (const auto &p : _inputPortCache)
+     {
+-      inSets.insert(p.channelCount);
+-      hasInMain |= p.isMain;
++      if (!hasInMain || p.isMain) inSets.insert(p.channelCount);
+     }
+     if (!hasInMain) inSets.insert(0);
+ 
+     bool hasOutMain{false};
++    for (const auto &p : _outputPortCache) hasOutMain |= p.isMain;
+     for (const auto &p : _outputPortCache)
+     {
+-      outSets.insert(p.channelCount);
+-      hasOutMain |= p.isMain;
++      if (!hasOutMain || p.isMain) outSets.insert(p.channelCount);
+     }
+     if (!hasOutMain) outSets.insert(0);
+ 

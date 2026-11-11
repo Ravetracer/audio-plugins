@@ -27,3 +27,17 @@ six references `_iid`.
 It is upstream's bug rather than ours, and has not been reported yet. The patch
 makes the wrapper require VST3 3.8+; it will not build against 3.7 with it
 applied, which is fine because 3.7 is not MIT.
+
+## `clap-wrapper-auv2-main-bus-channels.patch`
+
+Against `free-audio/clap-wrapper` v0.16.0 (still needed on main as of
+v0.17.0), for the macOS Audio Unit. Without configurable audio ports, the
+wrapper's `SupportedNumChannels` listed the channel counts of *every* audio
+port as possible layouts of the main bus. A plugin with a stereo main output
+and mono auxiliary outputs -- ReSIDent, with one output per SID -- then
+advertised a mono main output it cannot be set to, and `auval` failed its
+format tests ("Cannot Set Output Num Channels:1 when unit says it can"). The
+patch lists only the main port's count when there is a main port.
+
+Upstream's bug, not reported yet. Only the AUv2 build compiles the file, so it
+changes nothing on Linux or Windows.

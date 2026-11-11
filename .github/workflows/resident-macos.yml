@@ -62,6 +62,7 @@ jobs:
           git -C vst3sdk submodule update --init base pluginterfaces public.sdk
           git clone --depth 1 --branch AudioUnitSDK-1.1.0 https://github.com/apple/AudioUnitSDK.git
           git -C clap-wrapper apply ../../shared/patches/clap-wrapper-vst3-sdk-3.8.patch
+          git -C clap-wrapper apply ../../shared/patches/clap-wrapper-auv2-main-bus-channels.patch
 
       # Restored and saved in two steps, so a Cairo that was built is kept
       # even when a later step fails.
