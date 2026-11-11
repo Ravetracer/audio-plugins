@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.21)
-project(SidMidi VERSION 0.8.0 LANGUAGES C CXX)
+project(SidMidi VERSION 0.8.1 LANGUAGES C CXX)
 
 # SidMidi builds as a CLAP and, through the clap-wrapper, as a VST3, for Linux
 # and Windows (cross-compiled with mingw-w64). Like Aurum and Substrike it does

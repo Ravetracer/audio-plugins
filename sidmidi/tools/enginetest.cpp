@@ -3,15 +3,13 @@
 //   sidmidi-enginetest
 //
 // 1. Sample count: ten minutes of CPU cycles make the samples the host rate
-//    asks for, within one sample of SIDLite's own rate, PAL and NTSC, from
-//    44.1 to 192 kHz. A count that runs ahead fills SidBank's FIFO until the
-//    engine drops samples (SIDLite's own clock ratio did, by 0.13 %).
+//    asks for, within two (Light: one of its own internal rate), PAL and
+//    NTSC, from 44.1 to 192 kHz. A count that runs ahead fills SidBank's
+//    FIFO until the engine drops samples, one that falls behind empties it:
+//    SIDLite's own clock ratio ran 0.13 % ahead, reSIDfp's resamplers
+//    0.02-0.05 % (both patched, sidlite 0001 and residfp 0004).
 // 2. Pitch: a triangle at A4 measures within 0.5 cent of the frequency its
 //    register asks for.
-//
-// Both are measured for reSIDfp too and printed as "info": its resamplers
-// keep the clock ratio to 1/1024 of a cycle, so it runs 0.02 % (48 kHz) to
-// 0.05 % (96 kHz) ahead and a little flat. Known; not this test's to fail.
 // 3. State: a Light chip saved and restored into a new one plays on bit for
 //    bit, at 48 and at 96 kHz (where it is upsampled); a state of the other
 //    engine does not restore.
@@ -143,8 +141,6 @@ int main()
     for (SidEngine e : {SidEngine::ReSidFp, SidEngine::Lite})
         for (double clock : {kPal, kNtsc})
             for (double rate : {44100.0, 48000.0, 88200.0, 96000.0, 192000.0}) {
-                if (e == SidEngine::ReSidFp && rate > 96000.0)
-                    continue; // reSIDfp's resampler takes what the plugin uses; one case is enough
                 auto c = makeChip(e, SidVariant::MOS8580R5, clock, rate);
                 const uint64_t cycles = static_cast<uint64_t>(600.0 * clock);
                 const double want = static_cast<double>(cycles) * rate / clock;
@@ -152,11 +148,8 @@ int main()
                 char what[160];
                 std::snprintf(what, sizeof(what), "%s %s %6.0f Hz: 10 min make %.0f samples, %+.0f off", name(e),
                               clock == kPal ? "PAL " : "NTSC", rate, got, got - want);
-                const double up = std::ceil(rate / 48000.0 - 1e-9); // Light's upsampling factor
-                if (e == SidEngine::Lite)
-                    check(std::fabs(got - want) <= 1.0 + up, what);
-                else
-                    std::printf("info  %s\n", what);
+                const double up = e == SidEngine::Lite ? std::ceil(rate / 48000.0 - 1e-9) : 1.0; // Light's upsampling
+                check(std::fabs(got - want) <= 1.0 + up, what);
             }
 
     // 2. Pitch: A4, register 7493 on PAL (440.03 Hz).
@@ -174,10 +167,7 @@ int main()
                 char what[160];
                 std::snprintf(what, sizeof(what), "%s %6.0f Hz: A4 at %.4f Hz (wanted %.4f), %+.3f cent", name(e), rate,
                               hz, want, cents(hz, want));
-                if (e == SidEngine::Lite)
-                    check(std::fabs(cents(hz, want)) < 0.5, what);
-                else
-                    std::printf("info  %s\n", what);
+                check(std::fabs(cents(hz, want)) < 0.5, what);
             }
     }
 

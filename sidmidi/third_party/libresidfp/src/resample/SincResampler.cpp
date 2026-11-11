@@ -188,7 +188,8 @@ SincResampler::SincResampler(
         double clockFrequency,
         double samplingFrequency,
         double highestAccurateFrequency) :
-    cyclesPerSample(static_cast<int>(clockFrequency / samplingFrequency * 1024.))
+    phaseBits(resamplerPhaseBits(clockFrequency / samplingFrequency)),
+    cyclesPerSample(static_cast<int>(clockFrequency / samplingFrequency * (1 << phaseBits) + 0.5))
 {
 #ifdef __cpp_lib_math_constants
     constexpr double PI = std::numbers::pi;
@@ -309,14 +310,14 @@ bool SincResampler::input(int32_t input)
     sample[sampleIndex] = sample[sampleIndex + RINGSIZE] = input;
     sampleIndex = (sampleIndex + 1) & (RINGSIZE - 1);
 
-    if (unlikely(sampleOffset < 1024))
+    if (unlikely(sampleOffset < (1 << phaseBits)))
     {
-        outputValue = fir(sampleOffset);
+        outputValue = fir(sampleOffset >> (phaseBits - 10));
         ready = true;
         sampleOffset += cyclesPerSample;
     }
 
-    sampleOffset -= 1024;
+    sampleOffset -= 1 << phaseBits;
 
     return ready;
 }

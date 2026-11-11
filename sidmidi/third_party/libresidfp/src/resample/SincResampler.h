@@ -72,6 +72,11 @@ private:
     /// Filter length
     int firN;
 
+    /// Fractional bits of the phase (resamplerPhaseBits); fir() takes the
+    /// top 10 of them, as before
+    const int phaseBits;
+
+    /// Cycles per output sample, in 1/2^phaseBits
     const int cyclesPerSample;
 
     int sampleOffset = 0;

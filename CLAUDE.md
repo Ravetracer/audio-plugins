@@ -61,7 +61,7 @@ audio-plugins/
 | 3 | **Aurum** | `aurum/` | 0.3.1 | Linux, Windows | CLAP, VST3 | a clean-room algorithmic reverb (FDN, allpass ring, plate) with a per-frequency decay contour; own DSP and GUI, see *Aurum* below |
 | 4 | **Substrike** | `substrike/` | 1.1.0 | Linux, Windows | CLAP, VST3 | a layered kick drum designer for every style; standalone like Aurum, see *Substrike* below |
 | 5 | **Shapeau** | `shapeau/` | 0.4.0 | Linux, Windows | CLAP, VST3 | a multiband drawing rack: a reorderable chain of shape-driven effects per band, beat-synced or triggered by MIDI or a sidechain hit, with the audio drawn behind the shape; see *Shapeau* below |
-| 6 | **SidMidi** | `sidmidi/` | 0.8.0 | Linux, Windows | CLAP, VST3 | a Commodore 64 running the original C64 MIDI programs, played from the DAW through an emulated MIDI cartridge, with up to eight SIDs on reSIDfp or the light SIDLite engine; GPL, standalone, see *SidMidi* below |
+| 6 | **SidMidi** | `sidmidi/` | 0.8.1 | Linux, Windows | CLAP, VST3 | a Commodore 64 running the original C64 MIDI programs, played from the DAW through an emulated MIDI cartridge, with up to eight SIDs on reSIDfp or the light SIDLite engine; GPL, standalone, see *SidMidi* below |
 
 Naming follows the plugin, not a pattern: the CMake project, the installed
 artifact and the display name are CamelCase (`SaeureKiste`), the folder is
@@ -594,9 +594,10 @@ What to know before working there:
   reSIDfp path must stay bit-identical: render before and after with `cmp`.
   A chip restarted on a running machine (engine switch, snapshot fallback)
   runs half a second unheard first, or its DC step thumps
-  (`SidBank::settle`). `sidmidi-enginetest` tests both engines chip by chip;
-  it prints reSIDfp's own resampler drift (0.02-0.05 %, ratio kept to
-  1/1024) as "info" -- known, unpatched.
+  (`SidBank::settle`). `sidmidi-enginetest` tests both engines chip by chip,
+  sample count over ten minutes and pitch included: reSIDfp's resamplers
+  drifted 0.02-0.05 % until patch 0004 (0.8.1), which keeps their phase to
+  25-29 fractional bits instead of 10.
 - **Voice outputs** (0.7.0): ports are Main, SID 1-8, then SID 1 Voice 1 ...
   SID 8 Voice 3 (ids 9-32) -- new ports only ever go at the end. With the
   setting on, `SidBank` gives each chip three tap instances that get every

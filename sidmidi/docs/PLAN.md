@@ -552,16 +552,32 @@ Not done, and why:
   for the user to decide.
 - A baseline `x86-64` build: release binaries need AVX2 (both engines).
 
-## Next session
+## Status (0.8.1, 2026-11-11)
+
+The user tested Light in their DAW: an 8-SID demo (The Tuneful Eight) went
+from about 50 % of a core on Accurate to about 11 % on Light. 0.8.0 was
+released (`sidmidi-v0.8.0`, collection build 0.29.0).
+
+reSIDfp's resampler drift, fixed as decided (libresidfp patch 0004,
+`third_party/README.md`): `SincResampler` and `ZeroOrderResampler` kept the
+ratio and the phase to 1/1024 of a cycle, truncated -- 0.02 % (48 kHz) to
+0.05 % (96 kHz) too many samples, the engine dropping about five every half
+second at 48 kHz, and pitch 0.4-0.8 cent flat. A first try with a fixed
+2^-20 rounded still left up to 11 samples in ten minutes either way (a
+shortfall would empty the FIFO slowly); the phase now has as many fractional
+bits as an `int` holds for the ratio (25-29). Ten minutes are within one
+sample at 44.1-192 kHz, PAL and NTSC; A4 within 0.005 cent.
+`sidmidi-enginetest` now checks reSIDfp too (it printed "info" before);
+with the old resampler put back, eleven checks fail. Every reSIDfp render
+changes by this (timing), so 0.8.0's bit-identity reference no longer
+applies.
+
 
 Where 0.8.0 was left (2026-11-10):
 - **The user listens** to the Light engine against reSIDfp on the other
   system: `dist/demos/SidMidi-Light/` against `dist/demos/SidMidi/`, and
   `dist/listen-080/`.
-- **Decide on reSIDfp's resampler drift** (see the 0.8.0 status): a patch
-  0004 to libresidfp that keeps more fractional bits in `SincResampler` and
-  `ZeroOrderResampler` would end the dropped samples and the flat pitch,
-  and change every reSIDfp render slightly.
+- ~~Decide on reSIDfp's resampler drift~~: fixed in 0.8.1.
 
 Where 0.5.0 was left (2026-11-10):
 - **Feedback from DAW use** goes first. Untested in a host: the symbolic

@@ -30,6 +30,20 @@ namespace reSIDfp
 {
 
 /**
+ * Fractional bits of a resampler's phase for a ratio of input to output
+ * samples: as many as an int holds, so the ratio is kept to about 2^-30 of
+ * itself. Upstream kept it to 1/1024 of a sample, truncated, and made
+ * 0.02-0.05 % too many samples (SidMidi patch 0004).
+ */
+inline int resamplerPhaseBits(double ratio)
+{
+    int bits = 10;
+    while (bits < 29 && (ratio + 1.0) * static_cast<double>(1 << (bits + 1)) < 1073741824.0)
+        ++bits;
+    return bits;
+}
+
+/**
  * Abstraction of a resampling process. Given enough input, produces output.
  * Constructors take additional arguments that configure these objects.
  */

@@ -42,7 +42,10 @@ private:
     /// Last sample
     int32_t cachedSample = 0;
 
-    /// Number of cycles per sample
+    /// Fractional bits of the phase (resamplerPhaseBits)
+    const int phaseBits;
+
+    /// Number of cycles per sample, in 1/2^phaseBits
     const int cyclesPerSample;
 
     int sampleOffset = 0;
@@ -52,21 +55,22 @@ private:
 
 public:
     ZeroOrderResampler(double clockFrequency, double samplingFrequency) :
-        cyclesPerSample(static_cast<int>(clockFrequency / samplingFrequency * 1024.))
+        phaseBits(resamplerPhaseBits(clockFrequency / samplingFrequency)),
+        cyclesPerSample(static_cast<int>(clockFrequency / samplingFrequency * (1 << phaseBits) + 0.5))
     {}
 
     bool input(int sample) override
     {
         bool ready = false;
 
-        if (unlikely(sampleOffset < 1024))
+        if (unlikely(sampleOffset < (1 << phaseBits)))
         {
-            outputValue = cachedSample + (sampleOffset * (sample - cachedSample) >> 10);
+            outputValue = cachedSample + ((sampleOffset >> (phaseBits - 10)) * (sample - cachedSample) >> 10);
             ready = true;
             sampleOffset += cyclesPerSample;
         }
 
-        sampleOffset -= 1024;
+        sampleOffset -= 1 << phaseBits;
 
         cachedSample = sample;
 

@@ -43,6 +43,19 @@ means unpacking the new release and applying them again.
   DC. The mask is not part of the saved state; all on is the unpatched
   sound, bit for bit. Unlike 0001 and 0002 this one is the diff against the
   tree with them applied (all three touch `Filter.h`).
+- `patches/0004-residfp-resampler-ratio.patch` -- exact sample count and
+  pitch. `SincResampler` (both passes of the default resampler) and
+  `ZeroOrderResampler` (Fast) kept the clock-to-sample ratio and the phase in
+  1/1024 of a cycle, truncated: reSIDfp made 0.02 % (48 kHz) to 0.05 %
+  (96 kHz) too many samples and played 0.4-0.8 cent flat, and SidMidi's
+  engine dropped the excess, about five samples every half second at
+  48 kHz. Now the phase has as many fractional bits as an `int` holds for
+  the ratio (`resamplerPhaseBits`, 25-29 here) and the ratio is rounded: ten
+  minutes come out within one sample at 44.1-192 kHz (`sidmidi-enginetest`).
+  `fir()` and the zero-order interpolation take the top 10 bits, as before.
+  The state's layout is unchanged; a phase saved by an older build is read
+  in the new unit, a one-time offset of less than a sample. Against the tree
+  with 0001-0003 applied.
 
 ## Patches to SIDLite
 
