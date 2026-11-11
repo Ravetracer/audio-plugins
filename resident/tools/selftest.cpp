@@ -46,6 +46,7 @@
 #include <clap/clap.h>
 #include <dlfcn.h>
 #include <sys/stat.h>
+#include <unistd.h> // mkdtemp on macOS
 
 #include <algorithm>
 #include <cmath>

@@ -502,7 +502,8 @@ void CocoaWindow::drawView()
         nullptr, cairo_image_surface_get_data(back_), static_cast<size_t>(stride) * static_cast<size_t>(ph), nullptr);
     CGImageRef image = CGImageCreate(static_cast<size_t>(pw), static_cast<size_t>(ph), 8, 32,
                                      static_cast<size_t>(stride), static_cast<CGColorSpaceRef>(colorSpace_),
-                                     kCGBitmapByteOrder32Little | kCGImageAlphaNoneSkipFirst, provider, nullptr,
+                                     static_cast<CGBitmapInfo>(kCGBitmapByteOrder32Little) |
+                                         static_cast<CGBitmapInfo>(kCGImageAlphaNoneSkipFirst), provider, nullptr,
                                      false, kCGRenderingIntentDefault);
     if (image)
     {
