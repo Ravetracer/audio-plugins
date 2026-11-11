@@ -40,7 +40,7 @@ concurrency:
 jobs:
   build:
     if: github.event_name != 'release' || startsWith(github.event.release.tag_name, 'resident-v')
-    runs-on: macos-14
+    runs-on: macos-15
     permissions:
       contents: write # attaching the archive to a release
     env:
