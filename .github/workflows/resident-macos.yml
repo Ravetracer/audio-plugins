@@ -63,9 +63,11 @@ jobs:
           git clone --depth 1 --branch AudioUnitSDK-1.1.0 https://github.com/apple/AudioUnitSDK.git
           git -C clap-wrapper apply ../../shared/patches/clap-wrapper-vst3-sdk-3.8.patch
 
+      # Restored and saved in two steps, so a Cairo that was built is kept
+      # even when a later step fails.
       - name: Cairo cache
         id: cairo
-        uses: actions/cache@v4
+        uses: actions/cache/restore@v4
         with:
           path: |
             macbuild/cairo-macos/include
@@ -75,6 +77,15 @@ jobs:
       - name: Cairo
         if: steps.cairo.outputs.cache-hit != 'true'
         run: shared/cmake/build-macos-cairo.sh macbuild/cairo-macos
+
+      - name: Cairo cache save
+        if: steps.cairo.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            macbuild/cairo-macos/include
+            macbuild/cairo-macos/lib
+          key: ${{ steps.cairo.outputs.cache-primary-key }}
 
       - name: Configure
         run: >
@@ -89,7 +100,7 @@ jobs:
         run: |
           cd resident/build
           lipo -info ReSIDent.clap/Contents/MacOS/ReSIDent
-          lipo -info vst3/ReSIDent.vst3/Contents/MacOS/ReSIDent
+          lipo -info ReSIDent.vst3/Contents/MacOS/ReSIDent
           lipo -info ReSIDent.component/Contents/MacOS/ReSIDent
 
       # The plugin self-test needs the Commodore ROMs, which are not ours to
@@ -112,7 +123,7 @@ jobs:
       - name: Sign (ad hoc)
         run: |
           cd resident/build
-          for b in ReSIDent.clap vst3/ReSIDent.vst3 ReSIDent.component; do
+          for b in ReSIDent.clap ReSIDent.vst3 ReSIDent.component; do
             codesign --force --deep --sign - "$b"
             codesign --verify --deep --strict --verbose=2 "$b"
           done
@@ -134,7 +145,7 @@ jobs:
           name="ReSIDent-${ver}-macOS"
           d="dist/${name}"
           mkdir -p "$d"
-          cp -R resident/build/ReSIDent.clap resident/build/vst3/ReSIDent.vst3 resident/build/ReSIDent.component "$d/"
+          cp -R resident/build/ReSIDent.clap resident/build/ReSIDent.vst3 resident/build/ReSIDent.component "$d/"
           cp resident/LICENSE resident/COPYING resident/README.md "$d/"
           cat > "$d/INSTALL.txt" <<EOF
           ReSIDent ${ver} for macOS (10.15 or later, Apple Silicon and Intel)
