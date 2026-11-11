@@ -12,7 +12,9 @@ cartridge arrives in the DAW as MIDI.
 It is not a SID synthesizer with a C64 skin. The instrument is the C64
 program; ReSIDent is the computer it runs on.
 
-**Status: 1.0.0.** Released for Linux and Windows, CLAP and VST3. Up to
+**Status: 1.1.0.** Released for Linux and Windows, CLAP and VST3; macOS
+(CLAP, VST3 and Audio Unit, universal, 10.15 or later) is built by a GitHub
+workflow since 1.1.0 and has not been played in a DAW yet. Up to
 0.8.1 it was called SidMidi; the plugin id stayed, so projects made with it
 open unchanged, and the first start copies the old `SidMidi` data folder
 (ROMs, CC maps) into the new one. The manual
@@ -107,7 +109,8 @@ phases are in [docs/PLAN.md](docs/PLAN.md).
   controller to set it (`74`, or `74@2` for channel 2), its name to rename
   it, with value names after a `|` (`Vib On | 0 Off, 64 On`). *Save as*
   stores the map as a text file in `~/.local/share/ReSIDent/CC Maps`
-  (`%APPDATA%\ReSIDent\CC Maps` on Windows). Moving a slot, by hand or by
+  (`%APPDATA%\ReSIDent\CC Maps` on Windows,
+  `~/Library/Application Support/ReSIDent/CC Maps` on macOS). Moving a slot, by hand or by
   automation, sends its controller to the C64 at that exact sample. The
   slots keep their parameter ids, so automation stays put when the map
   changes; the host shows the new names.
@@ -132,6 +135,7 @@ what to put there:
 
 - Linux: `~/.local/share/ReSIDent/ROMs` (or `$XDG_DATA_HOME/ReSIDent/ROMs`)
 - Windows: `%APPDATA%\ReSIDent\ROMs`
+- macOS: `~/Library/Application Support/ReSIDent/ROMs`
 
 | ROM | VICE's file name |
 |---|---|
@@ -155,6 +159,16 @@ are configured but never touched cost nothing.
 ```sh
 ./install.sh      # build in ../devbox.sh, run the tests, install the CLAP and the VST3
 ```
+
+macOS cannot be built here (its SDK may only be used on Apple hardware): the
+workflow `.github/workflows/resident-macos.yml` builds it on GitHub's macOS
+runners -- a static universal Cairo from `../shared/cmake/build-macos-cairo.sh`,
+the CLAP, VST3 and AU bundles, the tests that need no ROMs (on arm64 and,
+under Rosetta, x86_64), ad-hoc signing and Apple's `auval` -- and uploads
+`ReSIDent-<version>-macOS.zip`; publishing a `resident-v*` release attaches
+it there. The bundles are not notarized: users clear the quarantine flag
+(the archive's INSTALL.txt and the manual say how). The window backend is
+`src/gui/CocoaWindow.mm`, the file chooser `src/gui/FileDialogMac.mm`.
 
 The ROMs are never part of the build. The tests take them from `_dev_/roms/`
 (gitignored) through `RESIDENT_ROM_DIR`; the installed plugin uses its ROM folder.

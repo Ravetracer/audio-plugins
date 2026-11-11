@@ -5,15 +5,22 @@
 #if defined(_WIN32)
 #include <atomic>
 #include <thread>
+#elif defined(__APPLE__)
+#include <memory>
 #else
 #include <sys/types.h>
 #endif
 
 namespace resident::gui {
 
+#if defined(__APPLE__)
+struct MacPanelState;
+#endif
+
 // Native file chooser that never blocks the host's GUI thread. On Linux it is
 // zenity or kdialog run as a child process; on Windows the system's own
-// dialog, run on a worker thread. Poll from the GUI timer.
+// dialog, run on a worker thread; on macOS an open or save panel run
+// modeless on the main thread. Poll from the GUI timer.
 class FileDialog
 {
 public:
@@ -32,6 +39,9 @@ private:
     std::thread thread_;
     std::atomic<bool> done_{false};
     std::atomic<unsigned long> threadId_{0};
+#elif defined(__APPLE__)
+    // Shared with the panel's completion handler, which may outlive this.
+    std::shared_ptr<MacPanelState> mac_;
 #else
     pid_t pid_ = -1;
     int fd_ = -1;

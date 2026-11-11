@@ -1,0 +1,180 @@
+# ReSIDent for macOS: CLAP, VST3 and Audio Unit, universal (Apple Silicon and
+# Intel), macOS 10.15 or later.
+#
+# Built here because it cannot be built on the development machine: the
+# macOS SDK may only be used on Apple hardware, and GitHub's macOS runners are
+# that hardware. The bundles are signed ad hoc, not notarized; INSTALL.txt in
+# the archive explains the one command that clears the quarantine.
+#
+# Every run uploads ReSIDent-<version>-macOS.zip as a workflow artifact. When a
+# GitHub release tagged resident-v* is published, the archive is also
+# attached to that release.
+
+name: ReSIDent macOS
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "resident/**"
+      - "shared/cmake/build-macos-cairo.sh"
+      - "shared/patches/**"
+      - ".github/workflows/resident-macos.yml"
+  pull_request:
+    paths:
+      - "resident/**"
+      - "shared/cmake/build-macos-cairo.sh"
+      - "shared/patches/**"
+      - ".github/workflows/resident-macos.yml"
+  release:
+    types: [published]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: resident-macos-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    if: github.event_name != 'release' || startsWith(github.event.release.tag_name, 'resident-v')
+    runs-on: macos-14
+    permissions:
+      contents: write # attaching the archive to a release
+    env:
+      MACOSX_DEPLOYMENT_TARGET: "10.15"
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build tools
+        run: brew install meson ninja pkgconf
+
+      # CLAP/ is gitignored (third-party SDKs, see CLAUDE.md): the same
+      # versions the Linux and Windows builds use, plus Apple's AudioUnitSDK.
+      - name: SDKs
+        run: |
+          mkdir -p CLAP && cd CLAP
+          git clone --depth 1 --branch 1.2.10 https://github.com/free-audio/clap.git
+          git clone --depth 1 --branch v0.16.0 https://github.com/free-audio/clap-wrapper.git
+          git clone --depth 1 --branch v3.8.1_build_84 https://github.com/steinbergmedia/vst3sdk.git
+          git -C vst3sdk submodule update --init base pluginterfaces public.sdk
+          git clone --depth 1 --branch AudioUnitSDK-1.1.0 https://github.com/apple/AudioUnitSDK.git
+          git -C clap-wrapper apply ../../shared/patches/clap-wrapper-vst3-sdk-3.8.patch
+
+      - name: Cairo cache
+        id: cairo
+        uses: actions/cache@v4
+        with:
+          path: |
+            macbuild/cairo-macos/include
+            macbuild/cairo-macos/lib
+          key: cairo-macos-${{ env.MACOSX_DEPLOYMENT_TARGET }}-${{ hashFiles('shared/cmake/build-macos-cairo.sh') }}
+
+      - name: Cairo
+        if: steps.cairo.outputs.cache-hit != 'true'
+        run: shared/cmake/build-macos-cairo.sh macbuild/cairo-macos
+
+      - name: Configure
+        run: >
+          cmake -S resident -B resident/build -G Ninja
+          -DCMAKE_BUILD_TYPE=Release
+          -DCMAKE_OSX_ARCHITECTURES="arm64;x86_64"
+
+      - name: Build
+        run: cmake --build resident/build
+
+      - name: Architectures
+        run: |
+          cd resident/build
+          lipo -info ReSIDent.clap/Contents/MacOS/ReSIDent
+          lipo -info vst3/ReSIDent.vst3/Contents/MacOS/ReSIDent
+          lipo -info ReSIDent.component/Contents/MacOS/ReSIDent
+
+      # The plugin self-test needs the Commodore ROMs, which are not ours to
+      # put on a server; these need none. The x86_64 half runs under Rosetta.
+      - name: Tests
+        working-directory: resident
+        run: |
+          tools/fetch-cpu-tests.sh build
+          build/resident-keytest
+          build/resident-enginetest
+          if arch -x86_64 /usr/bin/true 2>/dev/null; then
+            echo "--- x86_64 (Rosetta)"
+            arch -x86_64 build/resident-cputest build/cputests/6502_functional_test.bin 3469
+            arch -x86_64 build/resident-keytest
+            arch -x86_64 build/resident-enginetest
+          else
+            echo "no Rosetta on this runner: x86_64 not run"
+          fi
+
+      - name: Sign (ad hoc)
+        run: |
+          cd resident/build
+          for b in ReSIDent.clap vst3/ReSIDent.vst3 ReSIDent.component; do
+            codesign --force --deep --sign - "$b"
+            codesign --verify --deep --strict --verbose=2 "$b"
+          done
+
+      # Loads the Audio Unit the way Logic does and runs Apple's validation:
+      # instantiation, render at several rates, parameters, state.
+      - name: Audio Unit validation
+        run: |
+          mkdir -p ~/Library/Audio/Plug-Ins/Components
+          cp -R resident/build/ReSIDent.component ~/Library/Audio/Plug-Ins/Components/
+          killall -9 AudioComponentRegistrar 2>/dev/null || true
+          auval -a | grep -i "Rvtr" || true
+          auval -v aumu Rsid Rvtr
+
+      - name: Package
+        id: package
+        run: |
+          ver="$(sed -n 's/^project(ReSIDent VERSION \([0-9.]*\).*/\1/p' resident/CMakeLists.txt)"
+          name="ReSIDent-${ver}-macOS"
+          d="dist/${name}"
+          mkdir -p "$d"
+          cp -R resident/build/ReSIDent.clap resident/build/vst3/ReSIDent.vst3 resident/build/ReSIDent.component "$d/"
+          cp resident/LICENSE resident/COPYING resident/README.md "$d/"
+          cat > "$d/INSTALL.txt" <<EOF
+          ReSIDent ${ver} for macOS (10.15 or later, Apple Silicon and Intel)
+
+          1. Copy the plugin format(s) your DAW uses:
+
+               ReSIDent.clap       ->  ~/Library/Audio/Plug-Ins/CLAP/
+               ReSIDent.vst3       ->  ~/Library/Audio/Plug-Ins/VST3/
+               ReSIDent.component  ->  ~/Library/Audio/Plug-Ins/Components/
+
+             (~/Library is hidden in the Finder: Go > Go to Folder... and type the path.)
+
+          2. ReSIDent is free and not notarized by Apple, so macOS blocks files
+             downloaded from the internet until you clear their quarantine flag.
+             Open Terminal and run:
+
+               xattr -dr com.apple.quarantine ~/Library/Audio/Plug-Ins/CLAP/ReSIDent.clap
+               xattr -dr com.apple.quarantine ~/Library/Audio/Plug-Ins/VST3/ReSIDent.vst3
+               xattr -dr com.apple.quarantine ~/Library/Audio/Plug-Ins/Components/ReSIDent.component
+
+             Without this the DAW does not load the plugin, or reports it as damaged.
+
+          3. Restart the DAW and let it rescan its plugins.
+
+          ReSIDent needs the Commodore 64 ROMs, which it cannot ship. Put them in
+            ~/Library/Application Support/ReSIDent/ROMs
+          ReSIDent creates that folder with a README.txt the first time it runs;
+          the manual explains which files it needs.
+          EOF
+          ditto -c -k --keepParent "$d" "dist/${name}.zip"
+          echo "zip=dist/${name}.zip" >> "$GITHUB_OUTPUT"
+          echo "name=${name}" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.package.outputs.name }}
+          path: ${{ steps.package.outputs.zip }}
+
+      - name: Attach to the release
+        if: github.event_name == 'release'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release upload "${{ github.event.release.tag_name }}" "${{ steps.package.outputs.zip }}" --clobber

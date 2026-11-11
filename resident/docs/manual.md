@@ -1,14 +1,15 @@
 ---
 accent: #7C70DA
 tagline: Original C64 MIDI software, live in your DAW
-subtitle: CLAP and VST3 instrument for Linux and Windows
+subtitle: CLAP, VST3 and Audio Unit instrument for Linux, Windows and macOS
 ---
 
 # {{PLUGIN}} — manual
 
 *The original C64 MIDI programs as an instrument: a complete Commodore 64
 with up to eight SID chips, a MIDI cartridge in its expansion port, and
-your DAW at the other end of the cable. Linux and Windows, CLAP and VST3.*
+your DAW at the other end of the cable. Linux, Windows and macOS; CLAP and
+VST3, and an Audio Unit on macOS.*
 
 Version {{VERSION}}
 
@@ -52,24 +53,48 @@ and the programs you want to play (chapter 5).
 ## 2. Installing
 
 Copy the plugin into your host's plugin folder — the `ReSIDent` folder with
-the `.clap` inside, or the `ReSIDent.vst3` bundle:
+the `.clap` inside, or the `ReSIDent.vst3` bundle (on macOS: `ReSIDent.clap`,
+`ReSIDent.vst3` or `ReSIDent.component`):
 
 | | CLAP | VST3 |
 |---|---|---|
 | Linux | `~/.clap/` | `~/.vst3/` |
 | Windows | `C:\Program Files\Common Files\CLAP\` | `C:\Program Files\Common Files\VST3\` |
+| macOS | `~/Library/Audio/Plug-Ins/CLAP/` | `~/Library/Audio/Plug-Ins/VST3/` |
+
+On macOS the Audio Unit, `ReSIDent.component`, goes into
+`~/Library/Audio/Plug-Ins/Components/`; it is what Logic Pro and GarageBand
+use.
 
 Then let the host rescan its plugins. ReSIDent is an instrument: put it on an
-instrument track and play it with notes. The CLAP and the VST3 are the same
-plugin; use whichever your host prefers. A `.vst3` is a folder — copy it
-whole.
+instrument track and play it with notes. The CLAP, the VST3 and the Audio
+Unit are the same plugin; use whichever your host prefers. A `.vst3` (and on
+macOS every one of the three) is a folder — copy it whole.
 
-ReSIDent needs a processor with **AVX2 and FMA**: any Intel Core from the 4th
-generation (2013) on and any AMD Ryzen. On processors without them the host
-refuses to load the plugin.
+On Linux and Windows, ReSIDent needs a processor with **AVX2 and FMA**: any
+Intel Core from the 4th generation (2013) on and any AMD Ryzen. On processors
+without them the host refuses to load the plugin. On macOS it runs on any Mac
+with macOS 10.15 (Catalina) or later, natively on Apple Silicon and on Intel.
 
-ReSIDent keeps its own files in `~/.local/share/ReSIDent` on Linux and in
-`%APPDATA%\ReSIDent` on Windows: the ROM folder and your CC maps.
+ReSIDent keeps its own files in `~/.local/share/ReSIDent` on Linux,
+`%APPDATA%\ReSIDent` on Windows and `~/Library/Application Support/ReSIDent`
+on macOS: the ROM folder and your CC maps.
+
+### macOS: letting the plugin load
+
+ReSIDent is free and is not notarized by Apple. macOS therefore blocks
+plugins downloaded from the internet until their quarantine flag is
+cleared: the DAW does not load them, or reports them as damaged. After
+copying, open **Terminal** and run, for the formats you installed:
+
+```
+xattr -dr com.apple.quarantine ~/Library/Audio/Plug-Ins/CLAP/ReSIDent.clap
+xattr -dr com.apple.quarantine ~/Library/Audio/Plug-Ins/VST3/ReSIDent.vst3
+xattr -dr com.apple.quarantine ~/Library/Audio/Plug-Ins/Components/ReSIDent.component
+```
+
+Then restart the DAW. The `~/Library` folder is hidden in the Finder: use
+**Go → Go to Folder…** and type the path.
 
 ### Coming from SidMidi
 
@@ -94,6 +119,7 @@ README into it:
 
 - Linux: `~/.local/share/ReSIDent/ROMs`
 - Windows: `%APPDATA%\ReSIDent\ROMs`
+- macOS: `~/Library/Application Support/ReSIDent/ROMs`
 
 Copy the ROM files into that folder. The **VICE** emulator includes them in
 its data folders `C64` and `DRIVES` (`kernal-901227-03.bin`,
@@ -200,6 +226,12 @@ place of their own on a PC keyboard:
 | Insert | INST | Delete, Backspace | DEL |
 | Page Down | ↑ | Page Up | RESTORE |
 | F1–F8 | F1–F8 (even = shifted) | Cursor keys | the C64's cursor keys |
+
+A Mac keyboard has no Home, Page Up or Page Down keys: hold **fn** with the
+cursor keys (fn+← Home, fn+→ End, fn+↑ Page Up, fn+↓ Page Down), and use
+Shift+Delete for INST, as on a C64. The F-keys may need **fn** too,
+depending on your keyboard settings. The left Control key is the C64's C=; Command and
+Option do nothing on the C64.
 
 In **Positional** mode the keys around the letters are, on a US keyboard:
 
@@ -460,6 +492,7 @@ the value it starts at: `Vib On | 0 Off, 64 On` shows *Off* from 0 to 63 and
 
 - Linux: `~/.local/share/ReSIDent/CC Maps`
 - Windows: `%APPDATA%\ReSIDent\CC Maps`
+- macOS: `~/Library/Application Support/ReSIDent/CC Maps`
 
 A map is a plain text file, one line per slot:
 
@@ -547,6 +580,9 @@ pace, so two renders of the same project are identical.
   it again.
 - **Keys do nothing on the C64.** Click into the screen first; the window
   has to have the keyboard.
+- **macOS: the DAW does not list ReSIDent, or says it is damaged.** The
+  quarantine flag is still set: run the `xattr` commands from chapter 2 and
+  restart the DAW.
 - **The sound changes when the DAW stops.** The DAW sends "reset all
   controllers" on stop, which some programs take as a sound change
   (chapter 6).

@@ -61,7 +61,7 @@ audio-plugins/
 | 3 | **Aurum** | `aurum/` | 0.3.1 | Linux, Windows | CLAP, VST3 | a clean-room algorithmic reverb (FDN, allpass ring, plate) with a per-frequency decay contour; own DSP and GUI, see *Aurum* below |
 | 4 | **Substrike** | `substrike/` | 1.1.0 | Linux, Windows | CLAP, VST3 | a layered kick drum designer for every style; standalone like Aurum, see *Substrike* below |
 | 5 | **Shapeau** | `shapeau/` | 0.4.0 | Linux, Windows | CLAP, VST3 | a multiband drawing rack: a reorderable chain of shape-driven effects per band, beat-synced or triggered by MIDI or a sidechain hit, with the audio drawn behind the shape; see *Shapeau* below |
-| 6 | **ReSIDent** | `resident/` | 1.0.0 | Linux, Windows | CLAP, VST3 | a Commodore 64 running the original C64 MIDI programs, played from the DAW through an emulated MIDI cartridge, with up to eight SIDs on reSIDfp or the light SIDLite engine; GPL, standalone, see *ReSIDent* below |
+| 6 | **ReSIDent** | `resident/` | 1.1.0 | Linux, Windows, macOS | CLAP, VST3, AU (macOS) | a Commodore 64 running the original C64 MIDI programs, played from the DAW through an emulated MIDI cartridge, with up to eight SIDs on reSIDfp or the light SIDLite engine; GPL, standalone, see *ReSIDent* below |
 
 Naming follows the plugin, not a pattern: the CMake project, the installed
 artifact and the display name are CamelCase (`SaeureKiste`), the folder is
@@ -659,6 +659,23 @@ What to know before working there:
   (`C64::freezerWriting`): only its own code reaches it, so a MIDI program
   probing every interface's address cannot freeze the machine. VICE's sources are the reference for hardware
   behaviour (read them, write our own code).
+- **macOS** (1.1.0) is built only by `.github/workflows/resident-macos.yml`
+  on GitHub's macOS runners: the SDK's licence ties it to Apple hardware, so
+  osxcross is out, and nothing macOS can be built or run here. The workflow
+  clones the SDKs as below plus `apple/AudioUnitSDK` (tag
+  `AudioUnitSDK-1.1.0`, Apache 2.0) into `CLAP/`, builds a static universal
+  Cairo (`shared/cmake/build-macos-cairo.sh`, Quartz fonts, no PNG -- so no
+  `resident-run` or `gui-snapshot` on macOS), the CLAP, VST3 and AUv2
+  bundles (universal, 10.15+, x86_64 half at x86-64-v2), runs keytest,
+  enginetest and the CPU test on arm64 and under Rosetta, signs ad hoc,
+  runs `auval -v aumu Rsid Rvtr`, and uploads `ReSIDent-<ver>-macOS.zip`
+  (attached to a published `resident-v*` release). Not notarized (no paid
+  Apple account): users clear the quarantine with `xattr`, as INSTALL.txt
+  and the manual say. AU codes `Rvtr`/`Rsid` are as permanent as the plugin
+  id. `gui/CocoaWindow.mm` registers its NSView subclass at run time under a
+  name with the module's load address -- Objective-C classes share one
+  namespace per process, the same trap as the Win32 window class. Compiled
+  without ARC. The self-test cannot run there (no ROMs on a server).
 - **Release material** comes from ReSIDent's own scripts (`tools/`):
   `make-manual.sh` (own docgen; the CC map library stands in for a preset
   library), `make-screenshots.sh` (offscreen through `resident-gui-snapshot`;
@@ -777,6 +794,10 @@ forever. Exclude the two with `-x "preset-discovery-(crawl|load)"`.
 
 `clap-wrapper` needs one patch to build against VST3 3.8; it is kept in
 `shared/patches/` because `CLAP/` is gitignored and a fresh clone would lose it.
+
+ReSIDent's macOS build also needs Apple's AudioUnitSDK beside them
+(`git clone --branch AudioUnitSDK-1.1.0 https://github.com/apple/AudioUnitSDK.git`);
+only the GitHub workflow uses it.
 
 If the checkout lives anywhere else, point CMake at it explicitly with
 `-DCLAP_INCLUDE_DIR=/path/to/clap/include`.

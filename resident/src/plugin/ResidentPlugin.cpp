@@ -128,6 +128,8 @@ struct Glue
     {
 #if defined(_WIN32)
         return !floating && !std::strcmp(api, CLAP_WINDOW_API_WIN32);
+#elif defined(__APPLE__)
+        return !floating && !std::strcmp(api, CLAP_WINDOW_API_COCOA);
 #else
         return !floating && !std::strcmp(api, CLAP_WINDOW_API_X11);
 #endif
@@ -136,6 +138,8 @@ struct Glue
     {
 #if defined(_WIN32)
         *api = CLAP_WINDOW_API_WIN32;
+#elif defined(__APPLE__)
+        *api = CLAP_WINDOW_API_COCOA;
 #else
         *api = CLAP_WINDOW_API_X11;
 #endif
@@ -415,7 +419,7 @@ const void* ResidentPlugin::getExtension(const char* id)
         return &Glue::loader;
     if (!std::strcmp(id, CLAP_EXT_RENDER))
         return &Glue::render;
-#if !defined(_WIN32)
+#if !defined(_WIN32) && !defined(__APPLE__)
     if (!std::strcmp(id, CLAP_EXT_POSIX_FD_SUPPORT))
         return &Glue::posixFd;
 #endif
@@ -1491,10 +1495,17 @@ void ResidentPlugin::guiDestroy()
 
 bool ResidentPlugin::guiSetScale(double scale)
 {
+#if defined(__APPLE__)
+    // The cocoa API works in logical sizes and has no scale to set; the
+    // window applies the Retina factor itself.
+    (void)scale;
+    return false;
+#else
     if (!editor_)
         return false;
     editor_->setScale(scale);
     return true;
+#endif
 }
 
 bool ResidentPlugin::guiGetSize(uint32_t* w, uint32_t* h)
@@ -1530,6 +1541,8 @@ bool ResidentPlugin::guiSetParent(const clap_window_t* window)
         return false;
 #if defined(_WIN32)
     const auto parent = reinterpret_cast<uintptr_t>(window->win32);
+#elif defined(__APPLE__)
+    const auto parent = reinterpret_cast<uintptr_t>(window->cocoa);
 #else
     const auto parent = static_cast<uintptr_t>(window->x11);
 #endif

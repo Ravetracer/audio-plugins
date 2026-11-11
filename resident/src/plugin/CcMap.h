@@ -67,7 +67,8 @@ struct CcMap
 };
 
 // Where the user's maps live: $XDG_DATA_HOME/ReSIDent/CC Maps on Linux,
-// %APPDATA%\ReSIDent\CC Maps on Windows. RESIDENT_CCMAP_DIR overrides it.
+// %APPDATA%\ReSIDent\CC Maps on Windows, ~/Library/Application Support/ReSIDent/
+// CC Maps on macOS. RESIDENT_CCMAP_DIR overrides it.
 std::string ccMapFolder();
 
 struct CcMapEntry

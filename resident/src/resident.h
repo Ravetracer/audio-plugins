@@ -10,7 +10,7 @@ constexpr char kPluginId[] = "de.ravetracer.sidmidi";
 constexpr char kPluginName[] = "ReSIDent";
 constexpr char kPluginDirName[] = "ReSIDent";
 constexpr char kPluginVendor[] = "Ravetracer";
-constexpr char kPluginVersion[] = "1.0.0";
+constexpr char kPluginVersion[] = "1.1.0";
 constexpr char kPluginUrl[] = "https://github.com/Ravetracer/audio-plugins";
 constexpr char kPluginDescription[] = "Original C64 MIDI software, live in your DAW";
 

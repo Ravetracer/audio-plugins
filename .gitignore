@@ -17,6 +17,10 @@
 # with ./setup-winbuild.sh.
 /winbuild/
 
+# The static Cairo for macOS (shared/cmake/build-macos-cairo.sh), made on a
+# Mac or by the GitHub workflow; reproducible at any time.
+/macbuild/
+
 # Local reference material inside a plugin (recordings, papers, renders).
 # The leading "!" has to be escaped or git reads it as a negation.
 */\!dev/

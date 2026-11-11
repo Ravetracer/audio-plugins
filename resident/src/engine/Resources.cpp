@@ -147,6 +147,12 @@ std::string dataFolder()
     std::string base = envUtf8(L"APPDATA");
     if (base.empty())
         base = envUtf8(L"USERPROFILE");
+#elif defined(__APPLE__)
+    std::string base;
+    if (const char* h = std::getenv("HOME"); h && *h)
+        base = std::string(h) + "/Library/Application Support";
+    else
+        base = "/tmp";
 #else
     std::string base;
     if (const char* x = std::getenv("XDG_DATA_HOME"); x && *x)
@@ -289,9 +295,14 @@ void openFolder(const std::string& path)
     const std::wstring w = toPath(path).wstring();
     ShellExecuteW(nullptr, L"open", w.c_str(), nullptr, nullptr, SW_SHOWNORMAL);
 #else
+#if defined(__APPLE__)
+    const char* opener = "open";
+#else
+    const char* opener = "xdg-open";
+#endif
     pid_t pid;
-    const char* argv[] = {"xdg-open", path.c_str(), nullptr};
-    if (posix_spawnp(&pid, "xdg-open", nullptr, nullptr, const_cast<char* const*>(argv), environ) == 0) {
+    const char* argv[] = {opener, path.c_str(), nullptr};
+    if (posix_spawnp(&pid, opener, nullptr, nullptr, const_cast<char* const*>(argv), environ) == 0) {
         // Reaped without blocking the GUI: xdg-open returns at once.
         int status;
         waitpid(pid, &status, WNOHANG);

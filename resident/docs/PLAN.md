@@ -572,6 +572,36 @@ with the old resampler put back, eleven checks fail. Every reSIDfp render
 changes by this (timing), so 0.8.0's bit-identity reference no longer
 applies.
 
+## Status (1.1.0, 2026-11-11)
+
+**macOS**: CLAP, VST3 and Audio Unit, one universal binary each (arm64 and
+x86_64, macOS 10.15+), built natively by `.github/workflows/resident-macos.yml`
+on GitHub's macOS runners -- osxcross was considered and dropped (the SDK's
+licence ties it to Apple hardware, and nothing built with it could be run).
+
+- `gui/CocoaWindow.mm`: an NSView child of the host's view, Cairo into an
+  image surface drawn as a CGImage at the Retina factor; sizes in points (the
+  cocoa API never sets a scale, `guiSetScale` returns false). The view class
+  is made at run time under a name carrying the module's load address -- the
+  Objective-C runtime has one class namespace per process, the same trap as
+  the Win32 window class. Keys: macOS key codes to evdev (ISO keyboards swap
+  the two keys around Shift and 1, as SDL does), the layout's keysym through
+  UCKeyTranslate with Shift/Option/Caps (Control and Command left out, dead
+  keys give their own character), modifiers from flagsChanged with the
+  left/right device bits, Caps Lock held while locked. Command or Control
+  are ModCtrl, Option ModAlt, Control+click a right click. The wheel goes by
+  the hand's direction, trackpad points summed into notches. File drops in;
+  dragging out is not implemented (the editor does not use it).
+- `gui/FileDialogMac.mm`: NSOpenPanel/NSSavePanel, modeless, polled.
+- Data folder `~/Library/Application Support/ReSIDent`, Quartz fonts
+  ("Helvetica Neue"), `open` for the ROM folder.
+- AU codes: manufacturer `Rvtr`, subtype `Rsid`, type `aumu`. Keep them:
+  AU hosts store projects by them.
+- Linux and Windows: only the version changes.
+- **Untested in a DAW.** CI checks the build, keytest, enginetest and the
+  CPU test on both architectures, and auval; the plugin self-test needs ROMs
+  and cannot run there.
+
 ## Status (1.0.0, 2026-11-11)
 
 **Renamed from SidMidi to ReSIDent**, with the tagline "Original C64 MIDI

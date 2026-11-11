@@ -56,6 +56,11 @@ inline constexpr Color green = Color::hex(0x7fc08a);
 // missing family with clipped glyphs rather than substituting cleanly. Segoe UI
 // ships with every Windows version ReSIDent runs on.
 inline const char* const fontFamily = "Segoe UI";
+#elif defined(__APPLE__)
+// Cairo's Quartz fonts look a toy family up by name, "Helvetica Neue Bold"
+// for bold, and fall back to Helvetica; there is no per-glyph fallback either,
+// so, as on Windows, the UI draws no symbol characters.
+inline const char* const fontFamily = "Helvetica Neue";
 #else
 inline const char* const fontFamily = "Inter";
 #endif

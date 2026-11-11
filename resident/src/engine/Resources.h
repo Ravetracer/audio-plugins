@@ -18,12 +18,14 @@
 namespace resident {
 
 // ReSIDent's own folder: $XDG_DATA_HOME/ReSIDent (~/.local/share/ReSIDent) on
-// Linux, %APPDATA%\ReSIDent on Windows. The first call that finds it missing
+// Linux, %APPDATA%\ReSIDent on Windows, ~/Library/Application Support/ReSIDent
+// on macOS. The first call that finds it missing
 // copies the old SidMidi folder's contents into it, if there is one.
 std::string dataFolder();
 
 // Where the ROMs go: $XDG_DATA_HOME/ReSIDent/ROMs (~/.local/share/ReSIDent/ROMs)
-// on Linux, %APPDATA%\ReSIDent\ROMs on Windows. RESIDENT_ROM_DIR overrides it.
+// on Linux, %APPDATA%\ReSIDent\ROMs on Windows, the same under
+// ~/Library/Application Support on macOS. RESIDENT_ROM_DIR overrides it.
 std::string romFolder();
 // Creates the folder and its README.txt when they are missing.
 void prepareRomFolder();
