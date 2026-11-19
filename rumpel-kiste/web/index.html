@@ -1,0 +1,22 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>RumpelKiste</title>
+<style>
+    html, body { margin: 0; padding: 0; width: 100%; height: 100%; overflow: hidden; background: #0c0b0a; }
+    canvas { display: block; width: 100vw; height: 100vh; outline: none; touch-action: none; }
+    #status { position: fixed; inset: 0; display: flex; align-items: center; justify-content: center;
+              color: #a09890; font: 13px sans-serif; pointer-events: none; }
+</style>
+</head>
+<body>
+<canvas id="ui" tabindex="0"></canvas>
+<div id="status">Loading RumpelKiste…</div>
+<script type="module">
+    import {start} from './wclap-ui.js'
+    start({fonts: ['NotoSans-Regular.ttf', 'NotoSans-Bold.ttf'], storageKey: 'rumpelkiste-wclap-files-v1'})
+</script>
+</body>
+</html>

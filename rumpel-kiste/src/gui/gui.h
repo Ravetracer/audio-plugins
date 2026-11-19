@@ -5,6 +5,8 @@
 // only brings those names into the plugin's namespace and declares the entry
 // point.
 
+#include <cstdint>
+
 #include "plugincore/gui/gui.h"
 
 #include "pattern.h"
@@ -36,6 +38,14 @@ public:
    virtual bool windowAdvancedOpen() const = 0;
    virtual void windowSetAdvancedOpen(bool open) = 0;
 };
+
+// The window's size at scale 1: closed, and with the collapsible section open.
+// gui.cpp checks both against its layout. The WebAssembly plugin, which has no
+// window of its own (its editor runs in the page), answers the host's first
+// size questions with them.
+constexpr uint32_t kEditorWidth = 1572;
+constexpr uint32_t kEditorHeight = 898;
+constexpr uint32_t kEditorExpandedHeight = 1034;
 
 // Returns nullptr if no X display could be opened. The window reaches the
 // sequencer's pattern through the second argument and the host through the

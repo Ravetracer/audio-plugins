@@ -182,6 +182,10 @@ static_assert(rowWidth(1) <= kContentW, "row 1 is wider than the window");
 static_assert(rowWidth(2) <= kContentW, "row 2 is wider than the window");
 static_assert(rowWidth(3) <= kContentW, "row 3 is wider than the window");
 static_assert(kWindowExpandedH > kWindowH, "opening the section has to make the window taller");
+static_assert(kContentW + 2 * kMargin == static_cast<int>(kEditorWidth) &&
+                 kWindowH == static_cast<int>(kEditorHeight) &&
+                 kWindowExpandedH == static_cast<int>(kEditorExpandedHeight),
+              "kEditorWidth, kEditorHeight and kEditorExpandedHeight in gui.h are out of date");
 
 // --------------------------------------------------------------------- theme
 //

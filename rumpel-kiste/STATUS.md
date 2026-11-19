@@ -1,8 +1,27 @@
 # RumpelKiste -- status
 
-Version 0.2.1. Linux and Windows, CLAP and VST3. 76 parameters, 19 presets.
+Version 0.3.0. Linux and Windows, CLAP and VST3; a WCLAP for browser hosts.
+76 parameters, 19 presets.
 Builds clean on both platforms; `render --selftest` passes all 190 checks on
 the Linux build and on the Windows build under wine.
+
+0.3.0 adds the **WCLAP** (WebCLAP), for browser hosts such as openDAW, built
+the way SäureKiste 0.19.0's is: `cmake/wclap.cmake`, wasi-sdk,
+`build-wasm/rumpelkiste.wclap.tar.gz`. `module.wasm` is the plugin without a
+window; `ui.wasm` is the desktop window drawn into the page's canvas over a
+second instance of the plugin (the mirror), which sends what the window
+changed and loads what the plugin reports (`src/web/`, protocol in
+`src/web/protocol.h`). Presets and packs, the bank, chains, mutes, the pattern
+map, PLAY, the row auditions and the ADVANCED section work as on the desktop;
+the MIDI drag and pack exports become downloads. The self-test
+`build-wasm/rumpelkiste-wclap-selftest.wasm` (33 checks, `node
+../shared/tools/run-wasi.mjs`) covers the plugin's side of the protocol, a
+pattern edit the sequencer plays and the state round trip; 20 us per
+128-frame block in node. The editor offscreen matches the X11 window to within
+10 % per channel on every pixel. Loaded only in open-webclap's test host, not
+yet in openDAW. The hovered parameter is not reported (clap.param-hovered).
+No native behaviour changed: all 190 checks pass and every factory preset
+renders bit for bit what 0.2.1 rendered.
 
 0.2.1 makes the controls glide, as SäureKiste 0.15.2 does. Every control
 jumped straight to each new value, so host automation and a dragged knob put a

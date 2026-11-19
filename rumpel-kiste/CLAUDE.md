@@ -92,3 +92,15 @@ break the rule.
   usable shell identifier for the shared script.
 - **The manual's screenshots are committed, not built**, taken on Xvfb with
   guihost and an empty `XDG_CONFIG_HOME`. Retake them when the window moves.
+
+## WCLAP (since 0.3.0)
+
+A WebAssembly build for browser hosts (openDAW): `cmake -S . -B build-wasm -G
+Ninja -DCMAKE_TOOLCHAIN_FILE=../CLAP/wasi-sdk/share/cmake/wasi-sdk-p1.cmake
+-DWASI_SDK_PREFIX=../CLAP/wasi-sdk && ninja -C build-wasm`, self-test `node
+../shared/tools/run-wasi.mjs build-wasm/rumpelkiste-wclap-selftest.wasm`.
+The editor in the page runs on a mirror instance; **a new non-parameter state
+field must go into `webCollect`, `webResync` and the DSP's `webReceive` in
+`src/web/plugin_web.inc`**, and anything that changes state from outside the
+page calls `webStateChanged()`, or the browser editor silently does not sync
+it. See the root CLAUDE.md, *WCLAP (WebCLAP) builds*, and shared/web/README.md.

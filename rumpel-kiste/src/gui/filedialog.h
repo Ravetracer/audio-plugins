@@ -15,6 +15,10 @@
 
 #include <string>
 
+#if defined(__wasm__)
+#include <functional>
+#endif
+
 namespace rumpelkiste {
 
 // Whether there is a chooser to open at all. The window hides its "Other..."
@@ -34,5 +38,24 @@ std::string saveFileDialog(const std::string &title, const std::string &suggeste
 // once. Same deal: the chosen path, or empty if there was no chooser or the
 // user cancelled.
 std::string openFolderDialog(const std::string &title);
+
+#if defined(__wasm__)
+// The WebAssembly editor's dialogs are the page's, and they do not block: the
+// result arrives later and is handed to `done` -- an empty path when the user
+// cancelled. A save dialog answers with a path under /download; the caller
+// writes the file there and hands it to the user with webOfferDownload().
+void openFileDialogAsync(const std::string &title, const std::string &filterName,
+                         const std::string &extension,
+                         std::function<void(const std::string &)> done);
+void saveFileDialogAsync(const std::string &title, const std::string &suggestedPath,
+                         const std::string &filterName, const std::string &extension,
+                         std::function<void(const std::string &)> done);
+void openFolderDialogAsync(const std::string &title,
+                           std::function<void(const std::string &)> done);
+// Forgets a dialog that is still open, for a window that is going away.
+void cancelFileDialogs();
+// Offers a file in the editor's file system to the user as a download.
+bool webOfferDownload(const std::string &path);
+#endif
 
 } // namespace rumpelkiste

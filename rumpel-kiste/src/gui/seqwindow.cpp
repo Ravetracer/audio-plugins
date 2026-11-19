@@ -45,6 +45,8 @@
 #   ifndef M_PI
 #      define M_PI 3.14159265358979323846
 #   endif
+#elif defined(__wasm__)
+#   include "webcanvas.h"
 #else
 #   include <X11/Xlib.h>
 #   include <X11/Xutil.h>
@@ -60,7 +62,11 @@ namespace {
 
 // --------------------------------------------------------------- the window
 
-class PluginWindow final : public Gui {
+class PluginWindow final : public Gui
+#if defined(__wasm__)
+   , public WebCanvas
+#endif
+{
 public:
    PluginWindow(GuiDelegate &delegate, const WindowSpec &spec)
       : mDelegate(delegate), mSpec(spec),
@@ -187,6 +193,20 @@ public:
          SetWindowTextA(mWindow, title);
    }
 
+#elif defined(__wasm__)
+   // The page's canvas stands in for the window (gui/webcanvas.h): there is
+   // nothing to create, embed or title, and the editor module copies each
+   // frame out of the buffer.
+   bool open() override {
+      mWindow = true;
+      allocateBuffer();
+      return true;
+   }
+
+   bool embed(uintptr_t) override { return mWindow; }
+   bool setTransientFor(uintptr_t) override { return false; }
+   void setTitle(const char *) override {}
+
 #else
    bool open() override {
       if (mWindow)
@@ -294,6 +314,7 @@ public:
 #if defined(_WIN32)
       SetWindowPos(mWindow, nullptr, 0, 0, static_cast<int>(pixelW()),
                    static_cast<int>(pixelH()), SWP_NOMOVE | SWP_NOZORDER);
+#elif defined(__wasm__)
 #else
       XResizeWindow(mDisplay, mWindow, pixelW(), pixelH());
       cairo_xlib_surface_set_size(mTarget, pixelW(), pixelH());
@@ -312,6 +333,7 @@ public:
          return;
 #if defined(_WIN32)
       ShowWindow(mWindow, SW_SHOWNA);
+#elif defined(__wasm__)
 #else
       XMapWindow(mDisplay, mWindow);
       XFlush(mDisplay);
@@ -327,6 +349,8 @@ public:
       closeEntry();
 #if defined(_WIN32)
       ShowWindow(mWindow, SW_HIDE);
+#elif defined(__wasm__)
+      // The page goes away with the host's view; nothing to unmap.
 #else
       XUnmapWindow(mDisplay, mWindow);
       XFlush(mDisplay);
@@ -346,6 +370,12 @@ public:
       // is safe from any thread and the owning thread does the work.
       if (needsRepaint())
          InvalidateRect(mWindow, nullptr, FALSE);
+#elif defined(__wasm__)
+      // Called once per animation frame by the editor module (webTick).
+      if (mWindow && needsRepaint()) {
+         paint();
+         webPublishFrame();
+      }
 #else
       if (!mDisplay)
          return;
@@ -370,6 +400,17 @@ private:
          cairo_surface_destroy(mBuffer);
          mBuffer = nullptr;
       }
+#if defined(__wasm__)
+      // In a page the buffer is the page's canvas, at the devicePixelRatio
+      // (mBacking), and may be larger than the layout.
+      if (mWebCssW > 0 && mWebCssH > 0) {
+         mBuffer = cairo_image_surface_create(CAIRO_FORMAT_RGB24,
+                                              static_cast<int>(mWebCssW * mBacking + 0.5),
+                                              static_cast<int>(mWebCssH * mBacking + 0.5));
+         mBufferCr = cairo_create(mBuffer);
+         return;
+      }
+#endif
       mBuffer = cairo_image_surface_create(CAIRO_FORMAT_RGB24, static_cast<int>(pixelW()),
                                            static_cast<int>(pixelH()));
       mBufferCr = cairo_create(mBuffer);
@@ -396,6 +437,10 @@ private:
             UnregisterClassW(windowClassName(), moduleInstance());
       }
       mWindow = nullptr;
+#elif defined(__wasm__)
+      releaseKeyboard();
+      cancelFileDialogs();
+      mWindow = false;
 #else
       if (mDisplay) {
          // Closing the display would drop the grab anyway, but say so plainly
@@ -696,8 +741,17 @@ private:
       for (uint32_t i = 0; i < mSpec.paramCount; ++i)
          mShown[i] = mDelegate.guiParamValue(i);
 
+#if defined(__wasm__)
+      // The canvas can be larger than the layout at its scale; the rest of
+      // it is the chassis colour rather than whatever the last frame left.
+      cairo_set_source_rgb(cr, mSpec.theme.bgBottom.r, mSpec.theme.bgBottom.g, mSpec.theme.bgBottom.b);
+      cairo_paint(cr);
+      cairo_save(cr);
+      cairo_scale(cr, mScale * mBacking, mScale * mBacking);
+#else
       cairo_save(cr);
       cairo_scale(cr, mScale, mScale);
+#endif
       cairo_set_line_join(cr, CAIRO_LINE_JOIN_ROUND);
 
       drawBackground(cr);
@@ -719,10 +773,15 @@ private:
 
       cairo_restore(cr);
 
+#if defined(__wasm__)
+      // No target: the editor module copies mBuffer out (webPublishFrame).
+      if (!mTargetCr)
+         return;
+#endif
       cairo_set_source_surface(mTargetCr, mBuffer, 0, 0);
       cairo_paint(mTargetCr);
       cairo_surface_flush(mTarget);
-#if !defined(_WIN32)
+#if !defined(_WIN32) && !defined(__wasm__)
       XFlush(mDisplay);
 #endif
    }
@@ -1248,6 +1307,10 @@ private:
       // its shortcuts, and focus returns on its own when the dialog closes.
       mPrevFocus = SetFocus(mWindow);
       mKeyboardGrabbed = GetFocus() == mWindow;
+#elif defined(__wasm__)
+      // The canvas takes the focus with the click that opened the field, and
+      // the page hands every key to the window from then on.
+      mKeyboardGrabbed = true;
 #else
       if (!mDisplay)
          return;
@@ -1267,6 +1330,7 @@ private:
       if (mPrevFocus && IsWindow(mPrevFocus))
          SetFocus(mPrevFocus);
       mPrevFocus = nullptr;
+#elif defined(__wasm__)
 #else
       if (mDisplay) {
          XErrorHandler previous = XSetErrorHandler(&ignoreXError);
@@ -1733,22 +1797,41 @@ private:
       std::string path = mDelegate.guiPackPathFor(folder);
       if (chooseWhere) {
          mDelegate.guiKeyboardTaken(); // a modal dialog takes the keyboard too
+#if defined(__wasm__)
+         saveFileDialogAsync("Export preset pack", path, "Preset pack", packExtensionFromPath(path),
+                             [this, folder](const std::string &chosen) {
+                                mDirty = true;
+                                if (!chosen.empty()) // empty: cancelled
+                                   writePack(folder, chosen);
+                             });
+         return;
+#else
          path = saveFileDialog("Export preset pack", path, "Preset pack",
                                packExtensionFromPath(path));
          if (path.empty()) {
             mDirty = true;
             return; // cancelled
          }
+#endif
       }
+      writePack(folder, path);
+   }
+
+   void writePack(const std::string &folder, const std::string &path) {
       if (path.empty()) {
          mBrowserStatus = "Nowhere to write a pack: no user config directory.";
          mDirty = true;
          return;
       }
       std::string error;
-      mBrowserStatus = mDelegate.guiExportPack(folder, path, error)
-                          ? "Wrote " + path
-                          : (error.empty() ? std::string("Could not write the pack.") : error);
+      const bool wrote = mDelegate.guiExportPack(folder, path, error);
+      mBrowserStatus = wrote ? "Wrote " + path
+                             : (error.empty() ? std::string("Could not write the pack.") : error);
+#if defined(__wasm__)
+      // The pack is in the editor's own file system; the user gets a copy.
+      if (wrote && webOfferDownload(path))
+         mBrowserStatus = "Downloaded " + path.substr(path.find_last_of('/') + 1);
+#endif
       mImportPacks = mDelegate.guiPresetPacks();
       mDirty = true;
    }
@@ -3234,6 +3317,10 @@ private:
          return;
 #if defined(_WIN32)
       dragFileOut(nullptr, reinterpret_cast<uintptr_t>(mWindow), path);
+#elif defined(__wasm__)
+      // A page cannot drag a file out to the desktop or the host; the file is
+      // handed to the user as a download instead.
+      webOfferDownload(path);
 #else
       dragFileOut(mDisplay, static_cast<uintptr_t>(mWindow), path);
 #endif
@@ -3605,6 +3692,134 @@ private:
       }
       return DefWindowProcW(mWindow, msg, wp, lp);
    }
+#elif defined(__wasm__)
+   // WebCanvas: the editor module hands the page's input over here. Pointer
+   // positions are canvas pixels, the page's CSS pixels times mBacking.
+   // Everything below this block is shared again.
+   static unsigned long webNowMs() {
+      return static_cast<unsigned long>(std::chrono::duration_cast<std::chrono::milliseconds>(
+                                           std::chrono::steady_clock::now().time_since_epoch())
+                                           .count());
+   }
+
+   void webSetPage(int cssWidth, int cssHeight, double devicePixelRatio) override {
+      mWebCssW = std::max(1, cssWidth);
+      mWebCssH = std::max(1, cssHeight);
+      mBacking = devicePixelRatio >= 0.25 ? devicePixelRatio : 1.0;
+      // Zoomed to the largest scale that fits the host's view, as a host
+      // resizing the desktop window would have it.
+      mScale = scaleFor(static_cast<uint32_t>(mWebCssW), static_cast<uint32_t>(mWebCssH));
+      allocateBuffer();
+      mDirty = true;
+   }
+
+   void webDesignSize(uint32_t &width, uint32_t &height) const override {
+      designSize(&width, &height);
+   }
+
+   uint32_t webTick() override {
+      tick();
+      return mWebSerial;
+   }
+
+   // Cairo's RGB24 is a native-endian 0xXXRRGGBB word, B G R X in memory; a
+   // canvas wants R G B A.
+   void webPublishFrame() {
+      if (!mBuffer)
+         return;
+      cairo_surface_flush(mBuffer);
+      const int w = cairo_image_surface_get_width(mBuffer);
+      const int h = cairo_image_surface_get_height(mBuffer);
+      const int stride = cairo_image_surface_get_stride(mBuffer);
+      const unsigned char *src = cairo_image_surface_get_data(mBuffer);
+      mWebRgba.resize(static_cast<size_t>(w) * h * 4);
+      for (int y = 0; y < h; ++y) {
+         const uint32_t *row = reinterpret_cast<const uint32_t *>(src + static_cast<size_t>(y) * stride);
+         uint32_t *out = reinterpret_cast<uint32_t *>(mWebRgba.data() + static_cast<size_t>(y) * w * 4);
+         for (int x = 0; x < w; ++x) {
+            const uint32_t p = row[x];
+            out[x] = 0xff000000u | ((p & 0xffu) << 16) | (p & 0xff00u) | ((p >> 16) & 0xffu);
+         }
+      }
+      mWebFrameW = w;
+      mWebFrameH = h;
+      ++mWebSerial;
+   }
+
+   const uint8_t *webFrame(int &width, int &height) const override {
+      width = mWebFrameW;
+      height = mWebFrameH;
+      return mWebRgba.empty() ? nullptr : mWebRgba.data();
+   }
+
+   void webPointerDown(double x, double y, int button, unsigned mods) override {
+      if (button < 1 || button > 3)
+         return;
+      mWebButtons |= 1u << button;
+      onPointerDown(x / mBacking, y / mBacking, static_cast<unsigned>(button), webNowMs(),
+                    (mods & 1u) != 0);
+   }
+
+   void webPointerUp(double, double, int button, unsigned) override {
+      mWebButtons &= ~(1u << button);
+      onButtonRelease();
+   }
+
+   void webPointerMove(double x, double y, unsigned mods) override {
+      onMotion(x / mBacking / mScale, y / mBacking / mScale, (mods & 1u) != 0);
+   }
+
+   // The wheel as X11 has it: one button 4 or 5 press per notch. A trackpad
+   // reports fractions of one, which add up here.
+   void webWheel(double x, double y, double notches, unsigned mods) override {
+      mWebWheel += notches;
+      while (mWebWheel >= 1.0) {
+         mWebWheel -= 1.0;
+         onPointerDown(x / mBacking, y / mBacking, 4u, webNowMs(), (mods & 1u) != 0);
+      }
+      while (mWebWheel <= -1.0) {
+         mWebWheel += 1.0;
+         onPointerDown(x / mBacking, y / mBacking, 5u, webNowMs(), (mods & 1u) != 0);
+      }
+   }
+
+   void webLeave() override {
+      if (mDrag < 0) {
+         mHover = -1;
+         mHoverWidget = Widget::NoWidget;
+         mDirty = true;
+      }
+   }
+
+   // Keys go where the X11 window sends them: a field that is being typed
+   // into, else an open list. Anything else is the host's.
+   bool webKey(unsigned keysym, const char *text, int length, unsigned) override {
+      KeyCommand cmd = KeyCommand::NoCommand;
+      if (keysym == 0xff1b)
+         cmd = KeyCommand::Escape;
+      else if (keysym == 0xff0d || keysym == 0xff8d)
+         cmd = KeyCommand::Accept;
+      else if (keysym == 0xff08)
+         cmd = KeyCommand::Backspace;
+      else if (keysym == 0xff52)
+         cmd = KeyCommand::Up;
+      else if (keysym == 0xff54)
+         cmd = KeyCommand::Down;
+      if (mSaveOpen)
+         onSaveKey(cmd, text, length);
+      else if (mEntryParam >= 0)
+         onEntryKey(cmd, text, length);
+      else if (mMenuParam >= 0 || mMixerOpen || mBrowserOpen)
+         onOverlayKey(cmd);
+      else
+         return false;
+      mDirty = true;
+      return true;
+   }
+
+   bool webButtonHeld() const override { return mWebButtons != 0; }
+
+   void pumpEvents() {}
 #else
    void pumpEvents() {
       XEvent ev;
@@ -3754,9 +3969,16 @@ private:
                      importPack(mImportPacks[static_cast<size_t>(row)]);
                   } else {
                      mDelegate.guiKeyboardTaken();
+#if defined(__wasm__)
+                     mImportOpen = false;
+                     openFileDialogAsync("Import preset pack", "Preset pack",
+                                         packExtensionFromPath(mDelegate.guiPackPathFor("pack")),
+                                         [this](const std::string &p) { importPack(p); });
+#else
                      importPack(openFileDialog("Import preset pack", "Preset pack",
                                                packExtensionFromPath(
                                                   mDelegate.guiPackPathFor("pack"))));
+#endif
                   }
                   mDirty = true;
                   return;
@@ -4244,6 +4466,16 @@ private:
    HWND mWindow = nullptr;
    HWND mPrevFocus = nullptr;
    bool mTrackingLeave = false;
+#elif defined(__wasm__)
+   bool mWindow = false; // open, which is all there is to a canvas
+   // Device pixels per CSS pixel: the page's devicePixelRatio.
+   double mBacking = 1.0;
+   int mWebCssW = 0, mWebCssH = 0;
+   std::vector<uint8_t> mWebRgba;
+   int mWebFrameW = 0, mWebFrameH = 0;
+   uint32_t mWebSerial = 0;
+   unsigned mWebButtons = 0;
+   double mWebWheel = 0.0;
 #else
    Display *mDisplay = nullptr;
    Window mWindow = 0;
@@ -4387,6 +4619,10 @@ LRESULT CALLBACK PluginWindow::wndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp
       return DefWindowProcW(hwnd, msg, wp, lp);
    return self->handleMessage(msg, wp, lp);
 }
+#endif
+
+#if defined(__wasm__)
+WebCanvas *webCanvasOf(Gui *gui) { return gui ? static_cast<PluginWindow *>(gui) : nullptr; }
 #endif
 
 Gui *createWindow(GuiDelegate &delegate, const WindowSpec &spec) {

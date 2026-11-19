@@ -4,7 +4,9 @@
 #include <cstdlib>
 #include <cstring>
 
-#if defined(_WIN32)
+#if defined(__wasm__)
+#   include <vector>
+#elif defined(_WIN32)
 #   include <windows.h>
 #   include <commdlg.h>
 #   include <shlobj.h>
@@ -14,7 +16,104 @@
 
 namespace rumpelkiste {
 
-#if defined(_WIN32)
+#if defined(__wasm__)
+
+// The page's file picker (wclap.file_dialog in shared/web/wclap-ui.js). It
+// copies what the user picks into the editor's file system under /upload and
+// answers through wclap_ui_dialog_done(), so a dialog here is never modal: the
+// window hands over what to do with the path, and that runs when it comes.
+// A save dialog asks for a name and answers with a path under /download; the
+// window writes the file there and offers it with webOfferDownload().
+
+extern "C" {
+__attribute__((import_module("wclap"), import_name("file_dialog"))) void
+wclapJsFileDialog(int id, int mode, const char *filter, int filterLength);
+__attribute__((import_module("wclap"), import_name("download"))) void
+wclapJsDownload(const char *name, int nameLength, const void *data, int dataLength);
+}
+
+namespace {
+
+struct PendingDialog {
+   int id = 0;
+   std::function<void(const std::string &)> done;
+};
+
+// One dialog at a time, for the one editor this module holds.
+PendingDialog &pending() {
+   static PendingDialog p;
+   return p;
+}
+
+void startDialog(int mode, const std::string &filter, std::function<void(const std::string &)> done) {
+   static int next = 1;
+   PendingDialog &p = pending();
+   p.id = next++;
+   p.done = std::move(done);
+   wclapJsFileDialog(p.id, mode, filter.data(), static_cast<int>(filter.size()));
+}
+
+} // namespace
+
+extern "C" __attribute__((export_name("wclap_ui_dialog_done"))) void
+wclapUiDialogDone(int id, const char *path, int length) {
+   PendingDialog &p = pending();
+   if (id != p.id || !p.done)
+      return;
+   auto done = std::move(p.done);
+   p = PendingDialog();
+   done(std::string(path ? path : "", path && length > 0 ? static_cast<size_t>(length) : 0));
+}
+
+bool fileDialogAvailable() { return true; }
+
+void openFileDialogAsync(const std::string &, const std::string &filterName,
+                         const std::string &extension,
+                         std::function<void(const std::string &)> done) {
+   startDialog(0, filterName + " | *." + extension, std::move(done));
+}
+
+void saveFileDialogAsync(const std::string &, const std::string &,
+                         const std::string &filterName, const std::string &extension,
+                         std::function<void(const std::string &)> done) {
+   startDialog(2, filterName + " | *." + extension, std::move(done));
+}
+
+void openFolderDialogAsync(const std::string &, std::function<void(const std::string &)> done) {
+   startDialog(1, std::string(), std::move(done));
+}
+
+void cancelFileDialogs() { pending() = PendingDialog(); }
+
+bool webOfferDownload(const std::string &path) {
+   FILE *in = std::fopen(path.c_str(), "rb");
+   if (!in)
+      return false;
+   std::vector<unsigned char> data;
+   std::vector<unsigned char> buf(65536);
+   size_t n;
+   while ((n = std::fread(buf.data(), 1, buf.size(), in)) > 0)
+      data.insert(data.end(), buf.data(), buf.data() + n);
+   std::fclose(in);
+   const size_t slash = path.find_last_of('/');
+   const std::string name = slash == std::string::npos ? path : path.substr(slash + 1);
+   wclapJsDownload(name.data(), static_cast<int>(name.size()), data.data(),
+                   static_cast<int>(data.size()));
+   return true;
+}
+
+// The blocking forms have nothing to block on in a page; the window uses the
+// ones above instead.
+std::string openFileDialog(const std::string &, const std::string &, const std::string &) {
+   return std::string();
+}
+std::string saveFileDialog(const std::string &, const std::string &, const std::string &,
+                           const std::string &) {
+   return std::string();
+}
+std::string openFolderDialog(const std::string &) { return std::string(); }
+
+#elif defined(_WIN32)
 
 namespace {
 

@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.16)
-project(RumpelKiste VERSION 0.2.1 LANGUAGES CXX)
+project(RumpelKiste VERSION 0.3.0 LANGUAGES CXX)
 
 # RumpelKiste builds as a CLAP and as a VST3, for Linux and for Windows.
 #
@@ -20,9 +20,10 @@ if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
    set(CMAKE_BUILD_TYPE Release CACHE STRING "Build type" FORCE)
 endif()
 
-if(NOT CMAKE_SYSTEM_NAME STREQUAL "Linux" AND NOT CMAKE_SYSTEM_NAME STREQUAL "Windows")
+if(NOT CMAKE_SYSTEM_NAME MATCHES "^(Linux|Windows|WASI)$")
    message(FATAL_ERROR
-      "RumpelKiste builds for Linux and for Windows. Nothing in it is specific to "
+      "RumpelKiste builds for Linux and for Windows, and as a WCLAP for WebAssembly. "
+      "Nothing in it is specific to "
       "either beyond the window, which has a backend for both, so another platform "
       "is a matter of a third backend -- but it has never been built or run there, "
       "and a plugin nobody has run is worse than one that refuses to configure.")
@@ -86,6 +87,13 @@ add_custom_command(
    VERBATIM
 )
 add_custom_target(rumpelkiste_presets DEPENDS "${RUMPELKISTE_GENERATED_HEADER}")
+
+# WASI is the WCLAP, the plugin for browser hosts: two WebAssembly modules and
+# a page instead of a .clap. Everything it needs is in cmake/wclap.cmake.
+if(CMAKE_SYSTEM_NAME STREQUAL "WASI")
+   include(cmake/wclap.cmake)
+   return()
+endif()
 
 # ------------------------------------------------------------------- gui deps
 #

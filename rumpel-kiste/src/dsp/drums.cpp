@@ -1,5 +1,6 @@
 #include "drums.h"
 
+#include <algorithm>
 #include <cmath>
 
 #include "plugincore/dsp/fastmath.h"

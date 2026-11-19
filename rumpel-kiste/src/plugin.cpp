@@ -32,6 +32,21 @@
 #include "gui/gui.h"
 #endif
 
+// The WCLAP (WebAssembly) build: the page protocol, and the window's sizes for
+// the plugin that has no window of its own. See src/web/plugin_web.inc.
+#if defined(__wasm__)
+#include <functional>
+
+#include <clap/ext/draft/webview.h>
+
+#include "gui/gui.h"
+#include "web/protocol.h"
+#ifdef RUMPELKISTE_WITH_GUI
+#include "gui/webcanvas.h"
+#include "web/mirror.h"
+#endif
+#endif
+
 namespace rumpelkiste {
 
 namespace {
@@ -67,7 +82,10 @@ constexpr double kRimGateV1Min = 1.0, kRimGateV1Max = 20.0;
 
 } // namespace
 
-#ifdef RUMPELKISTE_WITH_GUI
+#if defined(RUMPELKISTE_WITH_GUI) && defined(__wasm__)
+class RumpelKistePlugin final : public GuiDelegate, public PatternAccess, public WindowHost,
+                                public WebMirror {
+#elif defined(RUMPELKISTE_WITH_GUI)
 class RumpelKistePlugin final : public GuiDelegate, public PatternAccess, public WindowHost {
 #else
 class RumpelKistePlugin : public PatternAccess {
@@ -468,6 +486,9 @@ private:
 
       plug->mParamsDirty.store(true, std::memory_order_release);
       plug->notifyParamValuesChanged();
+#if defined(__wasm__)
+      plug->webStateChanged();
+#endif
       return true;
    }
 
@@ -613,6 +634,9 @@ private:
          if (hostPreset && hostPreset->loaded)
             hostPreset->loaded(plug->mHost, locationKind, location, loadKey);
       }
+#if defined(__wasm__)
+      plug->webStateChanged();
+#endif
       return true;
    }
 
@@ -920,6 +944,9 @@ private:
       const int target = mLearnTarget.exchange(kNoteNone, std::memory_order_acq_rel);
       if (target != kNoteNone) {
          mNoteMap[key].store(static_cast<int8_t>(target), std::memory_order_relaxed);
+#if defined(__wasm__)
+         webStateChanged();
+#endif
          return true;
       }
       const int action = mNoteMap[key].load(std::memory_order_relaxed);
@@ -1194,9 +1221,13 @@ private:
          // The chain handles set every pattern when a host moves them -- an
          // automation lane, or a render asking for a chain -- but only when
          // they move, so a host resending a value does not flatten the bank.
-         if (isChainHandle(ev->param_id) && value != before)
+         if (isChainHandle(ev->param_id) && value != before) {
             setChainForAll(static_cast<int>(realValue(kParamChainMode)),
                            static_cast<int>(realValue(kParamChainRepeat)));
+#if defined(__wasm__)
+            webStateChanged();
+#endif
+         }
          if (ev->param_id == kParamMode)
             syncPlayMode();
          break;
@@ -1839,6 +1870,9 @@ private:
             return;
       }
       mTimerId = CLAP_INVALID_ID;
+#if !defined(__wasm__)
+      // (The editor module ticks the window from the page's animation frame;
+      // a WebAssembly build has no threads.)
       mGuiThreadRun.store(true, std::memory_order_release);
       mGuiThread = std::thread([this] {
          while (mGuiThreadRun.load(std::memory_order_acquire)) {
@@ -1847,14 +1881,17 @@ private:
             std::this_thread::sleep_for(std::chrono::milliseconds(33));
          }
       });
+#endif
    }
 
    void stopGuiClock() {
+#if !defined(__wasm__)
       if (mGuiThreadRun.exchange(false, std::memory_order_acq_rel)) {
          if (mGuiThread.joinable())
             mGuiThread.join();
          return;
       }
+#endif
       if (mHost && mTimerId != CLAP_INVALID_ID) {
          auto *timer = static_cast<const clap_host_timer_support_t *>(
             mHost->get_extension(mHost, CLAP_EXT_TIMER_SUPPORT));
@@ -1864,6 +1901,10 @@ private:
       mTimerId = CLAP_INVALID_ID;
    }
 #endif // RUMPELKISTE_WITH_GUI
+
+#if defined(__wasm__)
+#include "web/plugin_web.inc"
+#endif
 
    // ---------------------------------------------------------------- extensions
 
@@ -1902,6 +1943,13 @@ private:
          return &kGuiExt;
       if (std::strcmp(id, CLAP_EXT_TIMER_SUPPORT) == 0)
          return &kTimerExt;
+#endif
+#if defined(__wasm__) && defined(RUMPELKISTE_WITH_GUI)
+      if (std::strcmp(id, kWebMirrorExtension) == 0)
+         return static_cast<const WebMirror *>(this);
+#elif defined(__wasm__)
+      if (const void *ext = webExtension(id))
+         return ext;
 #endif
       return nullptr;
    }
@@ -1969,7 +2017,9 @@ private:
    std::vector<GuiPreset> mPresets;
    Gui *mGui = nullptr;
    clap_id mTimerId = CLAP_INVALID_ID;
+#if !defined(__wasm__)
    std::thread mGuiThread;
+#endif
    std::atomic<bool> mGuiThreadRun{false};
 #endif
 
