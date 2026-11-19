@@ -65,6 +65,8 @@ public:
 
     // Offscreen rendering for tests/screenshots.
     void renderTo(cairo_t* cr);
+    // The window backend, for a host that feeds it events itself (the WCLAP page).
+    NativeWindow& window() { return window_; }
 
     // WindowListener
     void onPaint(cairo_t* cr, int physW, int physH) override;

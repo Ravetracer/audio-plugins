@@ -7,6 +7,11 @@
 namespace aurum::gui {
 using NativeWindow = Win32Window;
 }
+#elif defined(__wasm__)
+#include "WebWindow.h"
+namespace aurum::gui {
+using NativeWindow = WebWindow;
+}
 #else
 #include "X11Window.h"
 namespace aurum::gui {

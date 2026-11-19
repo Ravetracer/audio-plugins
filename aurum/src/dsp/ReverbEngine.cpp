@@ -492,7 +492,7 @@ void ReverbEngine::maybeRequestDesign(const EngineParams& p, bool sync)
     lastTag_ = req.tag;
     samplesSinceRequest_ = 0;
 
-    if (sync || offline_)
+    if (sync || offline_ || !DecayDesigner::hasWorker())
     {
         designer_.compute(req, *syncSet_);
         applyCoeffs(*syncSet_);

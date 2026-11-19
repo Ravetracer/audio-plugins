@@ -6,6 +6,8 @@
 #include <vector>
 
 #include <clap/clap.h>
+#include <clap/ext/draft/param-hovered.h>
+#include <clap/ext/draft/webview.h>
 
 #include "Params.h"
 #include "PresetSession.h"
@@ -122,6 +124,9 @@ private:
     bool guiHide();
     void onTimer(clap_id id);
     void onFd(int fd, clap_posix_fd_flags_t flags);
+    // The WCLAP's page (clap.webview), only in the WebAssembly build.
+    bool webReceive(const void* data, uint32_t size);
+    void webSendStatus(uint32_t pageSerial);
 
     uint32_t notePortsCount(bool isInput) const { return isInput ? 1 : 0; }
     bool notePortsGet(uint32_t index, bool isInput, clap_note_port_info_t* info) const;
@@ -146,6 +151,14 @@ private:
     const clap_host_timer_support_t* hostTimer_ = nullptr;
     const clap_host_posix_fd_support_t* hostFd_ = nullptr;
     std::unique_ptr<gui::Editor> editor_;
+    // WCLAP page: its window size (logical pixels), what it was last sent.
+    const clap_host_webview_t* hostWebview_ = nullptr;
+    const clap_host_param_hovered_t* hostHovered_ = nullptr;
+    uint32_t webW_ = 1000, webH_ = 660;
+    uint32_t webSerial_ = 1;
+    std::vector<double> webSent_;
+    std::string webSentName_, webSentPath_;
+    std::vector<uint8_t> webOut_;
     clap_id timerId_ = CLAP_INVALID_ID;
     int registeredFd_ = -1;
 

@@ -92,12 +92,24 @@ inline void strokeRounded(cairo_t* cr, const Rect& r, float radius, const Color&
     cairo_stroke(cr);
 }
 
+#if defined(__wasm__)
+// The WebAssembly editor has no font configuration: Inter is embedded in the
+// bundle and opened through FreeType (gui/WebFonts.cpp).
+cairo_font_face_t* webFontFace(bool bold);
+void webFontOptions(cairo_t* cr);
+#endif
+
 inline void setFont(cairo_t* cr, float size, bool bold = false)
 {
     // Font faces are resolved once; selecting by name each time is slow.
+#if defined(__wasm__)
+    static cairo_font_face_t* faces[2] = {webFontFace(false), webFontFace(true)};
+    webFontOptions(cr);
+#else
     static cairo_font_face_t* faces[2] = {
         cairo_toy_font_face_create(theme::fontFamily, CAIRO_FONT_SLANT_NORMAL, CAIRO_FONT_WEIGHT_NORMAL),
         cairo_toy_font_face_create(theme::fontFamily, CAIRO_FONT_SLANT_NORMAL, CAIRO_FONT_WEIGHT_BOLD)};
+#endif
     cairo_set_font_face(cr, faces[bold ? 1 : 0]);
     cairo_set_font_size(cr, size);
 }

@@ -2,14 +2,49 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdio>
 #include <cstring>
 #include <filesystem>
 #include <string>
 
+#if defined(__SSE__)
 #include <xmmintrin.h>
+#endif
 
 #include "aurum.h"
+// The native window exists for Linux and Windows; a WebAssembly build (WCLAP)
+// has none and is driven by the host's generic parameter view.
+#ifndef AURUM_WITH_GUI
+#if defined(__wasm__)
+#define AURUM_WITH_GUI 0
+#else
+#define AURUM_WITH_GUI 1
+#endif
+#endif
+
+// The WCLAP has no native window; its editor runs in the page (ui.wasm) and
+// talks to this module through clap.webview (plugin/WebProtocol.h).
+#if !AURUM_WITH_GUI && defined(__wasm__)
+#define AURUM_WEBVIEW 1
+#include "WebProtocol.h"
+#else
+#define AURUM_WEBVIEW 0
+#endif
+
+#if AURUM_WITH_GUI
 #include "gui/Editor.h"
+#else
+// A build without the native window (WebAssembly): editor_ stays null, so
+// this is only here for the calls that check it.
+namespace aurum::gui {
+class Editor
+{
+public:
+    void notify(const std::string&) {}
+    void resetHistory() {}
+};
+} // namespace aurum::gui
+#endif
 #include "state/AudioFile.h"
 #include "state/IrImport.h"
 #include "state/PresetManager.h"
@@ -40,7 +75,9 @@ const clap_plugin_descriptor_t kDescriptor = {
 AurumPlugin* self(const clap_plugin_t* p) { return static_cast<AurumPlugin*>(p->plugin_data); }
 
 // The one window API each platform's editor is written against.
-#if defined(_WIN32)
+#if AURUM_WEBVIEW
+constexpr const char* kWindowApi = CLAP_WINDOW_API_WEBVIEW;
+#elif defined(_WIN32)
 constexpr const char* kWindowApi = CLAP_WINDOW_API_WIN32;
 #else
 constexpr const char* kWindowApi = CLAP_WINDOW_API_X11;
@@ -54,13 +91,21 @@ struct PortsConfig
 };
 constexpr PortsConfig kConfigs[] = {{"Stereo", 2, 2}, {"Mono", 1, 1}, {"Mono to Stereo", 1, 2}};
 
-// Denormals flush-to-zero for the duration of a process call.
+// Denormals flush-to-zero for the duration of a process call. WebAssembly
+// has no control register for it (and its SIMD may flush anyway).
+#if defined(__SSE__)
 struct ScopedFtz
 {
     unsigned int saved;
     ScopedFtz() : saved(_mm_getcsr()) { _mm_setcsr(saved | 0x8040); }
     ~ScopedFtz() { _mm_setcsr(saved); }
 };
+#else
+struct ScopedFtz
+{
+    ScopedFtz() {}
+};
+#endif
 
 } // namespace
 
@@ -152,6 +197,25 @@ struct PluginGlue
     static void guiSuggestTitle(const clap_plugin_t*, const char*) {}
     static bool guiShow(const clap_plugin_t* p) { return self(p)->guiShow(); }
     static bool guiHide(const clap_plugin_t* p) { return self(p)->guiHide(); }
+#if AURUM_WEBVIEW
+    static int32_t webviewGetUri(const clap_plugin_t*, char* uri, uint32_t capacity)
+    {
+        static const char page[] = "/index.html";
+        if (uri && capacity > 0)
+            std::snprintf(uri, capacity, "%s", page);
+        return static_cast<int32_t>(sizeof(page));
+    }
+    // The host serves the bundle's files (index.html, ui.wasm, fonts) itself.
+    static bool webviewGetResource(const clap_plugin_t*, const char*, char*, uint32_t, const clap_ostream_t*)
+    {
+        return false;
+    }
+    static bool webviewReceive(const clap_plugin_t* p, const void* data, uint32_t size)
+    {
+        return self(p)->webReceive(data, size);
+    }
+    static const clap_plugin_webview_t webview;
+#endif
     static void timerTick(const clap_plugin_t* p, clap_id id) { self(p)->onTimer(id); }
     static void fdReady(const clap_plugin_t* p, int fd, clap_posix_fd_flags_t flags) { self(p)->onFd(fd, flags); }
 
@@ -178,6 +242,9 @@ const clap_plugin_gui_t PluginGlue::gui = {guiApiSupported, guiPreferredApi, gui
                                            guiAdjustSize,   guiSetSize,      guiSetParent,   guiSetTransient,
                                            guiSuggestTitle, guiShow,         guiHide};
 const clap_plugin_timer_support_t PluginGlue::timer = {timerTick};
+#if AURUM_WEBVIEW
+const clap_plugin_webview_t PluginGlue::webview = {webviewGetUri, webviewGetResource, webviewReceive};
+#endif
 const clap_plugin_note_ports_t PluginGlue::notePorts = {notePortsCount, notePortsGet};
 const clap_plugin_posix_fd_support_t PluginGlue::posixFd = {fdReady};
 const clap_plugin_audio_ports_t PluginGlue::audioPorts = {portsCount, portsGet};
@@ -291,6 +358,8 @@ bool AurumPlugin::init()
     hostGui_ = static_cast<const clap_host_gui_t*>(host_->get_extension(host_, CLAP_EXT_GUI));
     hostTimer_ = static_cast<const clap_host_timer_support_t*>(host_->get_extension(host_, CLAP_EXT_TIMER_SUPPORT));
     hostFd_ = static_cast<const clap_host_posix_fd_support_t*>(host_->get_extension(host_, CLAP_EXT_POSIX_FD_SUPPORT));
+    hostWebview_ = static_cast<const clap_host_webview_t*>(host_->get_extension(host_, CLAP_EXT_WEBVIEW));
+    hostHovered_ = static_cast<const clap_host_param_hovered_t*>(host_->get_extension(host_, CLAP_EXT_PARAM_HOVERED));
     return true;
 }
 
@@ -347,14 +416,22 @@ const void* AurumPlugin::getExtension(const char* id)
         return &PluginGlue::tail;
     if (!std::strcmp(id, CLAP_EXT_RENDER))
         return &PluginGlue::render;
+#if AURUM_WITH_GUI || AURUM_WEBVIEW
     if (!std::strcmp(id, CLAP_EXT_GUI))
         return &PluginGlue::gui;
+#endif
+#if AURUM_WEBVIEW
+    if (!std::strcmp(id, CLAP_EXT_WEBVIEW))
+        return &PluginGlue::webview;
+#endif
     if (!std::strcmp(id, CLAP_EXT_NOTE_PORTS))
         return &PluginGlue::notePorts;
+#if AURUM_WITH_GUI
     if (!std::strcmp(id, CLAP_EXT_TIMER_SUPPORT))
         return &PluginGlue::timer;
     if (!std::strcmp(id, CLAP_EXT_POSIX_FD_SUPPORT))
         return &PluginGlue::posixFd;
+#endif
     return nullptr;
 }
 
@@ -870,6 +947,7 @@ clap_process_status AurumPlugin::process(const clap_process_t* process)
 
 // ---------------------------------------------------------------- GUI
 
+#if AURUM_WITH_GUI
 bool AurumPlugin::guiCreate()
 {
     if (editor_)
@@ -983,6 +1061,195 @@ void AurumPlugin::onFd(int fd, clap_posix_fd_flags_t)
     if (editor_ && fd == registeredFd_)
         editor_->onFd();
 }
+
+#elif AURUM_WEBVIEW
+
+// The window is the host's webview showing the bundle's page; sizes are
+// logical pixels (no set_scale with the webview API). The page scales the
+// editor to whatever it gets, down to half size.
+bool AurumPlugin::guiCreate() { return true; }
+void AurumPlugin::guiDestroy() {}
+bool AurumPlugin::guiSetScale(double) { return false; }
+bool AurumPlugin::guiGetSize(uint32_t* w, uint32_t* h)
+{
+    *w = webW_;
+    *h = webH_;
+    return true;
+}
+bool AurumPlugin::guiAdjustSize(uint32_t* w, uint32_t* h)
+{
+    *w = std::clamp<uint32_t>(*w, 430, 4000);
+    *h = std::clamp<uint32_t>(*h, 290, 3000);
+    return true;
+}
+bool AurumPlugin::guiSetSize(uint32_t w, uint32_t h)
+{
+    webW_ = w;
+    webH_ = h;
+    return true;
+}
+bool AurumPlugin::guiSetParent(const clap_window_t*) { return true; }
+bool AurumPlugin::guiShow() { return true; }
+bool AurumPlugin::guiHide() { return true; }
+void AurumPlugin::onTimer(clap_id) {}
+void AurumPlugin::onFd(int, clap_posix_fd_flags_t) {}
+
+// ---------------------------------------------------------------- page
+
+void AurumPlugin::webSendStatus(uint32_t pageSerial)
+{
+    if (!hostWebview_)
+        return;
+    const int n = table_.count();
+    // Something new since the last answer: a new serial, and the values go
+    // to every page that has not seen it (window and device panel alike).
+    bool changed = static_cast<int>(webSent_.size()) != n || session_.name() != webSentName_ ||
+                   session_.path() != webSentPath_;
+    for (int i = 0; i < n && !changed; ++i)
+        changed = webSent_[static_cast<size_t>(i)] != paramValue(i);
+    if (changed)
+    {
+        webSent_.resize(static_cast<size_t>(n));
+        for (int i = 0; i < n; ++i)
+            webSent_[static_cast<size_t>(i)] = paramValue(i);
+        webSentName_ = session_.name();
+        webSentPath_ = session_.path();
+        if (++webSerial_ == 0)
+            webSerial_ = 1;
+    }
+    const bool withValues = pageSerial != webSerial_;
+    webOut_.assign(web::kStatusHeader + (withValues ? 8u * n + 4u + webSentName_.size() + webSentPath_.size() : 0u),
+                   0);
+    uint8_t* o = webOut_.data();
+    o[0] = web::PluginStatus;
+    o[1] = withValues ? 1 : 0;
+    const uint16_t count = static_cast<uint16_t>(n);
+    std::memcpy(o + 2, &count, 2);
+    std::memcpy(o + 4, &webSerial_, 4);
+    std::memcpy(o + 8, &sampleRate_, 8);
+    std::memcpy(o + 16, &tempo_, 8);
+    if (withValues)
+    {
+        std::memcpy(o + web::kStatusHeader, webSent_.data(), 8u * n);
+        size_t pos = web::kStatusHeader + 8u * n;
+        pos += web::putString(o + pos, webSentName_);
+        web::putString(o + pos, webSentPath_);
+    }
+    hostWebview_->send(host_, webOut_.data(), static_cast<uint32_t>(webOut_.size()));
+}
+
+bool AurumPlugin::webReceive(const void* data, uint32_t size)
+{
+    const auto* b = static_cast<const uint8_t*>(data);
+    if (size < 4)
+        return false;
+    auto u32 = [&](size_t at) {
+        uint32_t v = 0;
+        if (at + 4 <= size)
+            std::memcpy(&v, b + at, 4);
+        return v;
+    };
+    const int n = table_.count();
+    switch (b[0])
+    {
+    case web::PagePoll:
+        webSendStatus(u32(4));
+        return true;
+    case web::PageBegin:
+    case web::PageSet:
+    case web::PageEnd:
+    {
+        const int index = static_cast<int>(u32(4));
+        if (size < 8 || index < 0 || index >= n)
+            return false;
+        if (b[0] == web::PageBegin)
+            beginEdit(index);
+        else if (b[0] == web::PageEnd)
+        {
+            endEdit(index);
+            if (hostState_)
+                hostState_->mark_dirty(host_); // one undo step per drag
+        }
+        else
+        {
+            if (size < 16)
+                return false;
+            double v;
+            std::memcpy(&v, b + 8, 8);
+            performEdit(index, v);
+        }
+        return true;
+    }
+    case web::PageApply:
+    {
+        const uint32_t count = u32(4);
+        if (count != static_cast<uint32_t>(n) || size < 8 + 8u * count)
+            return false;
+        std::vector<double> values(count);
+        std::memcpy(values.data(), b + 8, 8u * count);
+        applyValues(values);
+        if (hostState_)
+            hostState_->mark_dirty(host_);
+        return true;
+    }
+    case web::PagePreset:
+    {
+        size_t pos = 4;
+        std::string name, path;
+        if (!web::getString(b, size, pos, name) || !web::getString(b, size, pos, path))
+            return false;
+        session_.restore(name, path, currentValues());
+        if (hostState_)
+            hostState_->mark_dirty(host_);
+        return true;
+    }
+    case web::PageResize:
+    {
+        uint32_t w = u32(4), h = u32(8);
+        if (!w || !h)
+            return false;
+        guiAdjustSize(&w, &h);
+        if (hostGui_ && hostGui_->request_resize(host_, w, h))
+        {
+            webW_ = w;
+            webH_ = h;
+        }
+        return true;
+    }
+    case web::PageHover:
+    {
+        if (!hostHovered_)
+            return false;
+        const int index = static_cast<int>(u32(4));
+        hostHovered_->update(host_, index >= 0 && index < n ? table_.def(index).id : CLAP_INVALID_ID);
+        return true;
+    }
+    default:
+        return false;
+    }
+}
+
+#else
+
+// No window in this build; the gui extension is not offered.
+bool AurumPlugin::guiCreate() { return false; }
+void AurumPlugin::guiDestroy() {}
+bool AurumPlugin::guiSetScale(double) { return false; }
+bool AurumPlugin::guiGetSize(uint32_t*, uint32_t*) { return false; }
+bool AurumPlugin::guiAdjustSize(uint32_t*, uint32_t*) { return false; }
+bool AurumPlugin::guiSetSize(uint32_t, uint32_t) { return false; }
+bool AurumPlugin::guiSetParent(const clap_window_t*) { return false; }
+bool AurumPlugin::guiShow() { return false; }
+bool AurumPlugin::guiHide() { return false; }
+void AurumPlugin::onTimer(clap_id) {}
+void AurumPlugin::onFd(int, clap_posix_fd_flags_t) {}
+
+#endif
+
+#if !AURUM_WEBVIEW
+bool AurumPlugin::webReceive(const void*, uint32_t) { return false; }
+void AurumPlugin::webSendStatus(uint32_t) {}
+#endif
 
 // ---------------------------------------------------------------- factory
 

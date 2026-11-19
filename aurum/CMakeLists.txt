@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.21)
-project(Aurum VERSION 0.3.1 LANGUAGES C CXX)
+project(Aurum VERSION 0.4.0 LANGUAGES C CXX)
 
 # Aurum builds as a CLAP and, through the clap-wrapper, as a VST3, for Linux
 # (X11 + Cairo) and for Windows (win32 + Cairo, cross-compiled with mingw-w64).
@@ -16,7 +16,11 @@ if (NOT CMAKE_BUILD_TYPE)
     set(CMAKE_BUILD_TYPE Release)
 endif()
 
-if (NOT CMAKE_SYSTEM_NAME STREQUAL "Linux" AND NOT CMAKE_SYSTEM_NAME STREQUAL "Windows")
+# WASI is the WCLAP build (CLAP compiled to WebAssembly, see cmake/wclap.cmake):
+# the engine and the plugin without the window.
+if (CMAKE_SYSTEM_NAME STREQUAL "WASI")
+    set(AURUM_WASM ON)
+elseif (NOT CMAKE_SYSTEM_NAME STREQUAL "Linux" AND NOT CMAKE_SYSTEM_NAME STREQUAL "Windows")
     message(FATAL_ERROR "Aurum builds for Linux and for Windows; the window has a backend for those two only.")
 endif()
 
@@ -34,7 +38,14 @@ endif()
 
 add_compile_options(-Wall -Wextra -Wno-unused-parameter -Wno-missing-field-initializers)
 # x86-64-v3 (AVX2/FMA) keeps the attenuation banks vectorised.
-set(AURUM_ARCH_FLAGS "-march=x86-64-v3" CACHE STRING "Target architecture flags")
+# WebAssembly gets its 128-bit SIMD instead.
+if (AURUM_WASM)
+    set(AURUM_ARCH_FLAGS "-msimd128" CACHE STRING "Target architecture flags")
+    # wasi-sdk's libc++ has no exception runtime; Aurum catches nothing.
+    add_compile_options(-fno-exceptions)
+else()
+    set(AURUM_ARCH_FLAGS "-march=x86-64-v3" CACHE STRING "Target architecture flags")
+endif()
 add_compile_options(${AURUM_ARCH_FLAGS} -fno-math-errno)
 
 # On Windows every binary links the runtime in, so nothing needs MinGW DLLs
@@ -61,6 +72,11 @@ add_library(aurum-dsp STATIC
 target_include_directories(aurum-dsp PUBLIC src)
 # Lets src/aurum.h static_assert that kPluginVersion matches project().
 target_compile_definitions(aurum-dsp PUBLIC AURUM_CMAKE_VERSION="${PROJECT_VERSION}")
+if (AURUM_WASM)
+    include(cmake/wclap.cmake)
+    return()
+endif()
+
 find_package(Threads REQUIRED)
 target_link_libraries(aurum-dsp PUBLIC Threads::Threads)
 

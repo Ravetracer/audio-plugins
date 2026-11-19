@@ -1,6 +1,76 @@
 #include "FileDialog.h"
 
-#if defined(_WIN32)
+#if defined(__wasm__)
+
+// The page opens its file picker (wclap.file_dialog), copies what the user
+// picks into the editor's file system under /upload, and answers through
+// wclap_ui_dialog_done() in web/UiMain.cpp.
+namespace {
+struct WebDialogs
+{
+    int next = 1;
+    int pending = 0;
+    bool done = false;
+    std::string result;
+};
+WebDialogs& webDialogs()
+{
+    static WebDialogs d;
+    return d;
+}
+} // namespace
+
+extern "C" {
+__attribute__((import_module("wclap"), import_name("file_dialog"))) void wclapJsFileDialog(int id, int mode,
+                                                                                            const char* filter,
+                                                                                            int filterLen);
+__attribute__((export_name("wclap_ui_dialog_done"))) void wclapUiDialogDone(int id, const char* path, int len)
+{
+    WebDialogs& d = webDialogs();
+    if (id != d.pending)
+        return;
+    d.done = true;
+    d.result.assign(path ? path : "", path ? static_cast<size_t>(len) : 0);
+}
+}
+
+namespace aurum::gui {
+
+FileDialog::~FileDialog()
+{
+    if (webDialogs().pending == id_)
+        webDialogs().pending = 0;
+}
+
+bool FileDialog::available() { return true; }
+
+bool FileDialog::running() const { return id_ != 0 && webDialogs().pending == id_ && !webDialogs().done; }
+
+bool FileDialog::start(Mode mode, const std::string&, const std::string& filter, const std::string&)
+{
+    WebDialogs& d = webDialogs();
+    id_ = d.next++;
+    d.pending = id_;
+    d.done = false;
+    d.result.clear();
+    wclapJsFileDialog(id_, static_cast<int>(mode), filter.data(), static_cast<int>(filter.size()));
+    return true;
+}
+
+bool FileDialog::poll(std::string& result)
+{
+    WebDialogs& d = webDialogs();
+    if (d.pending != id_ || !d.done)
+        return false;
+    result = d.result;
+    d.pending = 0;
+    id_ = 0;
+    return true;
+}
+
+} // namespace aurum::gui
+
+#elif defined(_WIN32)
 
 #include <windows.h>
 #include <commdlg.h>

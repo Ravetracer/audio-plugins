@@ -3,8 +3,16 @@
 #include <atomic>
 #include <cstdint>
 #include <memory>
+
+// A WebAssembly build without wasi-threads has no std::thread: there the
+// designer has no worker and every request is computed synchronously.
+#if defined(__wasm__) && !defined(_REENTRANT)
+#define AURUM_DECAY_WORKER 0
+#else
+#define AURUM_DECAY_WORKER 1
 #include <semaphore>
 #include <thread>
+#endif
 
 #include "DecayModel.h"
 #include "Geq.h"
@@ -74,6 +82,8 @@ public:
     void prepare(double sampleRate);
     void startWorker();
     void stopWorker();
+    // False when built without threads: post() must not be used then.
+    static constexpr bool hasWorker() { return AURUM_DECAY_WORKER != 0; }
 
     // Synchronous computation on the calling (audio) thread. Uses its own
     // designer state, so it may run while the worker is busy.
@@ -100,9 +110,11 @@ private:
     double fs_ = 48000.0;
     std::unique_ptr<TripleBuffer<DecayRequest>> requests_;
     std::unique_ptr<TripleBuffer<DecayCoeffSet>> results_;
+#if AURUM_DECAY_WORKER
     std::binary_semaphore wake_{0};
     std::atomic<bool> running_{false};
     std::thread thread_;
+#endif
 };
 
 } // namespace aurum::dsp

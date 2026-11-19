@@ -21,6 +21,7 @@ void DecayDesigner::prepare(double sampleRate)
     worker_.geq.prepare(sampleRate);
 }
 
+#if AURUM_DECAY_WORKER
 void DecayDesigner::startWorker()
 {
     if (running_.exchange(true))
@@ -65,6 +66,13 @@ void DecayDesigner::workerLoop()
         results_->publish();
     }
 }
+#else
+void DecayDesigner::startWorker() {}
+void DecayDesigner::stopWorker() {}
+void DecayDesigner::post(const DecayRequest&) {}
+const DecayCoeffSet* DecayDesigner::poll() { return nullptr; }
+void DecayDesigner::workerLoop() {}
+#endif
 
 void DecayDesigner::computeWith(Context& ctx, const DecayRequest& req, DecayCoeffSet& out)
 {
