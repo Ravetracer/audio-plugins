@@ -1,7 +1,8 @@
 # Shapeau — status
 
-Version 0.5.0. Linux and Windows, CLAP and VST3, and a WCLAP for browser hosts
-(openDAW). 83 parameters, 10 factory presets.
+Version 0.6.0. Linux, Windows and macOS, CLAP and VST3, an Audio Unit on
+macOS, and a WCLAP for browser hosts (openDAW). 83 parameters, 10 factory
+presets.
 
 Builds clean on Linux and cross-built for Windows in the repository's build
 container (`./devbox.sh`). `shapeau-render --selftest` passes all 58 checks on
@@ -12,6 +13,45 @@ nothing has been listened to -- the user tests on another machine.
 `docs/PLAN.md` is the plan: four phases towards the shape-based effects rack it
 is modelled on. Phase 1 was 0.3.0; 0.4.0 pulls the triggers forward from
 phase 3.
+
+## 0.6.0 -- macOS
+
+- **CLAP, VST3 and Audio Unit for macOS**, universal (arm64 and x86_64),
+  macOS 10.15 or later, built only by `.github/workflows/shapeau-macos.yml` on
+  GitHub's runners: the SDK may only be used on Apple hardware, so nothing
+  macOS is built or run on the development machine. Signed ad hoc, not
+  notarized; the archive's INSTALL.txt explains `xattr -dr
+  com.apple.quarantine`. The workflow is SäureKiste's, with the same SDK
+  versions, both `shared/patches/` applied to the clap-wrapper and the shared
+  Cairo cache.
+- **The window's macOS backend** is `src/gui/cocoaview.{h,mm}`, copied from
+  SäureKiste's without its file drag: an NSView child of the host's view,
+  its class registered at run time under a name carrying the module's load
+  address (Objective-C classes share one namespace per process), compiled
+  without ARC. `window.cpp` stays C++ and draws into its image surface at
+  `mScale * mBacking`, `mBacking` being the Retina factor; the view blits it
+  in `drawRect:`. The keyboard is taken only while the save field or a value
+  entry is open, so the host keeps its shortcuts. Typed text is ASCII only.
+  `set_scale` returns false on macOS (the cocoa API works in logical sizes);
+  host resizing still zooms. Without a host timer the GUI clock is a
+  CFRunLoopTimer on the main run loop, not a thread. The shared window is no
+  longer compiled into `plugincore::shared` (`PLUGINCORE_SHARED_WINDOW OFF`):
+  the fork replaces it, and it has no macOS backend.
+- **The Audio Unit is a music effect** (`aumf`, subtype `Shpu`, manufacturer
+  `Rvtr`, permanent like the plugin id), not an `aufx`: an effect that also
+  receives MIDI, which the MIDI trigger needs. The clap-wrapper makes one AU
+  input bus per CLAP input port, so the sidechain is the second input bus; an
+  unconnected one is handed to the plugin as silence, which never triggers.
+  The main-bus patch keeps the advertised channel layout at stereo in, stereo
+  out.
+- **Verified here:** the Linux build renders every preset bit-identically to
+  0.5.0 at 44.1, 48 and 96 kHz, `--list` is identical, the self-test passes 58
+  checks, the X11 window is pixel-identical outside the version label; the
+  Windows cross-build passes the self-test under wine and imports only system
+  DLLs; the WCLAP builds and its self-test passes. The macOS branches of
+  `window.cpp` and `plugin.cpp` were syntax-checked with g++ and clang on
+  Linux with `__APPLE__` forced. The Objective-C++ is checked only by the
+  workflow.
 
 ## 0.5.0 -- the WCLAP
 
@@ -226,6 +266,11 @@ The filter's resonance maps to the shared SVF's `k` = 2 … 0.02, i.e. Q 0.5 to
 deliberate: the filter drive in front of it is meant to be able to excite it.
 
 ## What is not verified
+
+- **No Mac host has loaded it.** The workflow builds the three formats, runs
+  the self-test against the `.clap` on arm64 and under Rosetta and runs
+  `auval`; nobody has opened the Cocoa editor, and whether Logic routes a
+  sidechain and MIDI into the Audio Unit is untested.
 
 - **openDAW has not loaded the WCLAP.** It has run in node and in
   open-webclap's test host (a headless browser), which runs the module in an

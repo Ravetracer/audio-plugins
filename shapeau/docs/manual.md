@@ -1,12 +1,12 @@
 ---
 accent: #37D6E0
 tagline: Draw the shape, hear it on the beat
-subtitle: CLAP and VST3 effect for Linux and Windows
+subtitle: CLAP, VST3 and AU effect for Linux, Windows and macOS
 ---
 
 # {{PLUGIN}} — manual
 
-*A multiband drawing rack. Linux and Windows, CLAP and VST3.*
+*A multiband drawing rack. Linux, Windows and macOS; CLAP and VST3, and an Audio Unit on macOS.*
 
 Version {{VERSION}}
 
@@ -437,8 +437,8 @@ preset.
 
 Factory presets are compiled into the plugin, so the `.clap` is all that has to
 be installed. User presets are text files in the plugin's own folder
-(`~/.clap/Shapeau/presets` on Linux, the same layout under `%APPDATA%` on
-Windows) and are also offered to the host through CLAP's preset discovery, so
+(`~/.config/Shapeau/presets` on Linux, `%APPDATA%\Shapeau\presets` on Windows,
+`~/Library/Application Support/Shapeau/presets` on macOS) and are also offered to the host through CLAP's preset discovery, so
 they show up in the DAW's own preset menu next to the factory ones.
 
 A preset stores each shape as one line per stage and band, in normalised time
@@ -455,7 +455,10 @@ curve drawn by hand survives a save, a reload and a different install.
 
 ## 9. Notes
 
-- **Formats.** CLAP (1.2) and VST3, 64-bit, for Linux and Windows.
+- **Formats.** CLAP (1.2) and VST3, 64-bit, for Linux, Windows and macOS
+  (10.15 or later, Apple Silicon and Intel), and an Audio Unit on macOS. The
+  Audio Unit is a music effect, so a host that offers MIDI to effects can play
+  the MIDI trigger, and its second input is the sidechain.
 - **Channels.** Stereo in, stereo out, plus a stereo sidechain input that is
   listened to and drawn but never heard, and a note input for the MIDI trigger.
   The band split, every stage except pan and width, and the drive are applied

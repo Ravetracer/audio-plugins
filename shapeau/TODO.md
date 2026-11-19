@@ -40,7 +40,16 @@ The sidechain port and the note input have not been routed by any DAW: check
 that each host offers the sidechain (in the VST3 as the clap-wrapper's aux
 bus) and delivers notes to an effect.
 
-## 4. The WCLAP in openDAW
+## 4. macOS in a DAW
+
+Built by the GitHub workflow (CLAP, VST3, AU), self-tested on arm64 and under
+Rosetta and validated with `auval`, but no Mac host has loaded it and the Cocoa
+editor has never been seen. To check there: the editor at Retina scale, a
+shape drag, typing into the save field and a value entry (the keyboard is
+taken only while a field is open), host resizing, Logic offering the sidechain
+and MIDI to the Audio Unit.
+
+## 5. The WCLAP in openDAW
 
 Built and tested in node and in open-webclap's test host in a headless
 browser; openDAW itself has not loaded it. To check there: the window's size
@@ -53,14 +62,14 @@ and `clap.param-hovered` -- which hands right-click, double-click and the
 wheel over the hovered knob to openDAW, so it has to wait for a decision on
 the desktop gestures that use them.
 
-## 5. Features
+## 6. Features
 
 The features are planned in `docs/PLAN.md`, in four phases, and this list is
 no longer where they are tracked. Phase 2 (editing tools, undo, wave presets)
 is next.
 
 
-## 6. Release material
+## 7. Release material
 
 - **Demo renders.** `presets/demo-descriptions.txt` is written, and
   `shared/tools/make-demos.sh shapeau` has not been run yet. It needs ffmpeg

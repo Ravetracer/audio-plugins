@@ -1,7 +1,7 @@
 # Shapeau
 
-A multiband drawing rack for Linux and Windows, as a native **CLAP** plugin and
-a VST3.
+A multiband drawing rack for Linux, Windows and macOS, as a native **CLAP**
+plugin and a VST3, plus an Audio Unit on macOS.
 
 A chain of effects -- **volume**, **filter**, **drive**, **crush**, **time**,
 **width**, **pan** -- each driven by a shape you draw rather than a knob you
@@ -86,6 +86,15 @@ Needs a CLAP SDK checkout at `../CLAP/clap` (or `-DCLAP_INCLUDE_DIR=`), and for
 the window `cairo` and `x11` development headers — without them it builds and
 runs headless rather than failing. `-DSHAPEAU_BUILD_VST3=ON` adds the VST3
 through `CLAP/clap-wrapper`.
+
+**macOS** (0.6.0) is built only by `.github/workflows/shapeau-macos.yml` on
+GitHub's macOS runners: CLAP, VST3 and an Audio Unit, universal (arm64 and
+x86_64), macOS 10.15 or later, signed ad hoc and not notarized. The window's
+backend is `src/gui/cocoaview.{h,mm}`, after SäureKiste's. The Audio Unit is a
+music effect (`aumf`, subtype `Shpu`, manufacturer `Rvtr`), so it receives MIDI
+for the MIDI trigger; the sidechain is its second input bus. The workflow runs
+the self-test against the built `.clap` on arm64 and under Rosetta, and
+`auval -v aumf Shpu Rvtr`.
 
 The self-test is part of `install.sh` and can be run alone:
 
