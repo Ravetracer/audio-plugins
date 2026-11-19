@@ -57,10 +57,10 @@ audio-plugins/
 | # | Plugin | Folder | Status | Platforms | Formats | What it is |
 |---|--------|--------|--------|-----------|---------|------------|
 | 1 | **SäureKiste** | `saeure-kiste/` | 0.19.0 | Linux, Windows, macOS, web | CLAP, VST3, AU (macOS), WCLAP | a Roland TB-303 model, from the 1982 service notes, plus Robin Whittle's Devil Fish modification |
-| 2 | **RumpelKiste** | `rumpel-kiste/` | 0.3.0 | Linux, Windows, web | CLAP, VST3, WCLAP | a Roland TR-909 model, from the 1984 service notes, with SäureKiste's sequencer and drive stage |
-| 3 | **Aurum** | `aurum/` | 0.4.0 | Linux, Windows, web | CLAP, VST3, WCLAP | a clean-room algorithmic reverb (FDN, allpass ring, plate) with a per-frequency decay contour; own DSP and GUI, see *Aurum* below |
-| 4 | **Substrike** | `substrike/` | 1.2.0 | Linux, Windows, web | CLAP, VST3, WCLAP | a layered kick drum designer for every style; standalone like Aurum, see *Substrike* below |
-| 5 | **Shapeau** | `shapeau/` | 0.5.0 | Linux, Windows, web | CLAP, VST3, WCLAP | a multiband drawing rack: a reorderable chain of shape-driven effects per band, beat-synced or triggered by MIDI or a sidechain hit, with the audio drawn behind the shape; see *Shapeau* below |
+| 2 | **RumpelKiste** | `rumpel-kiste/` | 0.4.0 | Linux, Windows, macOS, web | CLAP, VST3, AU (macOS), WCLAP | a Roland TR-909 model, from the 1984 service notes, with SäureKiste's sequencer and drive stage |
+| 3 | **Aurum** | `aurum/` | 0.5.0 | Linux, Windows, macOS, web | CLAP, VST3, AU (macOS), WCLAP | a clean-room algorithmic reverb (FDN, allpass ring, plate) with a per-frequency decay contour; own DSP and GUI, see *Aurum* below |
+| 4 | **Substrike** | `substrike/` | 1.3.0 | Linux, Windows, macOS, web | CLAP, VST3, AU (macOS), WCLAP | a layered kick drum designer for every style; standalone like Aurum, see *Substrike* below |
+| 5 | **Shapeau** | `shapeau/` | 0.6.0 | Linux, Windows, macOS, web | CLAP, VST3, AU (macOS), WCLAP | a multiband drawing rack: a reorderable chain of shape-driven effects per band, beat-synced or triggered by MIDI or a sidechain hit, with the audio drawn behind the shape; see *Shapeau* below |
 | 6 | **ReSIDent** | `resident/` | 1.2.0 | Linux, Windows, macOS, web | CLAP, VST3, AU (macOS), WCLAP | a Commodore 64 running the original C64 MIDI programs, played from the DAW through an emulated MIDI cartridge, with up to eight SIDs on reSIDfp or the light SIDLite engine; GPL, standalone, see *ReSIDent* below |
 
 Naming follows the plugin, not a pattern: the CMake project, the installed
@@ -924,11 +924,47 @@ only the GitHub workflows use it.
 
 ### macOS builds
 
-Two plugins build for macOS, each through its own workflow on GitHub's macOS
-runners (`.github/workflows/<name>-macos.yml`): ReSIDent (see *ReSIDent*) and
-SäureKiste (0.18.0, `saeurekiste-macos.yml`). Nothing macOS can be built or
-run on the development machine. Lessons both workflows carry, so a third
-plugin starts from one of them rather than from scratch:
+Every plugin builds for macOS, each through its own workflow on GitHub's
+macOS runners (`.github/workflows/<name>-macos.yml`): ReSIDent (1.1.0, see
+*ReSIDent*), SäureKiste (0.18.0), RumpelKiste (0.4.0), Shapeau (0.6.0), Aurum
+(0.5.0) and Substrike (1.3.0). Nothing macOS can be built or run on the
+development machine. Each workflow attaches `<Name>-<version>-macOS.zip` to
+the plugin's release when one tagged `<name>-v*` is published.
+
+Audio Unit codes, manufacturer `Rvtr` for all, permanent like the plugin ids:
+
+| Plugin | Type | Subtype |
+|---|---|---|
+| SäureKiste | `aumu` | `Saek` |
+| RumpelKiste | `aumu` | `Rmpl` |
+| Aurum | `aumf` | `Aurm` |
+| Substrike | `aumu` | `Sbst` |
+| Shapeau | `aumf` | `Shpu` |
+| ReSIDent | `aumu` | `Rsid` |
+
+Aurum and Shapeau are music effects (`aumf`) rather than plain effects
+(`aufx`): AU hosts send a plain effect no MIDI, and both take MIDI (MIDI learn,
+note triggers). clap-wrapper 0.16.0 has no `aumf` case and builds its
+music-device class for it with a warning, which is the right class.
+
+How the ports are related: RumpelKiste's Cocoa view is a copy of SäureKiste's
+(`cocoaview.mm`, `filedialog_mac.mm`), Shapeau's an adaptation of it for its
+window fork (no drag-out); Aurum's and Substrike's are ReSIDent's
+`CocoaWindow.mm` and `FileDialogMac.mm` (Substrike's hit export is an
+`NSDraggingSession` that sends the editor a mouse-up when it ends). A fix in
+one of them has to be ported by hand to its relatives. The x86_64 half of
+every universal build is x86-64-v2 (no AVX2/FMA: older Intel Macs and Rosetta
+before macOS 15), arm64 flushes denormals through FPCR. Apple's libc++ has no
+`std::binary_semaphore`, `counting_semaphore` or `atomic::wait` before macOS
+11, so with the 10.15 target Aurum uses a dispatch semaphore there.
+
+GitHub's free macOS runners are few: with several macOS workflows queued at
+once, a job can wait 15 minutes without a runner and be cancelled (conclusion
+"cancelled", no runner name, no step run). That is not a build failure; re-run
+it (`gh run rerun <id>`), which keeps a release run's context.
+
+Lessons every workflow carries, so a new plugin starts from one of them rather
+than from scratch:
 
 - SDKs cloned into `CLAP/` at the versions below, both `shared/patches/`
   applied to clap-wrapper (the AUv2 main-bus patch matters for any plugin
