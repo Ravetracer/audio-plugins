@@ -13,7 +13,7 @@
 
 #if defined(_WIN32)
 #   include <windows.h>
-#else
+#elif !defined(__wasm__)
 #   include <dlfcn.h>
 #endif
 
@@ -38,7 +38,7 @@ bool isDirectory(const std::string &path) {
    return !path.empty() && std::filesystem::is_directory(path, ec);
 }
 
-#if !defined(_WIN32)
+#if !defined(_WIN32) && !defined(__wasm__)
 // Anchor symbol: its address is inside this shared object, which lets dladdr
 // report the path the host actually loaded.
 void dsoAnchor() {}
@@ -60,6 +60,10 @@ std::string moduleDir() {
       return {};
    std::error_code ec;
    return std::filesystem::path(std::wstring(buf, n)).parent_path().string();
+#elif defined(__wasm__)
+   // A WCLAP (WebAssembly) has no loader to ask, and its factory presets are
+   // compiled in.
+   return {};
 #else
    Dl_info info{};
    if (dladdr(reinterpret_cast<const void *>(&dsoAnchor), &info) == 0 || !info.dli_fname)

@@ -11,11 +11,19 @@
 #   ./release.sh 0.1.0 --tarball        also emit .tar.gz beside the .zip files
 #   ./release.sh 0.1.0 --no-manuals     do not build or ship the PDF manuals
 #   ./release.sh 0.1.0 --no-vst3        CLAP only; do not build or ship the VST3s
+#   ./release.sh 0.1.0 --no-wclap       do not build the WCLAPs (web builds)
 #
 # Every plugin ships in both formats: the .clap folder and the .vst3 bundle sit
 # side by side in each platform folder. The VST3 is the same plugin behind the
 # clap-wrapper, and it needs CLAP/clap-wrapper and CLAP/vst3sdk checked out. If
 # either is missing the release goes out CLAP-only rather than failing.
+#
+# A plugin with a WCLAP build (CLAP compiled to WebAssembly for browser hosts
+# such as openDAW; see shared/web/README.md) also gets <Name>-<version>.wclap.tar.gz
+# in dist/, beside its zip: a separate asset of the same GitHub release, the
+# file openDAW imports. It needs wasi-sdk in CLAP/wasi-sdk and the wasm Cairo in
+# wasmbuild/cairo-wasi (shared/cmake/build-wasm-cairo.sh); without either the
+# release goes out without WCLAPs rather than failing.
 #
 # Windows builds need a Cairo cross-built with mingw-w64. Build it once with
 #
@@ -39,7 +47,7 @@ version="${1:-}"
 shift || true
 
 if [ -z "$version" ]; then
-   echo "usage: $0 <version> [--linux-only] [--windows-no-gui] [--tarball] [--no-manuals] [--no-vst3]" >&2
+   echo "usage: $0 <version> [--linux-only] [--windows-no-gui] [--tarball] [--no-manuals] [--no-vst3] [--no-wclap]" >&2
    exit 1
 fi
 
@@ -48,6 +56,7 @@ windows_no_gui=0
 tarball=0
 no_manuals=0
 no_vst3=0
+no_wclap=0
 for arg in "$@"; do
    case "$arg" in
       --linux-only)     linux_only=1 ;;
@@ -55,6 +64,7 @@ for arg in "$@"; do
       --tarball)        tarball=1 ;;
       --no-manuals)     no_manuals=1 ;;
       --no-vst3)        no_vst3=1 ;;
+      --no-wclap)       no_wclap=1 ;;
       *) echo "unknown option: $arg" >&2; exit 1 ;;
    esac
 done
@@ -201,6 +211,35 @@ if [ "$build_vst3" = 1 ]; then
    echo "    vst3:    clap-wrapper ${CLAP_WRAPPER_VER:-?}, VST3 SDK ${VST3_SDK_VER:-?}"
 fi
 
+# ------------------------------------------------------------ wclap preflight
+#
+# Which plugins have a WCLAP build: those whose CMake makes a bundle with
+# shared/cmake/wclap.cmake's wclap_bundle(). The editor (ui.wasm) needs the
+# wasm Cairo; a WCLAP without its editor is not something to ship by accident,
+# so without it no WCLAPs are built.
+build_wclap=1
+wasi_sdk="${WASI_SDK:-${here}/CLAP/wasi-sdk}"
+wasm_cairo="${here}/wasmbuild/cairo-wasi"
+WASI_SDK_VER=""
+has_wclap() {
+   grep -qs "wclap_bundle(" "${here}/$1/CMakeLists.txt" "${here}/$1"/cmake/*.cmake
+}
+if [ "$no_wclap" = 1 ]; then
+   build_wclap=0
+   echo "    wclap:   skipped (--no-wclap)"
+elif [ ! -f "${wasi_sdk}/share/cmake/wasi-sdk-p1.cmake" ]; then
+   echo "!!  No wasi-sdk at ${wasi_sdk} -- releasing without WCLAPs." >&2
+   echo "    See 'WCLAP (WebCLAP) builds' in CLAUDE.md, or pass --no-wclap to silence this." >&2
+   build_wclap=0
+elif [ ! -f "${wasm_cairo}/lib/libcairo.a" ]; then
+   echo "!!  No wasm Cairo at ${wasm_cairo} -- releasing without WCLAPs." >&2
+   echo "    shared/cmake/build-wasm-cairo.sh ${wasi_sdk} wasmbuild/cairo-wasi" >&2
+   build_wclap=0
+else
+   WASI_SDK_VER="$(head -1 "${wasi_sdk}/VERSION" 2>/dev/null || echo '?')"
+   echo "    wclap:   wasi-sdk ${WASI_SDK_VER}"
+fi
+
 # Which operating systems this release actually contains. Every archive holds
 # both, so this is what the install notes and the packing loops read.
 targets=(linux)
@@ -282,6 +321,49 @@ for plugin in "${plugins[@]}"; do
    fi
 done
 
+# ------------------------------------------------------------------- wclaps
+#
+# Each WCLAP is built on its own and lands in dist/ as <Name>-<version>.wclap.tar.gz,
+# not inside the zip: it is uploaded as a second asset of the plugin's release.
+wclaps=()
+build_wclap_one() {
+   local plugin="$1" name pver upper build_dir found
+   name="$(project_name "$plugin")"
+   pver="$(project_version "$plugin")"
+   upper="$(echo "$name" | tr '[:lower:]' '[:upper:]')"
+   build_dir="${work}/${plugin}-wasm"
+   echo "--> ${name} (wclap)"
+   step="${name} (wclap) configure"
+   cmake "${generator[@]}" -S "${here}/${plugin}" -B "$build_dir" -DCMAKE_BUILD_TYPE=Release \
+      -DCMAKE_TOOLCHAIN_FILE="${wasi_sdk}/share/cmake/wasi-sdk-p1.cmake" -DWASI_SDK_PREFIX="${wasi_sdk}" \
+      "-D${upper}_BUILD_TOOLS=OFF" >/dev/null
+   step="${name} (wclap) build"
+   cmake --build "$build_dir" --parallel "$(nproc)" >/dev/null
+   step="${name} (wclap) stage"
+   found="$(find "$build_dir" -maxdepth 1 -name '*.wclap.tar.gz' | head -1)"
+   if [ -z "$found" ]; then
+      echo "!!  ${name}: the WCLAP build made no .wclap.tar.gz" >&2
+      exit 1
+   fi
+   # The editor is the point of the bundle; one without it is a broken build.
+   # The listing is read whole first: under pipefail, `tar | grep -q` fails
+   # whenever grep quits early and tar dies of SIGPIPE, depending on timing.
+   local listing
+   listing="$(tar tzf "$found")"
+   if ! grep -q '/ui\.wasm$' <<<"$listing"; then
+      echo "!!  ${name}: ${found##*/} has no ui.wasm (no editor)" >&2
+      exit 1
+   fi
+   retire "${out_dir}/${name}-${pver}.wclap.tar.gz"
+   cp "$found" "${out_dir}/${name}-${pver}.wclap.tar.gz"
+   wclaps+=("${name}-${pver}.wclap.tar.gz")
+}
+if [ "$build_wclap" = 1 ]; then
+   for plugin in "${plugins[@]}"; do
+      has_wclap "$plugin" && build_wclap_one "$plugin"
+   done
+fi
+
 # ----------------------------------------------------------------- manuals
 #
 # One PDF per plugin, generated from <plugin>/docs/manual.md with the parameter
@@ -291,7 +373,6 @@ done
 # Documentation is not worth failing a release over: if the toolchain for it is
 # not installed, this says so and the archives simply go out without manuals.
 manual_dir="${here}/dist/manuals"
-retire "$manual_dir"
 
 manual_for() {
    local plugin
@@ -301,6 +382,8 @@ manual_for() {
 if [ "$no_manuals" = 1 ]; then
    echo "    manuals: skipped (--no-manuals)"
 else
+   # Retired only when new ones are made: --no-manuals leaves the last ones be.
+   retire "$manual_dir"
    echo "--> manuals"
    for plugin in "${plugins[@]}"; do
       step="$(project_name "$plugin") manual"
@@ -433,6 +516,11 @@ build_info() {
    else
       echo "  CLAP      native"
       echo "  VST3      not built"
+   fi
+   if [ "$build_wclap" = 1 ] && [ ${#wclaps[@]} -gt 0 ]; then
+      echo "  WCLAP     wasi-sdk ${WASI_SDK_VER}, separate downloads: ${wclaps[*]}"
+   else
+      echo "  WCLAP     not built"
    fi
    echo
    echo "targets:"
@@ -577,6 +665,7 @@ if [ "$tarball" = 1 ]; then
    retire "${base}.tar.gz"; tar czf "${base}.tar.gz" "$base"; made+=("${base}.tar.gz")
 fi
 retire "$work"
+made+=("${wclaps[@]}")
 
 echo
 echo "==> ${out_dir}"

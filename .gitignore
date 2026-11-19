@@ -57,3 +57,7 @@ _designs/website-copy.md
 # A plugin's development material: third-party C64 programs, Commodore ROMs,
 # manuals. Not ours to redistribute. Never commit, never ship.
 */_dev_/
+
+# Cairo, pixman and FreeType cross-built for WebAssembly
+# (shared/cmake/build-wasm-cairo.sh); reproducible at any time.
+/wasmbuild/

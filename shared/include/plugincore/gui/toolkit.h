@@ -23,7 +23,7 @@
 #   define M_PI 3.14159265358979323846
 #endif
 
-#if !defined(_WIN32) && !defined(__APPLE__)
+#if !defined(_WIN32) && !defined(__APPLE__) && !defined(__wasm__)
 #   include <X11/Xlib.h>
 #endif
 
@@ -62,7 +62,7 @@ constexpr unsigned kWheelDown = 5;
 
 enum class Align { Left, Center, Right };
 
-#if !defined(_WIN32) && !defined(__APPLE__)
+#if !defined(_WIN32) && !defined(__APPLE__) && !defined(__wasm__)
 // Asking an embedded window for the keyboard focus can fail for reasons that
 // are none of the plugin's business. A failure must not reach Xlib's default
 // handler, which exits the host.
