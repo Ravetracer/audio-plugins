@@ -56,12 +56,12 @@ audio-plugins/
 
 | # | Plugin | Folder | Status | Platforms | Formats | What it is |
 |---|--------|--------|--------|-----------|---------|------------|
-| 1 | **SäureKiste** | `saeure-kiste/` | 0.18.0 | Linux, Windows, macOS | CLAP, VST3, AU (macOS) | a Roland TB-303 model, from the 1982 service notes, plus Robin Whittle's Devil Fish modification |
-| 2 | **RumpelKiste** | `rumpel-kiste/` | 0.2.1 | Linux, Windows | CLAP, VST3 | a Roland TR-909 model, from the 1984 service notes, with SäureKiste's sequencer and drive stage |
-| 3 | **Aurum** | `aurum/` | 0.3.1 | Linux, Windows | CLAP, VST3 | a clean-room algorithmic reverb (FDN, allpass ring, plate) with a per-frequency decay contour; own DSP and GUI, see *Aurum* below |
-| 4 | **Substrike** | `substrike/` | 1.1.0 | Linux, Windows | CLAP, VST3 | a layered kick drum designer for every style; standalone like Aurum, see *Substrike* below |
-| 5 | **Shapeau** | `shapeau/` | 0.4.0 | Linux, Windows | CLAP, VST3 | a multiband drawing rack: a reorderable chain of shape-driven effects per band, beat-synced or triggered by MIDI or a sidechain hit, with the audio drawn behind the shape; see *Shapeau* below |
-| 6 | **ReSIDent** | `resident/` | 1.1.0 | Linux, Windows, macOS | CLAP, VST3, AU (macOS) | a Commodore 64 running the original C64 MIDI programs, played from the DAW through an emulated MIDI cartridge, with up to eight SIDs on reSIDfp or the light SIDLite engine; GPL, standalone, see *ReSIDent* below |
+| 1 | **SäureKiste** | `saeure-kiste/` | 0.19.0 | Linux, Windows, macOS, web | CLAP, VST3, AU (macOS), WCLAP | a Roland TB-303 model, from the 1982 service notes, plus Robin Whittle's Devil Fish modification |
+| 2 | **RumpelKiste** | `rumpel-kiste/` | 0.3.0 | Linux, Windows, web | CLAP, VST3, WCLAP | a Roland TR-909 model, from the 1984 service notes, with SäureKiste's sequencer and drive stage |
+| 3 | **Aurum** | `aurum/` | 0.4.0 | Linux, Windows, web | CLAP, VST3, WCLAP | a clean-room algorithmic reverb (FDN, allpass ring, plate) with a per-frequency decay contour; own DSP and GUI, see *Aurum* below |
+| 4 | **Substrike** | `substrike/` | 1.2.0 | Linux, Windows, web | CLAP, VST3, WCLAP | a layered kick drum designer for every style; standalone like Aurum, see *Substrike* below |
+| 5 | **Shapeau** | `shapeau/` | 0.5.0 | Linux, Windows, web | CLAP, VST3, WCLAP | a multiband drawing rack: a reorderable chain of shape-driven effects per band, beat-synced or triggered by MIDI or a sidechain hit, with the audio drawn behind the shape; see *Shapeau* below |
+| 6 | **ReSIDent** | `resident/` | 1.2.0 | Linux, Windows, macOS, web | CLAP, VST3, AU (macOS), WCLAP | a Commodore 64 running the original C64 MIDI programs, played from the DAW through an emulated MIDI cartridge, with up to eight SIDs on reSIDfp or the light SIDLite engine; GPL, standalone, see *ReSIDent* below |
 
 Naming follows the plugin, not a pattern: the CMake project, the installed
 artifact and the display name are CamelCase (`SaeureKiste`), the folder is
@@ -412,6 +412,42 @@ cmake -S . -B build-win -G Ninja -DCMAKE_TOOLCHAIN_FILE=../shared/cmake/mingw-w6
 ninja -C build-win
 ```
 
+**WCLAP (WebCLAP) since 0.4.0**: Aurum compiled to WebAssembly for browser
+hosts, openDAW first. Built with wasi-sdk (`wasi-sdk-p1.cmake`, no threads)
+into `build-wasm/`; `cmake/wclap.cmake` is the whole build, and the bundle
+hosts import is `build-wasm/aurum.wclap.tar.gz`. Two modules:
+
+- `module.wasm` is the plugin (`src/entry.cpp`, `AURUM_WITH_GUI=0`): the DSP,
+  `clap.gui` with the webview API only and `clap.webview/3`, whose page is the
+  bundle's `/index.html`. The decay designer computes synchronously there
+  (`DecayDesigner::hasWorker()`), no FTZ, `-fno-exceptions`. In openDAW
+  everything, the page's messages included, runs on the worklet's audio thread.
+- `ui.wasm` is the **native editor** (`gui/`, presets browser, `PresetSession`,
+  `PresetManager`, IR and `.ffp` import), linked against Cairo, pixman and
+  FreeType cross-built by `shared/cmake/build-wasm-cairo.sh` into
+  `wasmbuild/cairo-wasi` (gitignored), drawn by `gui/WebWindow` into the page's
+  canvas by the shared page runtime (`shared/web/wclap-ui.js`). Fonts are
+  Inter Medium/Bold under the OFL in
+  `web/fonts/` (`gui/WebFonts.cpp`). `web/UiMain.cpp`'s `RemoteController`
+  stands in for the plugin; `plugin/WebProtocol.h` is the message format (the
+  page polls, the plugin answers; edits, gestures, whole presets, the preset
+  name for the state, resize requests). Factory presets install into the
+  editor's in-memory file system (`shared/web/wasi.js`), which keeps `/home/web` in
+  localStorage when the browser allows it. FreeType needs setjmp, so the
+  editor is built with wasm exception handling; the DSP module is not. It
+  needs a 1 MB stack (`-z stack-size`): wasm's default 64 KB overflowed
+  silently into libc's data.
+
+Tests: `node ../shared/tools/run-wasi.mjs build-wasm/aurum-wclap-selftest.wasm`
+(the plugin through `clap_entry`, page protocol included), `node
+../shared/tools/wclap-ui-snapshot.mjs build-wasm/aurum.wclap out.png` (the
+editor offscreen).
+In a browser only headless on a private Xvfb, never on the user's desktop. Not
+done yet: MIDI learn in the web editor (openDAW has its own), the openDAW
+device panel (`opendaw.device-panel/1`, it shows generic knobs), parameter
+hover reporting. The desktop gestures stay (wheel, right-click, double-click),
+which openDAW's guide reserves for itself.
+
 Rules specific to Aurum:
 
 - **Never name the reference product or its vendor** anywhere in the
@@ -507,6 +543,18 @@ What to know before working there:
   receives. The editor rebuilds its panels from the timer when the selection,
   a source or a slot type changes -- never from inside a widget's handler,
   which would destroy the widget under it.
+- **WCLAP since 1.2.0** (see *WCLAP (WebCLAP) builds*): `cmake/wclap.cmake`
+  into `build-wasm/`, test `node ../shared/tools/run-wasi.mjs
+  build-wasm/substrike-wclap-selftest.wasm` (40 checks). Protocol
+  (`src/plugin/WebProtocol.h`): the page polls with its id, the serial it has
+  seen and its count of edits sent; the plugin answers with only what changed
+  (values, curves, preset name, modulated values, new scope bins, undo flags)
+  and echoes the edit count. The undo history stays in the plugin. The hit
+  preview renders sliced in `ui.wasm` through `HitRenderer`, which native
+  `renderHit` wraps, so renders stay bit-identical. Export (button, menu, the
+  dragged hit strip) is a `wclap.download`. Aux outputs are still offered;
+  openDAW may only take the main one. Measured in node: 36-38 µs per 128-frame
+  block on average over the factory presets, Rumble presets about 160 µs.
 - `substrike/!references/` holds third-party kick samples used to measure the
   ranges the engine must reach (the table in PLAN.md). Gitignored via
   `*/\!references/`; never commit, never ship, never name the packs.
@@ -548,6 +596,17 @@ Rules specific to Shapeau:
 - **Factory presets store percentages as ratios** (`vol_smooth = 0.12`), like
   every preset in the shared format. All nine were once written as 0..100 and
   loaded at 100 %; `--selftest` now reads every percentage back.
+- **WCLAP since 0.5.0** (see *WCLAP (WebCLAP) builds*): `cmake/wclap.cmake`
+  into `build-wasm/`, test `node ../shared/tools/run-wasi.mjs
+  build-wasm/shapeau-wclap-selftest.wasm`. The CurveAccess editing rules live
+  in `CurveModel` (`src/gui/curvemodel.*`), used by the plugin and by the web
+  editor's stand-in alike: a new CurveAccess edit goes there, or the WCLAP
+  will not send it. Protocol in `src/web/protocol.h` (values, then shapes,
+  chain and view when their serials change, changed scope bins; poll answers
+  echo the page's edit count). The window fork has a `__wasm__` backend
+  (`WebGui`); text is Noto Sans (what "sans-serif" is on the desktop) through
+  a force-included reroute of `cairo_select_font_face`
+  (`src/web/webfonts.h`). The preset scan is `src/presetlibrary.*`.
 - `shapeau-render --selftest` is the test harness, as elsewhere; the GUI host
   (`shapeau-guihost`, X11 only) plays a drum loop so the scope has something
   to show. Windows: cross-build with `-DSHAPEAU_WIN_CAIRO=<abs path>` and run
@@ -659,6 +718,28 @@ What to know before working there:
   (`C64::freezerWriting`): only its own code reaches it, so a MIDI program
   probing every interface's address cannot freeze the machine. VICE's sources are the reference for hardware
   behaviour (read them, write our own code).
+- **WCLAP** (1.2.0, `cmake/wclap.cmake`): module.wasm plus ui.wasm. The
+  editor reaches the plugin through `gui::PluginLink` (`LocalLink` natively,
+  `RemoteLink` in `src/web/UiMain.cpp`) and the messages in
+  `src/plugin/WebProtocol.h` / `WebView.cpp`: per-part serials (values,
+  settings, CC map, media, notice, screen), files up in 32 KB chunks, key down
+  and up, the screen as palette indices, changed lines only, each line RLE,
+  packed or a diff, whichever is smaller, and only while the page shows it.
+  **The browser has no ROM folder**: the ROM page (shown while ROMs are
+  missing, and Machine > ROMs...) takes files, a folder or drops, recognises
+  them by content (`identifyRom`) and uploads them **into the state** (state
+  version 2: four ROM blobs at the end; version 1 still loads and waits for
+  ROMs). The user decided on 2026-11-19 that ROMs live in the project state,
+  as openDAW's OpenRB port keeps user samples, knowing a shared project carries
+  them. Natively the ROM folder still wins: state ROMs are used only when the
+  folder has no complete set, and folder ROMs are never written into a state.
+  Never compile ROMs in or put them in the bundle. reSIDfp patch 0005 is for
+  WASI (tables built without threads, SIDError aborts). Test: `node
+  tools/run-wclap-selftest.mjs build-wasm/resident-wclap-selftest.wasm
+  _dev_/roms [prg] [--bench]`. In node, per 128-frame block: reSIDfp about
+  400 µs, SIDLite about 140 µs; an instance costs 0.4 s to create (6581
+  tables). The state is about 142 KB (a full machine snapshot), so openDAW's
+  undo steps are large. Numpad joystick does not work in the browser yet.
 - **macOS** (1.1.0) is built only by `.github/workflows/resident-macos.yml`
   on GitHub's macOS runners: the SDK's licence ties it to Apple hardware, so
   osxcross is out, and nothing macOS can be built or run here. The workflow
@@ -698,6 +779,48 @@ What to know before working there:
   Xvfb in the devbox with `resident-gui-host` (`RESIDENT_LOAD=<file>` loads a
   program through the plugin's `de.ravetracer.sidmidi.loader/5` extension, which also inserts a disk and
   starts from one for the tests).
+
+## WCLAP (WebCLAP) builds
+
+Every plugin is being given a second target: a **WCLAP**, CLAP compiled to
+WebAssembly for browser hosts, openDAW first. Aurum was the first (see
+*Aurum*). The architecture, the editor ABI and the build flags are in
+`shared/web/README.md`; the pieces every port shares are there too:
+`shared/web/wclap-ui.js` (the page: canvas, input, messages, file picks and
+drops, downloads), `shared/web/wasi.js` (the editor's in-memory file system),
+`shared/cmake/wclap.cmake` (`wclap_module`, `wclap_ui`, `wclap_bundle`),
+`shared/cmake/build-wasm-cairo.sh` (Cairo, pixman, FreeType for wasm into
+`wasmbuild/cairo-wasi`), `shared/tools/pack-wclap.py`, `run-wasi.mjs` and
+`wclap-ui-snapshot.mjs`. A plugin's WCLAP is built into `<plugin>/build-wasm`
+with wasi-sdk's `wasi-sdk-p1.cmake` and gives `<name>.wclap.tar.gz`, which
+openDAW imports. `release.sh` builds every plugin that has one (found by
+`wclap_bundle(` in its CMake) into `dist/<Name>-<version>.wclap.tar.gz`, an
+extra asset of that plugin's GitHub release (see *Releases*).
+
+wasi-sdk lives beside the other SDKs in `CLAP/wasi-sdk` (wasi-sdk 34, the
+x86_64-linux tarball from github.com/WebAssembly/wasi-sdk releases, unpacked
+and renamed). Configure a WCLAP with
+`-DCMAKE_TOOLCHAIN_FILE=../CLAP/wasi-sdk/share/cmake/wasi-sdk-p1.cmake`.
+
+How each port mirrors its plugin in the editor differs, and each plugin's
+notes say how; the common trap is the same everywhere: **non-parameter state
+the editor shows has to be in that plugin's web protocol, or the browser
+editor silently does not sync it.**
+
+- SäureKiste and RumpelKiste: the editor runs on a **mirror**, a second
+  plugin instance created through `clap_entry` inside ui.wasm that never
+  processes audio; `webCollect()` sends what the window changed in it, poll
+  and state replies are written back into it (`src/web/plugin_web.inc`,
+  `protocol.h`, `mirror.h`). A new non-parameter state field goes into
+  `webCollect`, `webResync` and the DSP's `webReceive`; a new place that
+  changes state from outside the page calls `webStateChanged()`. File dialogs
+  are asynchronous on wasm (`*Async` in `filedialog.h`). The seqwindow forks
+  have a `__wasm__` backend (`gui/webcanvas.h`): one more backend to keep in
+  mind when porting window fixes.
+- Shapeau: see *Shapeau* (`CurveModel`). Substrike: see *Substrike*.
+
+**Browser tests run headless on a private Xvfb, never on the user's desktop.**
+A visible browser window takes the user's focus and keystrokes.
 
 ## Build and install
 
@@ -920,7 +1043,10 @@ line, not the collection's, because they are downloaded and updated separately.
 **GitHub releases are per plugin, never the collection.** Users pick the
 plugins they want, so each plugin has its own GitHub release, tagged
 `<name lowercased>-v<version>` (`saeurekiste-v0.17.0`, `sidmidi-v0.4.0`),
-with its `<Name>-<version>.zip` and its manual PDF as assets.
+with its `<Name>-<version>.zip` and its manual PDF as assets, plus
+`<Name>-<version>.wclap.tar.gz` when the plugin has a WCLAP build (the file
+openDAW imports; the user decided on 2026-11-19 that the web build is an asset
+of the same release, not a release of its own, and not inside the zip).
 `audio-plugins-<version>.zip` stays local and is not uploaded. The first
 releases went up on 2026-11-10 (collection build 0.24.0). Release notes are
 public copy: the brand-name rules for the website and the manuals apply.
@@ -935,7 +1061,9 @@ SaeureKiste does both. `--linux-only` and `--no-vst3` are still there for a
 machine without the mingw toolchain or the VST3 checkouts.
 
 Other options: `--tarball` adds `.tar.gz` beside every `.zip`; `--no-manuals`
-skips the PDF manuals. It deletes nothing: an old staging tree, build tree, manual folder or
+skips the PDF manuals; `--no-wclap` skips the WCLAPs (which are also skipped,
+with a warning, when `CLAP/wasi-sdk` or `wasmbuild/cairo-wasi` is missing, and
+fail the release when a bundle comes out without its editor `ui.wasm`). It deletes nothing: an old staging tree, build tree, manual folder or
 archive it replaces is moved into `dist/.retired/<time>/` (the user asked for
 no deletes; clearing that folder is theirs to do). Offline tools are switched off for release builds
 (`-D<PLUGIN>_BUILD_TOOLS=OFF`).
