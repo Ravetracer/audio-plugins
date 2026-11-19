@@ -39,6 +39,7 @@ residfp::~residfp()
 
 bool residfp::setChipModel(ChipModel model)
 {
+#if defined(__cpp_exceptions) || defined(__EXCEPTIONS)
     try
     {
         sid.setChipModel(model);
@@ -48,6 +49,10 @@ bool residfp::setChipModel(ChipModel model)
     {
         return false;
     }
+#else
+    sid.setChipModel(model);
+    return true;
+#endif
 }
 
 ChipModel residfp::getChipModel() const
@@ -57,6 +62,7 @@ ChipModel residfp::getChipModel() const
 
 bool residfp::setCombinedWaveforms(CombinedWaveforms cws)
 {
+#if defined(__cpp_exceptions) || defined(__EXCEPTIONS)
     try
     {
         sid.setCombinedWaveforms(cws);
@@ -66,6 +72,10 @@ bool residfp::setCombinedWaveforms(CombinedWaveforms cws)
     {
         return false;
     }
+#else
+    sid.setCombinedWaveforms(cws);
+    return true;
+#endif
 }
 
 void residfp::reset()
@@ -99,6 +109,7 @@ bool residfp::setSamplingParameters(
         double samplingFrequency
     )
 {
+#if defined(__cpp_exceptions) || defined(__EXCEPTIONS)
     try
     {
         sid.setSamplingParameters(clockFrequency, method, samplingFrequency);
@@ -108,6 +119,10 @@ bool residfp::setSamplingParameters(
     {
         return false;
     }
+#else
+    sid.setSamplingParameters(clockFrequency, method, samplingFrequency);
+    return true;
+#endif
 }
 
 int residfp::clock(unsigned int cycles, short* buf)

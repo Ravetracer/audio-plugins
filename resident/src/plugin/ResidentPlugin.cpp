@@ -10,8 +10,20 @@
 
 #include "emu/Snapshot.h"
 #include "engine/Resources.h"
-#include "gui/Editor.h"
+#include "gui/PluginLink.h"
 #include "resident.h"
+#if RESIDENT_WEBVIEW
+namespace resident::gui {
+// The WCLAP has no native window (editor_ stays empty); its editor is the
+// page's (web/UiMain.cpp).
+class Editor
+{
+};
+} // namespace resident::gui
+#else
+#include "gui/Editor.h"
+#include "gui/LocalLink.h"
+#endif
 
 namespace resident {
 
@@ -126,7 +138,9 @@ struct Glue
 
     static bool guiApiSupported(const clap_plugin_t*, const char* api, bool floating)
     {
-#if defined(_WIN32)
+#if RESIDENT_WEBVIEW
+        return !floating && !std::strcmp(api, CLAP_WINDOW_API_WEBVIEW);
+#elif defined(_WIN32)
         return !floating && !std::strcmp(api, CLAP_WINDOW_API_WIN32);
 #elif defined(__APPLE__)
         return !floating && !std::strcmp(api, CLAP_WINDOW_API_COCOA);
@@ -136,7 +150,9 @@ struct Glue
     }
     static bool guiPreferredApi(const clap_plugin_t*, const char** api, bool* floating)
     {
-#if defined(_WIN32)
+#if RESIDENT_WEBVIEW
+        *api = CLAP_WINDOW_API_WEBVIEW;
+#elif defined(_WIN32)
         *api = CLAP_WINDOW_API_WIN32;
 #elif defined(__APPLE__)
         *api = CLAP_WINDOW_API_COCOA;
@@ -165,6 +181,25 @@ struct Glue
     static void guiSuggestTitle(const clap_plugin_t*, const char*) {}
     static bool guiShow(const clap_plugin_t* p) { return self(p)->guiShow(); }
     static bool guiHide(const clap_plugin_t* p) { return self(p)->guiHide(); }
+#if RESIDENT_WEBVIEW
+    static int32_t webviewGetUri(const clap_plugin_t*, char* uri, uint32_t capacity)
+    {
+        static const char page[] = "/index.html";
+        if (uri && capacity > 0)
+            std::snprintf(uri, capacity, "%s", page);
+        return static_cast<int32_t>(sizeof(page));
+    }
+    // The host serves the bundle's files (index.html, ui.wasm, fonts) itself.
+    static bool webviewGetResource(const clap_plugin_t*, const char*, char*, uint32_t, const clap_ostream_t*)
+    {
+        return false;
+    }
+    static bool webviewReceive(const clap_plugin_t* p, const void* data, uint32_t size)
+    {
+        return self(p)->webReceive(data, size);
+    }
+    static const clap_plugin_webview_t webview;
+#endif
     static void timerTick(const clap_plugin_t* p, clap_id id) { self(p)->onTimer(id); }
     static void fdReady(const clap_plugin_t* p, int fd, clap_posix_fd_flags_t) { self(p)->onFd(fd); }
 
@@ -245,6 +280,9 @@ const clap_plugin_gui_t Glue::gui = {guiApiSupported, guiPreferredApi, guiCreate
                                      guiCanResize, guiResizeHints, guiAdjustSize, guiSetSize, guiSetParent,
                                      guiSetTransient, guiSuggestTitle, guiShow, guiHide};
 const clap_plugin_timer_support_t Glue::timer = {timerTick};
+#if RESIDENT_WEBVIEW
+const clap_plugin_webview_t Glue::webview = {webviewGetUri, webviewGetResource, webviewReceive};
+#endif
 const clap_plugin_posix_fd_support_t Glue::posixFd = {fdReady};
 
 const clap_plugin_descriptor_t* ResidentPlugin::descriptor() { return &kDescriptor; }
@@ -284,7 +322,9 @@ ResidentPlugin::ResidentPlugin(const clap_host_t* host) : host_(host)
     engine_.videoWanted = false; // until a window opens
     configureMachine();
     applyParamsToEngine();
+#if !RESIDENT_WEBVIEW
     prepareRomFolder();
+#endif
     rescanRoms();
 }
 
@@ -321,7 +361,23 @@ bool ResidentPlugin::rescanRoms()
         return true;
     emu::Roms roms;
     std::string report;
-    const bool ok = romsFromFolder(romFolder(), roms, report);
+#if RESIDENT_WEBVIEW
+    // The WCLAP has no ROM folder: its ROMs are the ones the project carries.
+    bool ok = false;
+    report = missingRoms(stateRoms_);
+#else
+    bool ok = romsFromFolder(romFolder(), roms, report);
+#endif
+    bool fromState = false;
+    if (!ok && stateRoms_.complete()) {
+        // A project that carries its ROMs plays without the folder. A 1541
+        // DOS from the folder stands in when the project has none.
+        std::vector<uint8_t> drive = stateRoms_.drive1541.size() == 16384 ? stateRoms_.drive1541 : roms.drive1541;
+        roms = stateRoms_;
+        roms.drive1541 = std::move(drive);
+        report = missingRoms(roms);
+        ok = fromState = true;
+    }
     romReport_ = report;
     hasDriveRom_ = roms.drive1541.size() == 16384;
     if (!ok)
@@ -329,6 +385,7 @@ bool ResidentPlugin::rescanRoms()
     std::lock_guard<std::mutex> lock(machineLock_);
     auto& c64 = engine_.machine();
     c64.setRoms(roms);
+    romsFromState_ = fromState;
     hasRoms_ = true;
     if (!pendingSnapshot_.empty() && emu::loadSnapshot(c64, pendingSnapshot_)) {
         if (!engine_.loadAudioState(pendingAudio_))
@@ -341,6 +398,72 @@ bool ResidentPlugin::rescanRoms()
     return true;
 }
 
+void ResidentPlugin::updateRomReport()
+{
+    if (!hasRoms_) {
+        emu::Roms roms;
+        std::string report;
+#if RESIDENT_WEBVIEW
+        report = missingRoms(stateRoms_);
+#else
+        romsFromFolder(romFolder(), roms, report);
+#endif
+        romReport_ = report;
+        return;
+    }
+    std::lock_guard<std::mutex> lock(machineLock_);
+    romReport_ = missingRoms(engine_.machine().roms());
+}
+
+bool ResidentPlugin::installRom(const std::vector<uint8_t>& data, std::string& error)
+{
+    const RomKind kind = identifyRom(data);
+    if (kind == RomKind::None) {
+        error = "Not a C64 ROM: expected the KERNAL or BASIC (8 KB), the character ROM (4 KB) or the 1541 DOS (16 KB)";
+        return false;
+    }
+    std::vector<uint8_t>& slot = kind == RomKind::Kernal  ? stateRoms_.kernal
+                                 : kind == RomKind::Basic   ? stateRoms_.basic
+                                 : kind == RomKind::Chargen ? stateRoms_.chargen
+                                                            : stateRoms_.drive1541;
+    if (slot == data && (hasRoms_ || !stateRoms_.complete()))
+        return true; // the same image again: nothing changes
+    slot = data;
+    if (!hasRoms_) {
+        rescanRoms(); // starts the machine once the set is complete
+        return true;
+    }
+    if (romsFromState_) {
+        // The running machine's ROMs are the project's: it takes the new one.
+        std::lock_guard<std::mutex> lock(machineLock_);
+        auto& c64 = engine_.machine();
+        emu::Roms roms = c64.roms();
+        switch (kind) {
+        case RomKind::Kernal: roms.kernal = data; break;
+        case RomKind::Basic: roms.basic = data; break;
+        case RomKind::Chargen: roms.chargen = data; break;
+        default: roms.drive1541 = data; break;
+        }
+        c64.setRoms(roms);
+        hasDriveRom_ = roms.drive1541.size() == 16384;
+        if (kind != RomKind::Drive)
+            restartMedia(); // another KERNAL, BASIC or character set: a cold start
+    }
+    updateRomReport();
+    return true;
+}
+
+namespace {
+unsigned romBits(const emu::Roms& r)
+{
+    return (r.kernal.size() == 8192 ? gui::RomKernal : 0u) | (r.basic.size() == 8192 ? gui::RomBasic : 0u) |
+           (r.chargen.size() == 4096 ? gui::RomChargen : 0u) | (r.drive1541.size() == 16384 ? gui::RomDrive : 0u);
+}
+} // namespace
+
+unsigned ResidentPlugin::romsInUse() const { return hasRoms_ ? romBits(engine_.machine().roms()) : 0u; }
+unsigned ResidentPlugin::romsInState() const { return romBits(stateRoms_); }
+
 ResidentPlugin::~ResidentPlugin() = default;
 
 bool ResidentPlugin::init()
@@ -350,6 +473,9 @@ bool ResidentPlugin::init()
     hostGui_ = static_cast<const clap_host_gui_t*>(host_->get_extension(host_, CLAP_EXT_GUI));
     hostTimer_ = static_cast<const clap_host_timer_support_t*>(host_->get_extension(host_, CLAP_EXT_TIMER_SUPPORT));
     hostFd_ = static_cast<const clap_host_posix_fd_support_t*>(host_->get_extension(host_, CLAP_EXT_POSIX_FD_SUPPORT));
+#if RESIDENT_WEBVIEW
+    hostWebview_ = static_cast<const clap_host_webview_t*>(host_->get_extension(host_, CLAP_EXT_WEBVIEW));
+#endif
     return true;
 }
 
@@ -413,13 +539,18 @@ const void* ResidentPlugin::getExtension(const char* id)
         return &Glue::state;
     if (!std::strcmp(id, CLAP_EXT_GUI))
         return &Glue::gui;
+#if RESIDENT_WEBVIEW
+    if (!std::strcmp(id, CLAP_EXT_WEBVIEW))
+        return &Glue::webview;
+#else
     if (!std::strcmp(id, CLAP_EXT_TIMER_SUPPORT))
         return &Glue::timer;
+#endif
     if (!std::strcmp(id, kExtLoader))
         return &Glue::loader;
     if (!std::strcmp(id, CLAP_EXT_RENDER))
         return &Glue::render;
-#if !defined(_WIN32) && !defined(__APPLE__)
+#if !defined(_WIN32) && !defined(__APPLE__) && !RESIDENT_WEBVIEW
     if (!std::strcmp(id, CLAP_EXT_POSIX_FD_SUPPORT))
         return &Glue::posixFd;
 #endif
@@ -788,7 +919,11 @@ bool ResidentPlugin::loadFile(const std::string& path, std::string& error)
 bool ResidentPlugin::loadData(const std::string& name, const std::vector<uint8_t>& data, std::string& error)
 {
     if (!hasRoms_) {
+#if RESIDENT_WEBVIEW
+        error = "The C64 ROMs are missing: add them on the ROM page";
+#else
         error = "The C64 ROMs are missing: put them into " + romFolder();
+#endif
         return false;
     }
     const std::string ext = lowerExt(name);
@@ -899,7 +1034,11 @@ bool ResidentPlugin::attachDiskFile(const std::string& path, std::string& error)
 bool ResidentPlugin::attachDisk(const std::string& name, const std::vector<uint8_t>& data, std::string& error)
 {
     if (!hasRoms_) {
+#if RESIDENT_WEBVIEW
+        error = "The C64 ROMs are missing: add them on the ROM page";
+#else
         error = "The C64 ROMs are missing: put them into " + romFolder();
+#endif
         return false;
     }
     std::lock_guard<std::mutex> lock(machineLock_);
@@ -1320,6 +1459,15 @@ clap_process_status ResidentPlugin::process(const clap_process_t* p)
 
     handleInputEvents();
     drainGuiParams(p->out_events);
+#if RESIDENT_WEBVIEW
+    // The VIC draws while a page shows the screen, and stops half a second
+    // after the last page that did stopped asking.
+    samplesRun_ += frames;
+    if (webScreenAsked_ && samplesRun_ - webScreenAskedAt_ > static_cast<uint64_t>(engine_.sampleRate() * 0.5)) {
+        webScreenAsked_ = false;
+        engine_.videoWanted = false;
+    }
+#endif
     collectEvents(p);
     midiOut_.clear();
     engine_.process(frames, events_.data(), events_.size(), outs, midiOut_);
@@ -1332,7 +1480,9 @@ clap_process_status ResidentPlugin::process(const clap_process_t* p)
 bool ResidentPlugin::stateSave(const clap_ostream_t* stream)
 {
     std::vector<uint8_t> out(kStateMagic, kStateMagic + 8);
-    putU32(out, 1);
+    // 1: up to 1.1.0. 2 (1.2.0): the ROMs the project carries, at the end.
+    // Older builds stop reading before them and load the rest as before.
+    putU32(out, 2);
     const std::string settings = settings_.toText();
     putBlob(out, settings.data(), settings.size());
     std::string params;
@@ -1366,6 +1516,10 @@ bool ResidentPlugin::stateSave(const clap_ostream_t* stream)
     putBlob(out, diskFileName_.data(), diskFileName_.size());
     putBlob(out, diskFileData_.data(), diskFileData_.size());
     putBlob(out, diskStart_.data(), diskStart_.size());
+    // The ROMs the project carries (1.2.0): the WCLAP's uploads, or what a
+    // loaded project brought along. Never the ROM folder's.
+    for (const auto* rom : {&stateRoms_.kernal, &stateRoms_.basic, &stateRoms_.chargen, &stateRoms_.drive1541})
+        putBlob(out, rom->data(), rom->size());
 
     size_t at = 0;
     while (at < out.size()) {
@@ -1394,6 +1548,7 @@ bool ResidentPlugin::stateLoad(const clap_istream_t* stream)
     size_t at = 8;
     uint32_t version;
     std::vector<uint8_t> settings, params, snap, fileName, fileData, audio, ccMapText, diskName, diskData, diskStart;
+    std::vector<uint8_t> romKernal, romBasic, romChargen, romDrive;
     if (!getU32(in, at, version) || !getBlob(in, at, settings) || !getBlob(in, at, params) || !getBlob(in, at, snap))
         return false;
     getBlob(in, at, fileName);
@@ -1403,6 +1558,26 @@ bool ResidentPlugin::stateLoad(const clap_istream_t* stream)
     getBlob(in, at, diskName);  // absent before 0.5.0: see below
     getBlob(in, at, diskData);
     getBlob(in, at, diskStart);
+    getBlob(in, at, romKernal); // absent before 1.2.0: the project carries no ROMs
+    getBlob(in, at, romBasic);
+    getBlob(in, at, romChargen);
+    getBlob(in, at, romDrive);
+    {
+        // Only what is recognised as what it should be.
+        emu::Roms roms;
+        if (identifyRom(romKernal) == RomKind::Kernal)
+            roms.kernal = std::move(romKernal);
+        if (identifyRom(romBasic) == RomKind::Basic)
+            roms.basic = std::move(romBasic);
+        if (identifyRom(romChargen) == RomKind::Chargen)
+            roms.chargen = std::move(romChargen);
+        if (identifyRom(romDrive) == RomKind::Drive)
+            roms.drive1541 = std::move(romDrive);
+        // A project without ROMs leaves the ones this instance has: uploaded
+        // once, they stay with the instance and go into its next save.
+        if (!roms.kernal.empty() || !roms.basic.empty() || !roms.chargen.empty() || !roms.drive1541.empty())
+            stateRoms_ = std::move(roms);
+    }
     setCcMap(CcMap::fromText(std::string(ccMapText.begin(), ccMapText.end())));
 
     MachineSettings s;
@@ -1427,35 +1602,61 @@ bool ResidentPlugin::stateLoad(const clap_istream_t* stream)
         }
     }
 
-    std::lock_guard<std::mutex> lock(machineLock_);
-    settings_ = s;
-    configureMachine();
-    applyParamsToEngine();
-    lastFileName_.assign(fileName.begin(), fileName.end());
-    lastFileData_ = fileData;
-    diskFileName_.assign(diskName.begin(), diskName.end());
-    diskFileData_ = diskData;
-    diskStart_.assign(diskStart.begin(), diskStart.end());
-    if (lowerExt(lastFileName_) == "d64") {
-        // Before 0.5.0 a disk was the one loaded file, and it was started.
-        diskFileName_ = lastFileName_;
-        diskFileData_ = lastFileData_;
-        diskStart_ = "*";
-        lastFileName_.clear();
-        lastFileData_.clear();
+    bool waiting = false;
+    {
+        std::lock_guard<std::mutex> lock(machineLock_);
+        settings_ = s;
+        configureMachine();
+        applyParamsToEngine();
+        lastFileName_.assign(fileName.begin(), fileName.end());
+        lastFileData_ = fileData;
+        diskFileName_.assign(diskName.begin(), diskName.end());
+        diskFileData_ = diskData;
+        diskStart_.assign(diskStart.begin(), diskStart.end());
+        if (lowerExt(lastFileName_) == "d64") {
+            // Before 0.5.0 a disk was the one loaded file, and it was started.
+            diskFileName_ = lastFileName_;
+            diskFileData_ = lastFileData_;
+            diskStart_ = "*";
+            lastFileName_.clear();
+            lastFileData_.clear();
+        }
+        auto& c64 = engine_.machine();
+        if (!hasRoms_) {
+            pendingSnapshot_ = snap;
+            pendingAudio_ = audio;
+            waiting = true;
+        } else {
+            if (romsFromState_ && stateRoms_.complete() &&
+                (c64.roms().kernal != stateRoms_.kernal || c64.roms().basic != stateRoms_.basic ||
+                 c64.roms().chargen != stateRoms_.chargen ||
+                 (stateRoms_.drive1541.size() == 16384 && c64.roms().drive1541 != stateRoms_.drive1541))) {
+                // The machine runs on the project's ROMs, and this project has others.
+                emu::Roms roms = stateRoms_;
+                if (roms.drive1541.size() != 16384)
+                    roms.drive1541 = c64.roms().drive1541;
+                c64.setRoms(roms);
+                hasDriveRom_ = roms.drive1541.size() == 16384;
+            }
+            if (emu::loadSnapshot(c64, snap)) {
+                if (!engine_.loadAudioState(audio))
+                    engine_.resync();
+            } else {
+                // A snapshot from another build: start the attached media again.
+                restartMedia();
+            }
+        }
     }
-    auto& c64 = engine_.machine();
-    if (!hasRoms_) {
-        pendingSnapshot_ = snap;
-        pendingAudio_ = audio;
+    if (waiting) {
+        // The project's own ROMs start the machine now; without them it
+        // waits for the ROM folder (or, in the WCLAP, the ROM dialog).
+        if (stateRoms_.complete())
+            rescanRoms();
+#if RESIDENT_WEBVIEW
+        else
+            updateRomReport();
+#endif
         return true;
-    }
-    if (emu::loadSnapshot(c64, snap)) {
-        if (!engine_.loadAudioState(audio))
-            engine_.resync();
-    } else {
-        // A snapshot from another build: start the attached media again.
-        restartMedia();
     }
     if (hostParams_)
         hostParams_->rescan(host_, CLAP_PARAM_RESCAN_VALUES);
@@ -1464,11 +1665,46 @@ bool ResidentPlugin::stateLoad(const clap_istream_t* stream)
 
 // ------------------------------------------------------------------ GUI
 
+#if RESIDENT_WEBVIEW
+
+// The window is the host's webview showing the bundle's page; sizes are
+// logical pixels (no set_scale with the webview API). The page scales the
+// editor to whatever it gets. The VIC draws while the page asks for frames.
+bool ResidentPlugin::guiCreate() { return true; }
+void ResidentPlugin::guiDestroy() { releaseInput(); }
+bool ResidentPlugin::guiSetScale(double) { return false; }
+bool ResidentPlugin::guiGetSize(uint32_t* w, uint32_t* h)
+{
+    *w = webW_;
+    *h = webH_;
+    return true;
+}
+bool ResidentPlugin::guiAdjustSize(uint32_t* w, uint32_t* h)
+{
+    *w = std::clamp<uint32_t>(*w, 320, 4000);
+    *h = std::clamp<uint32_t>(*h, 210, 3000);
+    return true;
+}
+bool ResidentPlugin::guiSetSize(uint32_t w, uint32_t h)
+{
+    webW_ = w;
+    webH_ = h;
+    return true;
+}
+bool ResidentPlugin::guiSetParent(const clap_window_t*) { return true; }
+bool ResidentPlugin::guiShow() { return true; }
+bool ResidentPlugin::guiHide() { return true; }
+void ResidentPlugin::onTimer(clap_id) {}
+void ResidentPlugin::onFd(int) {}
+
+#else
+
 bool ResidentPlugin::guiCreate()
 {
     if (editor_)
         return true;
-    editor_ = std::make_unique<gui::Editor>(*this);
+    editorLink_ = std::make_unique<gui::LocalLink>(*this);
+    editor_ = std::make_unique<gui::Editor>(*editorLink_);
     engine_.videoWanted = true;
     editor_->requestResize = [this](int w, int h) {
         return hostGui_ && hostGui_->request_resize(host_, static_cast<uint32_t>(w), static_cast<uint32_t>(h));
@@ -1489,6 +1725,7 @@ void ResidentPlugin::guiDestroy()
         hostFd_->unregister_fd(host_, registeredFd_);
     registeredFd_ = -1;
     editor_.reset();
+    editorLink_.reset();
     engine_.videoWanted = false;
     releaseInput();
 }
@@ -1579,6 +1816,8 @@ void ResidentPlugin::onFd(int fd)
     if (editor_ && fd == registeredFd_)
         editor_->onFd();
 }
+
+#endif
 
 // ------------------------------------------------------------------ factory
 

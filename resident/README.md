@@ -12,9 +12,11 @@ cartridge arrives in the DAW as MIDI.
 It is not a SID synthesizer with a C64 skin. The instrument is the C64
 program; ReSIDent is the computer it runs on.
 
-**Status: 1.1.0.** Released for Linux and Windows, CLAP and VST3; macOS
+**Status: 1.2.0.** Released for Linux and Windows, CLAP and VST3; macOS
 (CLAP, VST3 and Audio Unit, universal, 10.15 or later) is built by a GitHub
-workflow since 1.1.0 and has not been played in a DAW yet. Up to
+workflow since 1.1.0 and has not been played in a DAW yet. Since 1.2.0 it
+also builds as a WCLAP for browser hosts such as openDAW (`cmake/wclap.cmake`),
+with its editor and a ROM page: the ROMs chosen there are kept in the project. Up to
 0.8.1 it was called SidMidi; the plugin id stayed, so projects made with it
 open unchanged, and the first start copies the old `SidMidi` data folder
 (ROMs, CC maps) into the new one. The manual

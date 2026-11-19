@@ -28,6 +28,7 @@
 #include <vector>
 
 #include "gui/Editor.h"
+#include "gui/LocalLink.h"
 #include "plugin/ResidentPlugin.h"
 
 namespace {
@@ -122,7 +123,8 @@ int main(int argc, char** argv)
     }
 
     // The window, before the machine runs, so the screen is drawn.
-    auto editorPtr = std::make_unique<resident::gui::Editor>(plugin);
+    resident::gui::LocalLink link(plugin);
+    auto editorPtr = std::make_unique<resident::gui::Editor>(link);
     auto& editor = *editorPtr;
     plugin.engine().videoWanted = true;
 

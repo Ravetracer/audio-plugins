@@ -11,6 +11,8 @@
 #if defined(_WIN32)
 #include <windows.h>
 #include <shellapi.h>
+#elif defined(__wasi__)
+// No processes to start: there is no file manager to show a folder in.
 #else
 #include <spawn.h>
 #include <sys/wait.h>
@@ -53,12 +55,12 @@ bool contains(const std::vector<uint8_t>& d, const char* text)
     return std::search(d.begin(), d.end(), text, text + n) != d.end();
 }
 
-enum class RomKind { None, Kernal, Basic, Chargen, Drive };
-
 // By content: the KERNAL holds BASIC's start-up banner (or at least its reset
 // vector), BASIC has "CBMBASIC" after its start vectors, the character ROM
 // begins with the "@" glyph, the 1541's DOS is known by its vectors.
-RomKind identify(const std::vector<uint8_t>& d)
+} // namespace
+
+RomKind identifyRom(const std::vector<uint8_t>& d)
 {
     if (d.size() == 8192) {
         if (d[4] == 'C' && d[5] == 'B' && d[6] == 'M' && d[7] == 'B')
@@ -77,6 +79,8 @@ RomKind identify(const std::vector<uint8_t>& d)
     }
     return RomKind::None;
 }
+
+namespace {
 
 // VICE's names for the standard set win over anything else found.
 int preference(const std::string& name, RomKind k)
@@ -260,7 +264,7 @@ bool romsFromFolder(const std::string& folder, emu::Roms& out, std::string& repo
         std::vector<uint8_t> data;
         if (!readFile(fromPath(p), data))
             continue;
-        const RomKind k = identify(data);
+        const RomKind k = identifyRom(data);
         if (k == RomKind::None)
             continue;
         const int pref = preference(fromPath(p.filename()), k);
@@ -276,22 +280,31 @@ bool romsFromFolder(const std::string& folder, emu::Roms& out, std::string& repo
         default: break;
         }
     }
-    if (out.kernal.size() != 8192)
+    report = missingRoms(out);
+    return out.complete();
+}
+
+std::string missingRoms(const emu::Roms& roms)
+{
+    std::string report;
+    if (roms.kernal.size() != 8192)
         report += "KERNAL, ";
-    if (out.basic.size() != 8192)
+    if (roms.basic.size() != 8192)
         report += "BASIC, ";
-    if (out.chargen.size() != 4096)
+    if (roms.chargen.size() != 4096)
         report += "character ROM, ";
-    if (out.drive1541.size() != 16384)
+    if (roms.drive1541.size() != 16384)
         report += "1541 DOS (only for the True 1541), ";
     if (report.size() >= 2)
         report.erase(report.size() - 2);
-    return out.complete();
+    return report;
 }
 
 void openFolder(const std::string& path)
 {
-#if defined(_WIN32)
+#if defined(__wasi__)
+    (void)path;
+#elif defined(_WIN32)
     const std::wstring w = toPath(path).wstring();
     ShellExecuteW(nullptr, L"open", w.c_str(), nullptr, nullptr, SW_SHOWNORMAL);
 #else

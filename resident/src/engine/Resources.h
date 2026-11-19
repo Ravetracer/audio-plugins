@@ -38,6 +38,13 @@ bool romsFromFolder(const std::string& folder, emu::Roms& out, std::string& repo
 // The text the window and the README show.
 std::string romInstructions();
 
+// What a ROM image is, by its content (sizes and signatures).
+enum class RomKind { None, Kernal, Basic, Chargen, Drive };
+RomKind identifyRom(const std::vector<uint8_t>& data);
+// What `roms` lacks, as the window says it ("KERNAL, BASIC, ..."); empty
+// when nothing is missing.
+std::string missingRoms(const emu::Roms& roms);
+
 struct Palette
 {
     std::string key;   // file name without .vpl

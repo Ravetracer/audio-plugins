@@ -259,7 +259,7 @@ void SID::setChipModel(ChipModel new_model)
         break;
 
     default:
-        throw SIDError("Unknown chip type");
+        RESIDFP_THROW(SIDError("Unknown chip type"));
     }
 
     model = new_model;
@@ -318,7 +318,7 @@ void SID::setCombinedWaveforms(CombinedWaveforms new_cws)
         break;
 
     default:
-        throw SIDError("Unknown combined waveforms type");
+        RESIDFP_THROW(SIDError("Unknown combined waveforms type"));
     }
 
     cws = new_cws;
@@ -553,7 +553,7 @@ void SID::setSamplingParameters(double clockFrequency, SamplingMethod method, do
         break;
 
     default:
-        throw SIDError("Unknown sampling method");
+        RESIDFP_THROW(SIDError("Unknown sampling method"));
     }
 
     p->method = method;

@@ -27,7 +27,9 @@
 
 #include <algorithm>
 #include <mutex>
+#if !defined(__wasi__)
 #include <thread>
+#endif
 #include <cmath>
 #include <cstdint>
 
@@ -250,6 +252,17 @@ FilterModelConfig6581::FilterModelConfig6581() :
         }
     };
 
+#if defined(__wasi__)
+    // WebAssembly without threads (ReSIDent patch 0005): one table after the
+    // other. Each table draws from its own noise sequence (patch 0001), so
+    // the tables are the same as when they are built in parallel.
+    filterSummer();
+    filterMixer();
+    filterGain();
+    filterResonance();
+    filterVcrVg();
+    filterVcrIds();
+#else
 #ifdef HAVE_JTHREADS
     using sidThread = std::jthread;
 #else
@@ -270,6 +283,7 @@ FilterModelConfig6581::FilterModelConfig6581() :
     thdResonance.join();
     thdVcrVg.join();
     thdVcrIds.join();
+#endif
 #endif
 }
 

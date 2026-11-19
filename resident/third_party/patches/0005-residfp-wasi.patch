@@ -1,0 +1,201 @@
+diff --git a/resident/third_party/libresidfp/src/FilterModelConfig6581.cpp b/resident/third_party/libresidfp/src/FilterModelConfig6581.cpp
+index 09fe647..9f55975 100644
+--- a/resident/third_party/libresidfp/src/FilterModelConfig6581.cpp
++++ b/resident/third_party/libresidfp/src/FilterModelConfig6581.cpp
+@@ -27,7 +27,9 @@
+ 
+ #include <algorithm>
+ #include <mutex>
++#if !defined(__wasi__)
+ #include <thread>
++#endif
+ #include <cmath>
+ #include <cstdint>
+ 
+@@ -250,6 +252,17 @@ FilterModelConfig6581::FilterModelConfig6581() :
+         }
+     };
+ 
++#if defined(__wasi__)
++    // WebAssembly without threads (ReSIDent patch 0005): one table after the
++    // other. Each table draws from its own noise sequence (patch 0001), so
++    // the tables are the same as when they are built in parallel.
++    filterSummer();
++    filterMixer();
++    filterGain();
++    filterResonance();
++    filterVcrVg();
++    filterVcrIds();
++#else
+ #ifdef HAVE_JTHREADS
+     using sidThread = std::jthread;
+ #else
+@@ -271,6 +284,7 @@ FilterModelConfig6581::FilterModelConfig6581() :
+     thdVcrVg.join();
+     thdVcrIds.join();
+ #endif
++#endif
+ }
+ 
+ uint16_t* FilterModelConfig6581::getDAC(double adjustment) const
+diff --git a/resident/third_party/libresidfp/src/FilterModelConfig8580.cpp b/resident/third_party/libresidfp/src/FilterModelConfig8580.cpp
+index 1dc4e63..eabf988 100644
+--- a/resident/third_party/libresidfp/src/FilterModelConfig8580.cpp
++++ b/resident/third_party/libresidfp/src/FilterModelConfig8580.cpp
+@@ -26,7 +26,9 @@
+ #include "OpAmp.h"
+ 
+ #include <mutex>
++#if !defined(__wasi__)
+ #include <thread>
++#endif
+ 
+ #if defined(HAVE_CXX20) && defined(__cpp_lib_jthread)
+ #  define HAVE_JTHREADS
+@@ -193,6 +195,15 @@ FilterModelConfig8580::FilterModelConfig8580() :
+         buildResonanceTable(opampModel, resGain);
+     };
+ 
++#if defined(__wasi__)
++    // WebAssembly without threads (ReSIDent patch 0005): one table after the
++    // other. Each table draws from its own noise sequence (patch 0001), so
++    // the tables are the same as when they are built in parallel.
++    filterSummer();
++    filterMixer();
++    filterGain();
++    filterResonance();
++#else
+ #ifdef HAVE_JTHREADS
+     using sidThread = std::jthread;
+ #else
+@@ -210,6 +221,7 @@ FilterModelConfig8580::FilterModelConfig8580() :
+     thdGain.join();
+     thdResonance.join();
+ #endif
++#endif
+ }
+ 
+ } // namespace reSIDfp
+diff --git a/resident/third_party/libresidfp/src/SID.cpp b/resident/third_party/libresidfp/src/SID.cpp
+index c0a06f1..ab52fc3 100644
+--- a/resident/third_party/libresidfp/src/SID.cpp
++++ b/resident/third_party/libresidfp/src/SID.cpp
+@@ -259,7 +259,7 @@ void SID::setChipModel(ChipModel new_model)
+         break;
+ 
+     default:
+-        throw SIDError("Unknown chip type");
++        RESIDFP_THROW(SIDError("Unknown chip type"));
+     }
+ 
+     model = new_model;
+@@ -318,7 +318,7 @@ void SID::setCombinedWaveforms(CombinedWaveforms new_cws)
+         break;
+ 
+     default:
+-        throw SIDError("Unknown combined waveforms type");
++        RESIDFP_THROW(SIDError("Unknown combined waveforms type"));
+     }
+ 
+     cws = new_cws;
+@@ -553,7 +553,7 @@ void SID::setSamplingParameters(double clockFrequency, SamplingMethod method, do
+         break;
+ 
+     default:
+-        throw SIDError("Unknown sampling method");
++        RESIDFP_THROW(SIDError("Unknown sampling method"));
+     }
+ 
+     p->method = method;
+diff --git a/resident/third_party/libresidfp/src/SID.h b/resident/third_party/libresidfp/src/SID.h
+index df13269..44a419b 100644
+--- a/resident/third_party/libresidfp/src/SID.h
++++ b/resident/third_party/libresidfp/src/SID.h
+@@ -30,6 +30,8 @@
+ 
+ #include "residfp/residfp_defs.h"
+ #include "siddefs-fp.h"
++
++#include <cstdlib>
+ #include "ExternalFilter.h"
+ #include "Filter.h"
+ #include "Voice.h"
+@@ -43,6 +45,17 @@ class Filter6581;
+ class Filter8580;
+ class Resampler;
+ 
++/**
++ * Without C++ exceptions (the WebAssembly build, ReSIDent patch 0005) an
++ * error that would be thrown aborts instead. ReSIDent never passes the
++ * values that throw.
++ */
++#if defined(__cpp_exceptions) || defined(__EXCEPTIONS)
++#  define RESIDFP_THROW(e) throw e
++#else
++#  define RESIDFP_THROW(e) std::abort()
++#endif
++
+ /**
+  * SID error exception.
+  */
+diff --git a/resident/third_party/libresidfp/src/residfp/residfp.cpp b/resident/third_party/libresidfp/src/residfp/residfp.cpp
+index 9d744ab..c7ecdbf 100644
+--- a/resident/third_party/libresidfp/src/residfp/residfp.cpp
++++ b/resident/third_party/libresidfp/src/residfp/residfp.cpp
+@@ -39,6 +39,7 @@ residfp::~residfp()
+ 
+ bool residfp::setChipModel(ChipModel model)
+ {
++#if defined(__cpp_exceptions) || defined(__EXCEPTIONS)
+     try
+     {
+         sid.setChipModel(model);
+@@ -48,6 +49,10 @@ bool residfp::setChipModel(ChipModel model)
+     {
+         return false;
+     }
++#else
++    sid.setChipModel(model);
++    return true;
++#endif
+ }
+ 
+ ChipModel residfp::getChipModel() const
+@@ -57,6 +62,7 @@ ChipModel residfp::getChipModel() const
+ 
+ bool residfp::setCombinedWaveforms(CombinedWaveforms cws)
+ {
++#if defined(__cpp_exceptions) || defined(__EXCEPTIONS)
+     try
+     {
+         sid.setCombinedWaveforms(cws);
+@@ -66,6 +72,10 @@ bool residfp::setCombinedWaveforms(CombinedWaveforms cws)
+     {
+         return false;
+     }
++#else
++    sid.setCombinedWaveforms(cws);
++    return true;
++#endif
+ }
+ 
+ void residfp::reset()
+@@ -99,6 +109,7 @@ bool residfp::setSamplingParameters(
+         double samplingFrequency
+     )
+ {
++#if defined(__cpp_exceptions) || defined(__EXCEPTIONS)
+     try
+     {
+         sid.setSamplingParameters(clockFrequency, method, samplingFrequency);
+@@ -108,6 +119,10 @@ bool residfp::setSamplingParameters(
+     {
+         return false;
+     }
++#else
++    sid.setSamplingParameters(clockFrequency, method, samplingFrequency);
++    return true;
++#endif
+ }
+ 
+ int residfp::clock(unsigned int cycles, short* buf)

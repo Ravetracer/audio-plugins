@@ -30,6 +30,8 @@
 
 #include "residfp/residfp_defs.h"
 #include "siddefs-fp.h"
+
+#include <cstdlib>
 #include "ExternalFilter.h"
 #include "Filter.h"
 #include "Voice.h"
@@ -42,6 +44,17 @@ class Filter;
 class Filter6581;
 class Filter8580;
 class Resampler;
+
+/**
+ * Without C++ exceptions (the WebAssembly build, ReSIDent patch 0005) an
+ * error that would be thrown aborts instead. ReSIDent never passes the
+ * values that throw.
+ */
+#if defined(__cpp_exceptions) || defined(__EXCEPTIONS)
+#  define RESIDFP_THROW(e) throw e
+#else
+#  define RESIDFP_THROW(e) std::abort()
+#endif
 
 /**
  * SID error exception.

@@ -56,6 +56,15 @@ means unpacking the new release and applying them again.
   The state's layout is unchanged; a phase saved by an older build is read
   in the new unit, a one-time offset of less than a sample. Against the tree
   with 0001-0003 applied.
+- `patches/0005-residfp-wasi.patch` -- the WebAssembly build (the WCLAP,
+  wasi-sdk without threads and without C++ exceptions). The filter model
+  configs build their tables one after the other under `__wasi__` instead
+  of on four and six threads; each table draws from its own noise sequence
+  (0001), so the tables are the same either way. Without exceptions
+  `SIDError` is not thrown but aborts (`RESIDFP_THROW` in `SID.h`), and
+  `residfp.cpp`'s wrappers call through without `try`; ReSIDent never
+  passes the chip model, waveform or sampling values that throw. Native
+  builds compile exactly as before. Against the tree with 0001-0004 applied.
 
 ## Patches to SIDLite
 

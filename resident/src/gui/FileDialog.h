@@ -7,6 +7,7 @@
 #include <thread>
 #elif defined(__APPLE__)
 #include <memory>
+#elif defined(__wasm__)
 #else
 #include <sys/types.h>
 #endif
@@ -20,7 +21,9 @@ struct MacPanelState;
 // Native file chooser that never blocks the host's GUI thread. On Linux it is
 // zenity or kdialog run as a child process; on Windows the system's own
 // dialog, run on a worker thread; on macOS an open or save panel run
-// modeless on the main thread. Poll from the GUI timer.
+// modeless on the main thread; in the browser (the WCLAP's page) the page's
+// file picker, whose files are copied into the editor's file system. Poll
+// from the GUI timer.
 class FileDialog
 {
 public:
@@ -42,6 +45,8 @@ private:
 #elif defined(__APPLE__)
     // Shared with the panel's completion handler, which may outlive this.
     std::shared_ptr<MacPanelState> mac_;
+#elif defined(__wasm__)
+    int id_ = 0;
 #else
     pid_t pid_ = -1;
     int fd_ = -1;

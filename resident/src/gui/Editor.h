@@ -7,6 +7,10 @@
 // A click into the screen gives the C64 the keyboard: from then on every key
 // goes to the emulated machine (see Keymap.h for where they land), until the
 // window loses focus or something outside the screen is clicked.
+//
+// The editor talks to the plugin through a PluginLink: directly in the
+// desktop builds, by messages in the WCLAP (the browser), where the ROMs are
+// not in a folder but chosen on the ROM page and kept in the project.
 
 #include <array>
 #include <cstdint>
@@ -17,11 +21,8 @@
 #include "FileDialog.h"
 #include "Keymap.h"
 #include "NativeWindow.h"
+#include "PluginLink.h"
 #include "Widgets.h"
-
-namespace resident {
-class ResidentPlugin;
-}
 
 namespace resident::gui {
 
@@ -29,6 +30,7 @@ class ScreenView;
 class MachinePage;
 class CcPage;
 class RomPanel;
+class RomUploadPanel;
 
 class Editor : public RootWidget, public WindowListener
 {
@@ -40,7 +42,7 @@ public:
     static constexpr float kMinW = 640.0f;
     static constexpr float kMinH = 420.0f;
 
-    explicit Editor(ResidentPlugin& plugin);
+    explicit Editor(PluginLink& link);
     ~Editor() override;
 
     bool attach(uintptr_t parentWindow);
@@ -75,8 +77,8 @@ public:
     void layout() override;
     void paint(cairo_t* cr) override;
 
-    ResidentPlugin& plugin() { return plugin_; }
-    enum class Page { Screen, Machine, Cc };
+    PluginLink& link() { return link_; }
+    enum class Page { Screen, Machine, Cc, Roms };
     // Opens a program or, for a .d64, inserts it and offers its files (what
     // Load and a drop do).
     void openMedia(const std::string& path);
@@ -87,6 +89,12 @@ public:
     void notify(const std::string& text, bool error = false);
     bool c64HasKeyboard() const { return keyboardToC64_; }
     void giveKeyboardToC64(bool on);
+    // The window backend, for a host that feeds it events itself (the WCLAP page).
+    NativeWindow& window() { return window_; }
+    // ROM images (files, or folders searched as the ROM folder is) to the
+    // plugin, which keeps them in the project (the WCLAP's ROM page).
+    void addRomFiles(const std::vector<std::string>& paths);
+    void openRomDialog(bool folder);
 
 private:
     void openLoadDialog();
@@ -101,7 +109,7 @@ private:
     void sendKeyState();
     void paintStatus(cairo_t* cr);
 
-    ResidentPlugin& plugin_;
+    PluginLink& link_;
     NativeWindow window_;
     double scale_ = 1.0;
     float logicalW_ = kBaseW, logicalH_ = kBaseH;
@@ -119,7 +127,15 @@ private:
     ScreenView* screen_ = nullptr;
     MachinePage* page_ = nullptr;
     CcPage* ccPage_ = nullptr;
-    RomPanel* romPanel_ = nullptr;
+    // The ROM folder's instructions (desktop) or the ROM page (WCLAP): in
+    // place of the screen while the ROMs are missing, and as a page.
+    Widget* romPanel_ = nullptr;
+    bool romPage_ = false;
+    // A disk sent to the plugin (WCLAP): its files are offered once the
+    // plugin reports it in the drive.
+    bool pickerPending_ = false;
+    uint32_t pickerSerial_ = 0;
+    double pickerUntil_ = 0.0;
     double romScanAt_ = 0.0;
 
     Keymap keymap_;
@@ -129,7 +145,7 @@ private:
     bool keyboardToC64_ = false;
 
     std::unique_ptr<FileDialog> dialog_;
-    enum class DialogFor { Load, Attach, Export };
+    enum class DialogFor { Load, Attach, Export, Rom };
     DialogFor dialogFor_ = DialogFor::Load;
     std::string notice_;
     bool noticeError_ = false;

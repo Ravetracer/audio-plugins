@@ -4,11 +4,12 @@
 #include <cmath>
 #include <cstdio>
 #include <cstring>
+#include <filesystem>
 
 #include "Keys.h"
 #include "engine/Resources.h"
 #include "plugin/CcMap.h"
-#include "plugin/ResidentPlugin.h"
+#include "plugin/Params.h"
 #include "resident.h"
 
 namespace resident::gui {
@@ -42,6 +43,10 @@ std::string panText(double v)
 
 } // namespace
 
+namespace {
+std::string fileNameOf(const std::string& path) { return path.substr(path.find_last_of("/\\") + 1); }
+} // namespace
+
 // ================================================================= ScreenView
 
 class ScreenView : public Widget
@@ -57,11 +62,11 @@ public:
     // Pulls a new frame when there is one. True when the picture changed.
     bool update()
     {
-        auto& engine = ed_.plugin().engine();
-        const std::string& key = ed_.plugin().settings().palette;
-        if (engine.frameSerial() == serial_ && key == paletteKey_)
+        auto& link = ed_.link();
+        const std::string& key = link.settings().palette;
+        if (link.frameSerial() == serial_ && key == paletteKey_)
             return false;
-        serial_ = engine.copyFrame(frame_.data());
+        serial_ = link.copyFrame(frame_.data());
         paletteKey_ = key;
         const Palette& pal = palette(key);
         cairo_surface_flush(surface_);
@@ -140,7 +145,7 @@ private:
     // one unit per pixel), paddles by the pointer's position.
     void pointer(const MouseEvent& e, bool buttonsChanged)
     {
-        auto& pl = ed_.plugin();
+        auto& pl = ed_.link();
         const Rect r = pictureRect();
         const float px = (e.x - r.x) * emu::Vic::kWidth / std::max(1.0f, r.w);
         const float py = (e.y - r.y) * emu::Vic::kHeight / std::max(1.0f, r.h);
@@ -173,7 +178,7 @@ private:
     }
     void sendButtons()
     {
-        auto& pl = ed_.plugin();
+        auto& pl = ed_.link();
         for (int port = 0; port < 2; ++port) {
             const auto dev = pl.settings().portDevice[port];
             uint8_t bits = 0;
@@ -207,10 +212,10 @@ public:
     {
         openButton_ = add<Button>("Open the folder", [] { openFolder(romFolder()); });
         againButton_ = add<Button>("Look again", [this] {
-            if (ed_.plugin().rescanRoms())
+            if (ed_.link().rescanRoms())
                 ed_.notify("ROMs found: the C64 is starting");
             else
-                ed_.notify("Still missing: " + ed_.plugin().romReport(), true);
+                ed_.notify("Still missing: " + ed_.link().romReport(), true);
         });
     }
 
@@ -255,7 +260,7 @@ public:
                 folderShown = true;
             }
         }
-        const std::string report = ed_.plugin().romReport();
+        const std::string report = ed_.link().romReport();
         if (!report.empty()) {
             setFont(cr, 11.0f);
             drawText(cr, "Missing now: " + report, {x, bounds_.bottom() - 84, w, 18}, Align::Left, theme::red);
@@ -268,6 +273,95 @@ private:
     Button* againButton_;
 };
 
+// ================================================================= RomUploadPanel
+
+// The WCLAP's ROM page: a browser has no ROM folder, so the user picks the
+// ROM files (or a folder with them, or drops them on the window); the editor
+// recognises them and sends them to the plugin, which keeps them in the
+// project. In place of the screen while the ROMs are missing, and reachable
+// from the Machine page to replace them.
+class RomUploadPanel : public Widget
+{
+public:
+    explicit RomUploadPanel(Editor& ed) : ed_(ed)
+    {
+        filesButton_ = add<Button>("Choose a file...", [this] { ed_.openRomDialog(false); });
+        filesButton_->setTooltip("One ROM file at a time; or drop several on the window");
+        folderButton_ = add<Button>("Choose a folder...", [this] { ed_.openRomDialog(true); });
+        folderButton_->setTooltip("A folder with the ROMs, e.g. VICE's data folder (its C64 and DRIVES folders are searched too)");
+        backButton_ = add<Button>("Back to the C64", [this] { ed_.showPage(Editor::Page::Screen); });
+    }
+
+    void layout() override
+    {
+        const float x = bounds_.x + 28, y = bounds_.bottom() - 56;
+        filesButton_->setBounds({x, y, 130, 28});
+        folderButton_->setBounds({x + 142, y, 140, 28});
+        backButton_->setBounds({bounds_.right() - 28 - 130, y, 130, 28});
+    }
+
+    void paint(cairo_t* cr) override
+    {
+        auto& link = ed_.link();
+        backButton_->setVisible(link.hasRoms());
+        fillRounded(cr, bounds_, 6, theme::panel);
+        strokeRounded(cr, bounds_, 6, theme::outline);
+        float y = bounds_.y + 30;
+        const float x = bounds_.x + 28, w = bounds_.w - 56;
+        setFont(cr, 17.0f, true);
+        drawText(cr, link.hasRoms() ? "The C64 ROMs" : "The C64 ROMs are needed", {x, y, w, 24}, Align::Left,
+                 theme::text);
+        y += 36;
+        setFont(cr, 11.5f);
+        for (const char* line :
+             {"ReSIDent needs the Commodore 64's ROMs. They are copyrighted and do not come with ReSIDent.",
+              "Choose them from your computer: they are recognised by their content, whatever the files are called,",
+              "and kept in this project, so it plays wherever it is opened without asking again.",
+              "A project you pass on carries them.", "",
+              "The VICE emulator has them in its data folders C64 and DRIVES, or dump them from your own C64."}) {
+            drawText(cr, line, {x, y, w, 18}, Align::Left, theme::textDim);
+            y += *line ? 19 : 10;
+        }
+        y += 14;
+        const unsigned have = link.romsPresent();
+        struct Row
+        {
+            const char* name;
+            const char* file;
+            unsigned bit;
+            bool optional;
+        };
+        static const Row rows[] = {{"KERNAL", "kernal-901227-03.bin", RomKernal, false},
+                                   {"BASIC", "basic-901226-01.bin", RomBasic, false},
+                                   {"Character set", "chargen-901225-01.bin", RomChargen, false},
+                                   {"1541 drive DOS", "dos1541ii-251968-03.bin", RomDrive, true}};
+        for (const auto& r : rows) {
+            const bool in = have & r.bit;
+            setColor(cr, in ? theme::green : r.optional ? theme::outline : theme::red);
+            cairo_arc(cr, x + 6, y + 10, 4, 0, 2 * M_PI);
+            cairo_fill(cr);
+            setFont(cr, 12.0f, true);
+            drawText(cr, r.name, {x + 20, y, 150, 20}, Align::Left, theme::text);
+            setFont(cr, 11.5f);
+            drawText(cr, r.file, {x + 170, y, 220, 20}, Align::Left, theme::textDim);
+            drawText(cr,
+                     in ? "in this project"
+                        : r.optional ? "missing: needed only for the True 1541 drive" : "missing",
+                     {x + 400, y, w - 400, 20}, Align::Left, in ? theme::green : r.optional ? theme::textDim : theme::red);
+            y += 26;
+        }
+        setFont(cr, 11.0f);
+        drawText(cr, "Or drop the files on this window.", {x, bounds_.bottom() - 84, w, 18}, Align::Left,
+                 theme::textFaint);
+    }
+
+private:
+    Editor& ed_;
+    Button* filesButton_;
+    Button* folderButton_;
+    Button* backButton_;
+};
+
 // ================================================================= MachinePage
 
 class MachinePage : public Widget
@@ -278,7 +372,7 @@ public:
     // Rebuilds the controls when the SID count or the engine changed.
     void sync()
     {
-        const auto& sids = ed_.plugin().settings().sids;
+        const auto& sids = ed_.link().settings().sids;
         if (sids.count != builtCount_ || sids.engine != builtEngine_)
             build();
     }
@@ -286,7 +380,7 @@ public:
     void build()
     {
         clearChildren();
-        auto& pl = ed_.plugin();
+        auto& pl = ed_.link();
         builtCount_ = pl.settings().sids.count;
         builtEngine_ = pl.settings().sids.engine;
         // The light engine has none of reSIDfp's tuning: those controls stay,
@@ -324,8 +418,10 @@ public:
         add<Choice>("Drive 8", std::vector<std::string>{"Virtual", "True 1541", "None"},
                     [&pl] { return static_cast<int>(pl.settings().driveMode); },
                     [edit, this](int i) {
-                        if (i == 1 && !ed_.plugin().hasDriveRom())
-                            ed_.notify("The True 1541 needs the 1541 DOS ROM in " + romFolder(), true);
+                        if (i == 1 && !ed_.link().hasDriveRom())
+                            ed_.notify(ed_.link().remote() ? std::string("The True 1541 needs the 1541 DOS ROM: add it on the ROM page")
+                                                           : "The True 1541 needs the 1541 DOS ROM in " + romFolder(),
+                                       true);
                         edit([i](MachineSettings& s) { s.driveMode = static_cast<emu::DriveMode>(i); });
                     })
             ->setTooltip("Virtual: instant, through the KERNAL. True 1541: the real drive, for programs with "
@@ -450,22 +546,25 @@ public:
             combined->setEnabled(full);
             const uint32_t lid = pid::Level + static_cast<uint32_t>(i), pid_ = pid::Pan + static_cast<uint32_t>(i);
             auto* lvl = add<Slider>("", -60.0, 12.0, 0.0, [&pl, lid] { return pl.paramValue(lid); },
-                                    [&pl, lid](double v) { pl.guiSetParam(lid, v); }, dbText);
-            lvl->onBegin = [&pl, lid] { pl.guiBeginParam(lid); };
-            lvl->onEnd = [&pl, lid] { pl.guiEndParam(lid); };
+                                    [&pl, lid](double v) { pl.setParam(lid, v); }, dbText);
+            lvl->onBegin = [&pl, lid] { pl.beginParam(lid); };
+            lvl->onEnd = [&pl, lid] { pl.endParam(lid); };
             auto* pan = add<Slider>("", -1.0, 1.0, 0.0, [&pl, pid_] { return pl.paramValue(pid_); },
-                                    [&pl, pid_](double v) { pl.guiSetParam(pid_, v); }, panText);
-            pan->onBegin = [&pl, pid_] { pl.guiBeginParam(pid_); };
-            pan->onEnd = [&pl, pid_] { pl.guiEndParam(pid_); };
+                                    [&pl, pid_](double v) { pl.setParam(pid_, v); }, panText);
+            pan->onBegin = [&pl, pid_] { pl.beginParam(pid_); };
+            pan->onEnd = [&pl, pid_] { pl.endParam(pid_); };
         }
         auto* master = add<Slider>("Volume", -60.0, 12.0, 0.0, [&pl] { return pl.paramValue(pid::Master); },
-                                   [&pl](double v) { pl.guiSetParam(pid::Master, v); }, dbText);
-        master->onBegin = [&pl] { pl.guiBeginParam(pid::Master); };
-        master->onEnd = [&pl] { pl.guiEndParam(pid::Master); };
+                                   [&pl](double v) { pl.setParam(pid::Master, v); }, dbText);
+        master->onBegin = [&pl] { pl.beginParam(pid::Master); };
+        master->onEnd = [&pl] { pl.endParam(pid::Master); };
         add<Label>(full ? "Model sets a starting point for Curve and Combined; tune Curve, Range and Caps by ear to your chip."
                         : "Light engine: of the chip settings only the model applies (6581 or 8580). The others keep "
                           "their values for Accurate.",
                    10.0f, Align::Left, theme::textFaint);
+        if (pl.remote())
+            add<Button>("ROMs...", [this] { ed_.showPage(Editor::Page::Roms); })
+                ->setTooltip("The ROMs this project carries: see which are in, replace them");
         layout();
         if (root())
             root()->markDirty();
@@ -517,6 +616,8 @@ public:
         y += rowH + 6;
         if (k < ch.size())
             ch[k++]->setBounds({x0, y, w, 16});
+        if (k < ch.size()) // the WCLAP's ROMs button, beside the volume
+            ch[k++]->setBounds({x0 + w - 90, y - rowH - 6, 90, rowH});
     }
 
     void paint(cairo_t* cr) override
@@ -528,7 +629,7 @@ public:
 private:
     void addressMenu(int i)
     {
-        auto& pl = ed_.plugin();
+        auto& pl = ed_.link();
         const uint16_t cur = pl.settings().sids.chips[static_cast<size_t>(i)].address;
         std::vector<MenuItem> groups;
         for (unsigned page : {0xd400u, 0xd500u, 0xd600u, 0xd700u, 0xde00u, 0xdf00u}) {
@@ -571,14 +672,14 @@ public:
     // a project load, an edit).
     void sync()
     {
-        if (ed_.plugin().ccMapSerial() != builtSerial_)
+        if (ed_.link().ccMapSerial() != builtSerial_)
             build();
     }
 
     void build()
     {
         clearChildren();
-        auto& pl = ed_.plugin();
+        auto& pl = ed_.link();
         builtSerial_ = pl.ccMapSerial();
         maps_ = availableCcMaps();
         const CcMap& cur = pl.ccMap();
@@ -625,7 +726,11 @@ public:
                     })
             ->setTooltip("The MIDI channel the slots send on (a slot can name its own: CC@channel)");
         add<Button>("Save as", [this] { saveAs(); })->setTooltip("Save this map into your CC map folder");
-        add<Button>("Folder", [] {
+        add<Button>("Folder", [this] {
+            if (ed_.link().remote()) {
+                ed_.notify("Maps saved with Save as are kept in this browser");
+                return;
+            }
             makeFolder(ccMapFolder());
             openFolder(ccMapFolder());
         })->setTooltip("Open the folder with your CC maps (*.ccmap, plain text)");
@@ -643,10 +748,10 @@ public:
             name->setEnabled(s.used());
             name->setTooltip("The slot's name; value names after a '|': Vib On | 0 Off, 64 On");
             auto* val = add<Slider>("", 0.0, 127.0, 0.0, [&pl, id] { return pl.paramValue(id); },
-                                    [&pl, id](double v) { pl.guiSetParam(id, std::round(v)); },
+                                    [&pl, id](double v) { pl.setParam(id, std::round(v)); },
                                     [&pl, i](double v) { return pl.ccMap().valueText(i, static_cast<int>(std::lround(v))); });
-            val->onBegin = [&pl, id] { pl.guiBeginParam(id); };
-            val->onEnd = [&pl, id] { pl.guiEndParam(id); };
+            val->onBegin = [&pl, id] { pl.beginParam(id); };
+            val->onEnd = [&pl, id] { pl.endParam(id); };
         }
         layout();
         if (root())
@@ -715,10 +820,10 @@ private:
 
     void editCc(int slot)
     {
-        const auto& s = ed_.plugin().ccMap().slots[slot];
+        const auto& s = ed_.link().ccMap().slots[slot];
         const std::string cur = s.used() ? std::to_string(s.cc) + (s.channel >= 0 ? "@" + std::to_string(s.channel + 1) : "") : "";
         ask(slotChild(slot, 1), cur, [this, slot](const std::string& text) {
-            auto& pl = ed_.plugin();
+            auto& pl = ed_.link();
             CcSlot s = pl.ccMap().slots[slot];
             std::string t;
             for (char c : text)
@@ -742,7 +847,7 @@ private:
 
     void editName(int slot)
     {
-        const auto& s = ed_.plugin().ccMap().slots[slot];
+        const auto& s = ed_.link().ccMap().slots[slot];
         std::string cur = s.name;
         if (!s.labels.empty()) {
             cur += " |";
@@ -750,7 +855,7 @@ private:
                 cur += (k ? ", " : " ") + std::to_string(s.labels[k].first) + " " + s.labels[k].second;
         }
         ask(slotChild(slot, 2), cur, [this, slot](const std::string& text) {
-            auto& pl = ed_.plugin();
+            auto& pl = ed_.link();
             CcSlot s = pl.ccMap().slots[slot];
             const CcMap probe = CcMap::fromText("1 = " + std::to_string(s.cc) + " " + text);
             s.name = probe.slots[0].name;
@@ -761,11 +866,11 @@ private:
 
     void saveAs()
     {
-        const CcMap& cur = ed_.plugin().ccMap();
+        const CcMap& cur = ed_.link().ccMap();
         ask(3, cur.name.empty() ? std::string("My map") : cur.name, [this](const std::string& name) {
             if (name.empty())
                 return;
-            auto& pl = ed_.plugin();
+            auto& pl = ed_.link();
             CcMap m = pl.ccMap();
             m.name = name;
             std::string err;
@@ -787,7 +892,7 @@ private:
 
 // ================================================================= Editor
 
-Editor::Editor(ResidentPlugin& plugin) : plugin_(plugin), window_(this)
+Editor::Editor(PluginLink& link) : link_(link), window_(this)
 {
     scale_ = NativeWindow::systemScale();
 
@@ -796,38 +901,38 @@ Editor::Editor(ResidentPlugin& plugin) : plugin_(plugin), window_(this)
     diskButton_ = add<Button>("Media", [this] { showDiskMenu(); });
     diskButton_->setTooltip("Insert a disk without starting it, start a file from the disk, export the disk "
                             "with what the program saved, press a freezer cartridge's button, eject");
-    resetButton_ = add<Button>("Reset", [this] { plugin_.resetButton(); });
+    resetButton_ = add<Button>("Reset", [this] { link_.resetButton(); });
     resetButton_->setTooltip("The reset button: the program restarts its machine, memory survives");
-    powerButton_ = add<Button>("Power", [this] { plugin_.powerCycle(); });
+    powerButton_ = add<Button>("Power", [this] { link_.powerCycle(); });
     powerButton_->setTooltip("Switch off and on: the attached program starts again");
-    warpButton_ = add<Button>("Warp", [this] { plugin_.setWarp(!warpButton_->isActive()); });
+    warpButton_ = add<Button>("Warp", [this] { link_.setWarp(!warpButton_->isActive()); });
     warpButton_->setTooltip("Run as fast as possible (muted), e.g. while a program unpacks itself. Lit by an automatic warp: "
                             "click to stop it (Machine page: Auto warp)");
 
     std::vector<std::string> ifaces;
     for (int i = 0; i < static_cast<int>(emu::MidiInterface::Count); ++i)
         ifaces.push_back(emu::midiInterfaceName(static_cast<emu::MidiInterface>(i)));
-    midiChoice_ = add<Choice>("MIDI", ifaces, [this] { return static_cast<int>(plugin_.settings().midi); },
+    midiChoice_ = add<Choice>("MIDI", ifaces, [this] { return static_cast<int>(link_.settings().midi); },
                               [this](int i) {
-                                  MachineSettings s = plugin_.settings();
+                                  MachineSettings s = link_.settings();
                                   s.midi = static_cast<emu::MidiInterface>(i);
-                                  plugin_.applySettings(s);
+                                  link_.applySettings(s);
                               });
     midiChoice_->setTooltip("The MIDI cartridge in the expansion port. Set the program to the same type.");
     joyChoice_ = add<Choice>("Joy", std::vector<std::string>{"Off", "Numpad", "Cursor keys"},
-                             [this] { return static_cast<int>(plugin_.settings().joyKeys); },
+                             [this] { return static_cast<int>(link_.settings().joyKeys); },
                              [this](int i) {
-                                 MachineSettings s = plugin_.settings();
+                                 MachineSettings s = link_.settings();
                                  s.joyKeys = static_cast<JoyKeys>(i);
-                                 plugin_.applySettings(s);
+                                 link_.applySettings(s);
                              });
     joyChoice_->setTooltip("Joystick on the keyboard: numpad (0 or 5 = fire) or cursor keys (right Ctrl = fire)");
     portChoice_ = add<Choice>("Port", std::vector<std::string>{"1", "2"},
-                              [this] { return plugin_.settings().joyPort == 1 ? 0 : 1; },
+                              [this] { return link_.settings().joyPort == 1 ? 0 : 1; },
                               [this](int i) {
-                                  MachineSettings s = plugin_.settings();
+                                  MachineSettings s = link_.settings();
                                   s.joyPort = i == 0 ? 1 : 2;
-                                  plugin_.applySettings(s);
+                                  link_.applySettings(s);
                               });
     machineButton_ = add<Button>("Machine", [this] { toggleMachinePage(); });
     machineButton_->setTooltip("Video, palette, MIDI clock, the SIDs and their mix");
@@ -839,9 +944,12 @@ Editor::Editor(ResidentPlugin& plugin) : plugin_(plugin), window_(this)
     page_->setVisible(false);
     ccPage_ = add<CcPage>(*this);
     ccPage_->setVisible(false);
-    romPanel_ = add<RomPanel>(*this);
-    romPanel_->setVisible(!plugin_.hasRoms());
-    screen_->setVisible(plugin_.hasRoms());
+    if (link_.remote())
+        romPanel_ = add<RomUploadPanel>(*this);
+    else
+        romPanel_ = add<RomPanel>(*this);
+    romPanel_->setVisible(!link_.hasRoms());
+    screen_->setVisible(link_.hasRoms());
 
     grabKeyboard = [this] { window_.grabKeyboard(); };
     setBounds({0, 0, logicalW_, logicalH_});
@@ -958,24 +1066,24 @@ void Editor::giveKeyboardToC64(bool on)
 
 void Editor::sendKeyState()
 {
-    keymap_.joyKeys = plugin_.settings().joyKeys;
+    keymap_.joyKeys = link_.settings().joyKeys;
     const auto m = keymap_.matrix();
     for (int col = 0; col < 8; ++col) {
         const uint8_t diff = m[static_cast<size_t>(col)] ^ sentMatrix_[static_cast<size_t>(col)];
         for (int row = 0; row < 8; ++row)
             if (diff & (1 << row))
-                plugin_.key(static_cast<uint8_t>(col * 8 + row), (m[static_cast<size_t>(col)] >> row) & 1);
+                link_.key(static_cast<uint8_t>(col * 8 + row), (m[static_cast<size_t>(col)] >> row) & 1);
     }
     sentMatrix_ = m;
     const uint8_t joy = keymap_.joystickBits();
-    const int port = plugin_.settings().joyPort - 1;
+    const int port = link_.settings().joyPort - 1;
     if (port != sentJoyPort_) {
-        plugin_.joystick(sentJoyPort_, 0);
+        link_.joystick(sentJoyPort_, 0);
         sentJoyPort_ = port;
         sentJoy_ = 0xff;
     }
     if (joy != sentJoy_) {
-        plugin_.joystick(port, joy);
+        link_.joystick(port, joy);
         sentJoy_ = joy;
     }
 }
@@ -986,10 +1094,10 @@ void Editor::onRawKey(int code, bool down, unsigned keysym)
         return;
     if (Keymap::isRestore(code)) {
         if (down)
-            plugin_.restoreKey();
+            link_.restoreKey();
         return;
     }
-    keymap_.mapping = plugin_.settings().keyMapping;
+    keymap_.mapping = link_.settings().keyMapping;
     if (down)
         keymap_.press(code, keysym);
     else
@@ -1021,12 +1129,81 @@ void Editor::onMouseDown(const MouseEvent& e)
 
 void Editor::onFilesDropped(const std::vector<std::string>& paths)
 {
-    if (!paths.empty())
-        openMedia(paths.front());
+    if (paths.empty())
+        return;
+    if (link_.remote()) {
+        // ROMs dropped on the ROM page, or files that are all ROMs, go to the
+        // project's ROMs; anything else is a program, cartridge or disk.
+        bool allRoms = true;
+        for (const auto& p : paths) {
+            std::vector<uint8_t> data;
+            allRoms = allRoms && readFile(p, data) && identifyRom(data) != RomKind::None;
+        }
+        if (romPanel_->isVisible() || allRoms) {
+            addRomFiles(paths);
+            return;
+        }
+    }
+    openMedia(paths.front());
+}
+
+void Editor::openRomDialog(bool folder)
+{
+    if (dialog_)
+        return;
+    dialog_ = std::make_unique<FileDialog>();
+    dialogFor_ = DialogFor::Rom;
+    if (!dialog_->start(folder ? FileDialog::Mode::OpenFolder : FileDialog::Mode::OpenFile, "Choose the C64 ROMs",
+                        "ROM images | *.bin *.rom *.BIN *.ROM *")) {
+        dialog_.reset();
+        notify("No file chooser available; drop the files on the window instead", true);
+    }
+}
+
+void Editor::addRomFiles(const std::vector<std::string>& paths)
+{
+    static const char* const kNames[] = {"", "KERNAL", "BASIC", "character ROM", "1541 DOS"};
+    std::vector<std::string> sent;
+    int others = 0;
+    auto send = [&](const std::string& name, const std::vector<uint8_t>& data) {
+        const RomKind k = identifyRom(data);
+        if (k == RomKind::None) {
+            ++others;
+            return;
+        }
+        link_.uploadRom(name, data);
+        sent.push_back(kNames[static_cast<int>(k)]);
+    };
+    for (const auto& path : paths) {
+        std::error_code ec;
+        const std::filesystem::path fp(std::u8string(path.begin(), path.end()));
+        if (std::filesystem::is_directory(fp, ec)) {
+            // A folder is searched as the ROM folder is (and its C64 and DRIVES).
+            emu::Roms roms;
+            std::string report;
+            romsFromFolder(path, roms, report);
+            for (const auto* rom : {&roms.basic, &roms.chargen, &roms.drive1541, &roms.kernal})
+                if (!rom->empty())
+                    send(fileNameOf(path), *rom);
+            continue;
+        }
+        std::vector<uint8_t> data;
+        if (readFile(path, data))
+            send(fileNameOf(path), data);
+        else
+            ++others;
+    }
+    if (sent.empty()) {
+        notify("No C64 ROM among them: the KERNAL and BASIC are 8 KB, the character ROM 4 KB, the 1541 DOS 16 KB", true);
+        return;
+    }
+    std::string list;
+    for (const auto& n : sent)
+        list += (list.empty() ? "" : ", ") + n;
+    notify("Sending " + list + (others ? " (" + std::to_string(others) + " other file" + (others == 1 ? "" : "s") + " left out)" : ""));
 }
 
 namespace {
-std::string fileNameOf(const std::string& path) { return path.substr(path.find_last_of("/\\") + 1); }
 bool isD64(const std::string& path)
 {
     const std::string n = fileNameOf(path);
@@ -1039,16 +1216,34 @@ void Editor::openMedia(const std::string& path)
     std::string err;
     if (isD64(path)) {
         // In the drive first, without touching the machine; then which file.
-        if (!plugin_.attachDiskFile(path, err)) {
+        const uint32_t serial = link_.diskSerial();
+        if (!link_.attachDiskFile(path, err)) {
             notify(err, true);
+            return;
+        }
+        if (link_.remote()) {
+            // The plugin reports the disk with its next answer; its files are
+            // offered then (onTimer).
+            notify("Inserting " + fileNameOf(path));
+            pickerPending_ = true;
+            pickerSerial_ = serial;
+            pickerUntil_ = nowSeconds() + 10.0;
             return;
         }
         notify("Disk inserted: " + fileNameOf(path));
         showDiskPicker();
         return;
     }
-    if (plugin_.loadFile(path, err)) {
-        const std::string notice = plugin_.loadNotice();
+    if (link_.remote()) {
+        // The plugin answers with what became of it, as a notice.
+        if (link_.loadFile(path, err))
+            notify("Loading " + fileNameOf(path));
+        else
+            notify(err, true);
+        return;
+    }
+    if (link_.loadFile(path, err)) {
+        const std::string notice = link_.loadNotice();
         notify(notice.empty() ? "Loaded " + fileNameOf(path) : notice);
     } else {
         notify(err, true);
@@ -1058,11 +1253,11 @@ void Editor::openMedia(const std::string& path)
 std::vector<MenuItem> Editor::diskStartItems()
 {
     std::vector<MenuItem> items;
-    const auto files = plugin_.diskDirectory();
+    const auto files = link_.diskDirectory();
     auto start = [this](std::string petscii, std::string label) {
         return [this, petscii, label] {
             std::string err;
-            if (plugin_.startFromDisk(petscii, err))
+            if (link_.startFromDisk(petscii, err))
                 notify("Starting " + label);
             else
                 notify(err, true);
@@ -1101,7 +1296,7 @@ void Editor::showDiskPicker()
 {
     std::vector<MenuItem> items;
     MenuItem title;
-    const std::string t = plugin_.diskTitle();
+    const std::string t = link_.diskTitle();
     title.label = "Disk: " + (t.empty() ? std::string("(no title)") : t);
     title.enabled = false;
     items.push_back(title);
@@ -1152,7 +1347,7 @@ void Editor::openExportDialog()
 void Editor::showDiskMenu()
 {
     std::vector<MenuItem> items;
-    const bool disk = plugin_.diskPresent();
+    const bool disk = link_.diskPresent();
     items.push_back({"Load...", [this] { openLoadDialog(); }});
     items.push_back({"Insert disk...", [this] { openAttachDialog(); }});
     MenuItem startMenu;
@@ -1164,16 +1359,29 @@ void Editor::showDiskMenu()
     MenuItem sep;
     sep.separator = true;
     items.push_back(sep);
-    MenuItem exportItem{"Export disk image...", [this] { openExportDialog(); }};
+    MenuItem exportItem{"Export disk image...", [this] {
+        if (link_.remote()) {
+            // The page hands the image over as a download; the name is the disk's.
+            std::string name = link_.diskTitle();
+            for (auto& c : name)
+                if (c == '/' || c == '\\' || c == ' ')
+                    c = '_';
+            std::string err;
+            if (!link_.exportDisk((name.empty() ? std::string("disk") : name) + ".d64", err))
+                notify(err, true);
+            return;
+        }
+        openExportDialog();
+    }};
     exportItem.enabled = disk;
     items.push_back(exportItem);
-    MenuItem ejectDisk{"Eject disk", [this] { plugin_.ejectDisk(); }};
+    MenuItem ejectDisk{"Eject disk", [this] { link_.ejectDisk(); }};
     ejectDisk.enabled = disk;
     items.push_back(ejectDisk);
-    MenuItem freeze{"Freeze (cartridge button)", [this] { plugin_.freezeButton(); }};
-    freeze.enabled = plugin_.cartridgeFreezable();
+    MenuItem freeze{"Freeze (cartridge button)", [this] { link_.freezeButton(); }};
+    freeze.enabled = link_.cartridgeFreezable();
     items.push_back(freeze);
-    items.push_back({"Eject cartridge", [this] { plugin_.ejectCartridge(); }});
+    items.push_back({"Eject cartridge", [this] { link_.ejectCartridge(); }});
     const Rect b = diskButton_->bounds();
     showMenu(this, std::move(items), b.x, b.bottom());
 }
@@ -1185,7 +1393,10 @@ void Editor::toggleMachinePage()
 
 void Editor::showPage(Page p)
 {
-    showPage(p == Page::Machine ? static_cast<Widget*>(page_) : p == Page::Cc ? static_cast<Widget*>(ccPage_) : nullptr);
+    showPage(p == Page::Machine ? static_cast<Widget*>(page_)
+             : p == Page::Cc    ? static_cast<Widget*>(ccPage_)
+             : p == Page::Roms  ? romPanel_
+                                : nullptr);
 }
 
 void Editor::toggleCcPage()
@@ -1196,17 +1407,18 @@ void Editor::toggleCcPage()
 // One of the pages over the screen, or none (the screen).
 void Editor::showPage(Widget* which)
 {
+    romPage_ = which == romPanel_;
     page_->setVisible(which == page_);
     ccPage_->setVisible(which == ccPage_);
-    screen_->setVisible(!which && plugin_.hasRoms());
-    romPanel_->setVisible(!which && !plugin_.hasRoms());
+    screen_->setVisible(!which && link_.hasRoms());
+    romPanel_->setVisible(romPage_ || (!which && !link_.hasRoms()));
     machineButton_->setActive(which == page_);
     ccButton_->setActive(which == ccPage_);
     if (which) {
         giveKeyboardToC64(false);
         if (which == page_)
             page_->build();
-        else
+        else if (which == ccPage_)
             ccPage_->build();
     }
     markDirty();
@@ -1253,18 +1465,31 @@ void Editor::onTimer()
 {
     window_.processEvents();
     const double t = nowSeconds();
-    if (!plugin_.hasRoms() && t - romScanAt_ > 2.0) {
+    if (!link_.hasRoms() && t - romScanAt_ > 2.0 && !link_.remote()) {
         romScanAt_ = t;
-        if (plugin_.rescanRoms())
+        if (link_.rescanRoms())
             notify("ROMs found: the C64 is starting");
         markDirty();
     }
-    const bool pageShown = page_->isVisible() || ccPage_->isVisible();
-    if (!pageShown && romPanel_->isVisible() == plugin_.hasRoms()) {
-        romPanel_->setVisible(!plugin_.hasRoms());
-        screen_->setVisible(plugin_.hasRoms());
+    {
+        std::string text;
+        bool error = false;
+        while (link_.takeNotice(text, error))
+            notify(text, error);
+    }
+    if (pickerPending_ && link_.diskSerial() != pickerSerial_ && link_.diskPresent()) {
+        pickerPending_ = false;
+        showDiskPicker();
+    } else if (pickerPending_ && t > pickerUntil_) {
+        pickerPending_ = false;
+    }
+    const bool pageShown = page_->isVisible() || ccPage_->isVisible() || romPage_;
+    if (!pageShown && romPanel_->isVisible() == link_.hasRoms()) {
+        romPanel_->setVisible(!link_.hasRoms());
+        screen_->setVisible(link_.hasRoms());
         markDirty();
     }
+    link_.setScreenWanted(screen_->isVisible());
     if (screen_->isVisible() && screen_->update())
         markAnimDirty();
     if (page_->isVisible())
@@ -1272,9 +1497,8 @@ void Editor::onTimer()
     if (ccPage_->isVisible())
         ccPage_->sync();
 
-    auto& engine = plugin_.engine();
-    const uint32_t in = engine.midiInCount.load(std::memory_order_relaxed);
-    const uint32_t out = engine.midiOutCount.load(std::memory_order_relaxed);
+    const uint32_t in = link_.midiInCount();
+    const uint32_t out = link_.midiOutCount();
     if (in != lastMidiIn_) {
         lastMidiIn_ = in;
         midiInLit_ = t + 0.08;
@@ -1283,8 +1507,8 @@ void Editor::onTimer()
         lastMidiOut_ = out;
         midiOutLit_ = t + 0.08;
     }
-    driveLit_ = engine.driveLed.load(std::memory_order_relaxed);
-    const bool warp = plugin_.warping();
+    driveLit_ = link_.driveLed();
+    const bool warp = link_.warping();
     if (warp != warpLit_) {
         warpLit_ = warp;
         warpButton_->setActive(warp);
@@ -1292,7 +1516,7 @@ void Editor::onTimer()
     }
     if (t - mediaPolledAt_ > 0.5) {
         mediaPolledAt_ = t;
-        const std::string m = plugin_.mediaSummary();
+        const std::string m = link_.mediaSummary();
         if (m != media_) {
             media_ = m;
             markAnimDirty();
@@ -1305,8 +1529,10 @@ void Editor::onTimer()
             dialog_.reset();
             if (!result.empty()) {
                 std::string err;
-                if (purpose == DialogFor::Attach) {
-                    if (plugin_.attachDiskFile(result, err))
+                if (purpose == DialogFor::Rom) {
+                    addRomFiles({result});
+                } else if (purpose == DialogFor::Attach) {
+                    if (link_.attachDiskFile(result, err))
                         notify("Disk inserted: " + fileNameOf(result));
                     else
                         notify(err, true);
@@ -1315,7 +1541,7 @@ void Editor::onTimer()
                 } else {
                     if (result.size() < 4 || (result.substr(result.size() - 4) != ".d64" && result.substr(result.size() - 4) != ".D64"))
                         result += ".d64";
-                    if (plugin_.exportDisk(result, err))
+                    if (link_.exportDisk(result, err))
                         notify("Saved " + fileNameOf(result));
                     else
                         notify(err, true);

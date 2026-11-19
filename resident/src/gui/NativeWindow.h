@@ -7,6 +7,11 @@
 namespace resident::gui {
 using NativeWindow = Win32Window;
 }
+#elif defined(__wasm__)
+#include "WebWindow.h"
+namespace resident::gui {
+using NativeWindow = WebWindow;
+}
 #elif defined(__APPLE__)
 #include "CocoaWindow.h"
 namespace resident::gui {

@@ -26,7 +26,9 @@
 #include "OpAmp.h"
 
 #include <mutex>
+#if !defined(__wasi__)
 #include <thread>
+#endif
 
 #if defined(HAVE_CXX20) && defined(__cpp_lib_jthread)
 #  define HAVE_JTHREADS
@@ -193,6 +195,15 @@ FilterModelConfig8580::FilterModelConfig8580() :
         buildResonanceTable(opampModel, resGain);
     };
 
+#if defined(__wasi__)
+    // WebAssembly without threads (ReSIDent patch 0005): one table after the
+    // other. Each table draws from its own noise sequence (patch 0001), so
+    // the tables are the same as when they are built in parallel.
+    filterSummer();
+    filterMixer();
+    filterGain();
+    filterResonance();
+#else
 #ifdef HAVE_JTHREADS
     using sidThread = std::jthread;
 #else
@@ -209,6 +220,7 @@ FilterModelConfig8580::FilterModelConfig8580() :
     thdMixer.join();
     thdGain.join();
     thdResonance.join();
+#endif
 #endif
 }
 

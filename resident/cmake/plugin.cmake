@@ -58,6 +58,7 @@ add_library(resident-impl STATIC
     src/gui/FileDialog.cpp
     src/gui/Keymap.cpp
     src/gui/Editor.cpp
+    src/gui/LocalLink.cpp
     ${RESIDENT_WINDOW_SOURCE}
 )
 target_include_directories(resident-impl PUBLIC src)

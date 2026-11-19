@@ -572,6 +572,90 @@ with the old resampler put back, eleven checks fail. Every reSIDfp render
 changes by this (timing), so 0.8.0's bit-identity reference no longer
 applies.
 
+## Status (1.2.0, 2026-11-19)
+
+**The WCLAP**: ReSIDent compiled to WebAssembly for browser hosts (openDAW
+first), with its full editor, and a ROM page in place of the ROM folder.
+Built with wasi-sdk (`cmake/wclap.cmake`, the shared helpers in
+`../shared/cmake/wclap.cmake`, `../shared/web/README.md` for the design):
+`build-wasm/resident.wclap.tar.gz` holds module.wasm (the machine and the
+plugin, WASI imports only), ui.wasm (the editor), the page, the fonts and
+the licence texts (`COPYING`, `LICENSE`, `web/THIRD-PARTY.txt`, Cairo's,
+pixman's and FreeType's). No ROM is ever in it.
+
+- **Two modules.** The host runs module.wasm, the page's messages included,
+  on its audio worklet, so the editor cannot draw there: it runs in the page
+  as ui.wasm and reaches the plugin only through clap.webview. The editor
+  talks to a `gui::PluginLink` (`gui/PluginLink.h`): natively `LocalLink`
+  calls ResidentPlugin as before; in the page `RemoteLink`
+  (`web/UiMain.cpp`) mirrors what the plugin reports and sends every action
+  as a message (`plugin/WebProtocol.h`, the plugin's side in
+  `plugin/WebView.cpp`). The page polls about 30 times a second with the
+  serial of every part it holds (values, settings, CC map, media, notice,
+  screen); the answer carries only what moved. Results of actions (a load,
+  a disk, a ROM) come back as notices for the status line.
+- **The screen** goes as palette indices, only while the page shows it
+  (the VIC stops drawing half a second after the last page that asked), only
+  when the VIC has a new frame, and only the lines that changed since the
+  frame the page has -- each line run-length coded, packed two pixels a
+  byte, or as a diff against the page's line, whichever is smaller. Measured
+  in node: 501 bytes/s with the screen hidden (the 16-byte status), 1.4 KB/s
+  at BASIC's blinking cursor, 1.9 KB/s with Cynthcart idle, 130 KB/s with
+  Cynthcart's display animating to a held note (146 lines of 272 every
+  frame); a whole screen is 9.4 KB.
+- **ROMs live in the project.** A browser has no ROM folder: the ROM page
+  (in place of the screen while they are missing, and behind Machine >
+  ROMs...) takes files, a folder, or files dropped on the window, recognises
+  them by content (`identifyRom`, as the ROM folder does) and uploads them;
+  the plugin keeps them in its state and boots when KERNAL, BASIC and the
+  character ROM are there. A ROM replaced while the machine runs starts it
+  again. The state is version 2: four blobs after the 1.1.0 ones (KERNAL,
+  BASIC, character ROM, 1541 DOS); older builds stop reading before them,
+  and a version-1 state loads and waits for ROMs. A state without ROMs
+  leaves the ones an instance already has.
+- **Natively nothing changes**: the ROM folder is still where the ROMs come
+  from, recognised by content, and the folder wins. A project that carries
+  ROMs (made in the browser) uses them only when the folder has no complete
+  set, and keeps them on save; the folder's ROMs are never written into a
+  state. Renders of the plugin and of `resident-run` are bit-identical to
+  1.1.0 on both engines.
+- **Keys** reach the C64 down and up (`wclap_ui_key_up`). The page knows
+  keysyms only, so `web/UiMain.cpp` gives each one the evdev code of its key
+  on a US layout: Symbolic mapping works for every layout, Positional for a
+  US one. A release whose keysym matches no held key (Shift let go first)
+  lets go of every held character key. Numpad keys cannot be told from the
+  digits in the page, so the numpad joystick does nothing there; the
+  cursor-key joystick fires with Alt.
+- **Media**: Load, Insert disk and drops send the file in 32 KB chunks; a
+  disk's files are offered once the plugin reports it in the drive. Export
+  disk image hands the .d64 to the browser as a download. User CC maps
+  (Save as) live in the page's storage; the plugin follows only the factory
+  maps.
+- **reSIDfp patch 0005**: tables built one after the other, no exceptions.
+  Instance creation costs about 0.4 s in node for the 6581 tables, once per
+  process (the worklet).
+- **CPU** (node 26, 128-frame blocks at 48 kHz, `-msimd128`, Cynthcart
+  playing a note, screen shown): reSIDfp 417 us per block (15.6 % of
+  realtime, max about 1 ms), Light 143 us (5.4 %); screen hidden 391 and
+  118 us. BASIC idle 359 us on reSIDfp, 137 us on Light. Realtime on either
+  engine with room; on a slow machine or with many devices Light is the one.
+- **Tests**: `resident-wclap-selftest` (WASI, `node
+  tools/run-wclap-selftest.mjs build-wasm/resident-wclap-selftest.wasm
+  _dev_/roms [program] [--bench]`, the ROMs handed in at run time): the
+  webview API, a file that is no ROM refused, the ROMs uploaded one by one
+  and the boot on the third, READY. found in the streamed screen by its
+  glyphs, PRINT 6*7 typed through the page answering 42, a state round trip
+  into a fresh instance (ROMs back, machine on bit for bit), a 1.1.0 state
+  that waits for ROMs and then runs on, a program uploaded and a MIDI note
+  heard. In headless Chrome (open-webclap's test host, private Xvfb): the
+  ROM page, a ROM by the file dialog and three by a drop, the boot, typing,
+  a save, a reload and a load into the fresh instance, Load with Cynthcart,
+  a note from the host's keyboard reaching the C64, the Machine and CC
+  pages, a .d64 drop offering its files.
+- Not done: openDAW's device panel (`opendaw:device-panel`), hovered
+  parameters (`clap.param-hovered`), Positional mapping for non-US layouts.
+  Untested in openDAW itself.
+
 ## Status (1.1.0, 2026-11-11)
 
 **macOS**: CLAP, VST3 and Audio Unit, one universal binary each (arm64 and

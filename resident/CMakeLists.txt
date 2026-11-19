@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.21)
 # macOS: std::filesystem needs 10.15. Set before project(), ignored elsewhere.
 set(CMAKE_OSX_DEPLOYMENT_TARGET "10.15" CACHE STRING "Minimum macOS version")
-project(ReSIDent VERSION 1.1.0 LANGUAGES C CXX)
+project(ReSIDent VERSION 1.2.0 LANGUAGES C CXX)
 if (APPLE)
     enable_language(OBJCXX)
 endif()
@@ -24,8 +24,13 @@ if (NOT CMAKE_BUILD_TYPE)
     set(CMAKE_BUILD_TYPE Release)
 endif()
 
-if (NOT CMAKE_SYSTEM_NAME MATCHES "^(Linux|Windows|Darwin)$")
-    message(FATAL_ERROR "ReSIDent builds for Linux, Windows and macOS only.")
+# WASI is the WCLAP build (CLAP compiled to WebAssembly for browser hosts such
+# as openDAW, see cmake/wclap.cmake): the machine and the plugin, and the
+# editor as a second module for the plugin's page.
+if (CMAKE_SYSTEM_NAME STREQUAL "WASI")
+    set(RESIDENT_WASM ON)
+elseif (NOT CMAKE_SYSTEM_NAME MATCHES "^(Linux|Windows|Darwin)$")
+    message(FATAL_ERROR "ReSIDent builds for Linux, Windows, macOS and WASI (the WCLAP) only.")
 endif()
 
 set(RESIDENT_SDK_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../CLAP" CACHE PATH "Directory holding clap, clap-wrapper and vst3sdk")
@@ -39,7 +44,11 @@ if (CMAKE_INSTALL_PREFIX_INITIALIZED_TO_DEFAULT AND NOT CMAKE_CROSSCOMPILING)
 endif()
 
 add_compile_options(-Wall -Wextra -Wno-unused-parameter -Wno-missing-field-initializers)
-if (APPLE)
+if (RESIDENT_WASM)
+    # WebAssembly's 128-bit SIMD; wasi-sdk's libc++ has no exception runtime.
+    set(RESIDENT_ARCH_FLAGS "-msimd128" CACHE STRING "Target architecture flags")
+    add_compile_options(-fno-exceptions)
+elseif (APPLE)
     # A universal build compiles every file for arm64 and x86_64 at once, so
     # the x86 level is passed to the x86_64 half only. v2, not v3: Intel Macs
     # from before 2013 that still run 10.15 have no AVX2.
@@ -57,7 +66,14 @@ function(resident_static_runtime target)
     endif()
 endfunction()
 
-find_package(Threads REQUIRED)
+# The WASI build has no threads (reSIDfp builds its tables one after the
+# other there, patch 0005).
+if (RESIDENT_WASM)
+    set(RESIDENT_THREADS "")
+else()
+    find_package(Threads REQUIRED)
+    set(RESIDENT_THREADS Threads::Threads)
+endif()
 
 # ---------------------------------------------------------------- reSIDfp
 #
@@ -73,7 +89,7 @@ add_library(resident-residfp STATIC ${RESIDFP_SOURCES}
 target_include_directories(resident-residfp PUBLIC
     "${CMAKE_CURRENT_SOURCE_DIR}/third_party/libresidfp/src")
 target_compile_options(resident-residfp PRIVATE -w -O3)
-target_link_libraries(resident-residfp PUBLIC Threads::Threads)
+target_link_libraries(resident-residfp PUBLIC ${RESIDENT_THREADS})
 
 # ---------------------------------------------------------------- SIDLite
 #
@@ -85,7 +101,7 @@ file(GLOB SIDLITE_SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/third_party/sidlite/src/s
 add_library(resident-sidlite STATIC ${SIDLITE_SOURCES})
 target_include_directories(resident-sidlite PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/third_party/sidlite/src")
 target_compile_options(resident-sidlite PRIVATE -w -O3)
-target_link_libraries(resident-sidlite PUBLIC Threads::Threads)
+target_link_libraries(resident-sidlite PUBLIC ${RESIDENT_THREADS})
 
 # ---------------------------------------------------------------- embedded data
 set(RESIDENT_GENERATED "${CMAKE_CURRENT_BINARY_DIR}/generated")
@@ -132,6 +148,10 @@ target_include_directories(resident-emu PUBLIC src "${RESIDENT_GENERATED}")
 add_dependencies(resident-emu resident-embedded)
 target_compile_options(resident-emu PRIVATE -O3)
 target_link_libraries(resident-emu PUBLIC resident-residfp resident-sidlite)
+if (RESIDENT_WASM)
+    include(cmake/wclap.cmake)
+    return()
+endif()
 
 if (RESIDENT_BUILD_PLUGIN AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/cmake/plugin.cmake")
     include(cmake/plugin.cmake)

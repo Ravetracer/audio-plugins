@@ -1,0 +1,35 @@
+ReSIDent WCLAP -- what this bundle contains, and under which licences
+======================================================================
+
+ReSIDent is free software under the GNU General Public License, version 2 or
+(at your option) any later version: see LICENSE and COPYING (the full GPL
+text). Its source code is at https://github.com/Ravetracer/audio-plugins
+(folder resident/), under the tag of this release.
+
+No Commodore ROM is part of this bundle. ReSIDent asks for the ROMs when it
+starts, and keeps the ones you choose in your project.
+
+module.wasm (the C64 and the plugin)
+  reSIDfp (libresidfp 1.2.3), Dag Lem, Antti S. Lankila, Leandro Nini --
+    GPL-2.0-or-later (COPYING), with ReSIDent's patches (see the source).
+  SIDLite (libsidplayfp), Leandro Nini, after Mihaly Horvath's cRSID --
+    GPL-2.0-or-later (COPYING), with ReSIDent's patches.
+  HerMIDI 1.0c PIC12F509 firmware, Mihaly Horvath (Hermit Software Hungary),
+    from the SID-Wizard 1.93 package, which declares it WTF-licensed
+    ("you can do WTF you want with it").
+  CLAP headers, free-audio -- MIT.
+
+ui.wasm (the editor)
+  cairo 1.18 -- used under the GNU Lesser General Public License 2.1
+    (COPYING-LGPL-2.1-cairo.txt; cairo's own notice: COPYING-cairo.txt).
+  pixman 0.46 -- MIT (COPYING-pixman.txt).
+  FreeType 2.13 -- used under the GNU General Public License 2 (COPYING);
+    its FreeType License is in LICENSE-FreeType-FTL.txt.
+    Portions of this software are copyright (c) The FreeType Project
+    (www.freetype.org). All rights reserved.
+
+fonts/
+  Inter, Rasmus Andersson -- SIL Open Font License 1.1 (fonts/OFL.txt).
+
+wclap-ui.js, wasi.js, index.html
+  Part of the audio-plugins repository (MIT), see LICENSE there.

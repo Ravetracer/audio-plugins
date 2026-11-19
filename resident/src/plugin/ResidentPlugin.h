@@ -12,6 +12,16 @@
 
 #include <clap/clap.h>
 
+// The WCLAP (WebAssembly) build has no native window: its editor runs in the
+// host's webview page (web/UiMain.cpp) and reaches the plugin through
+// clap.webview, plugin/WebProtocol.h.
+#if defined(__wasm__)
+#define RESIDENT_WEBVIEW 1
+#include <clap/ext/draft/webview.h>
+#else
+#define RESIDENT_WEBVIEW 0
+#endif
+
 #include <array>
 #include <atomic>
 #include <memory>
@@ -21,6 +31,7 @@
 
 #include "engine/Engine.h"
 #include "plugin/CcMap.h"
+#include "plugin/DiskEntry.h"
 #include "plugin/MachineSettings.h"
 #include "plugin/Params.h"
 #include "plugin/SpscRing.h"
@@ -29,6 +40,7 @@ namespace resident {
 
 namespace gui {
 class Editor;
+class PluginLink;
 }
 
 // A plugin-specific extension: load a program as the Load button does, and
@@ -118,13 +130,7 @@ public:
     // or startFromDisk().
     bool attachDiskFile(const std::string& path, std::string& error);
     bool attachDisk(const std::string& name, const std::vector<uint8_t>& data, std::string& error);
-    struct DiskEntry
-    {
-        std::string petscii;  // the name as on the disk, for LOAD
-        std::string display;  // the same, readable
-        std::string type;     // PRG, SEQ, USR, REL, DEL
-        int blocks = 0;
-    };
+    using DiskEntry = resident::DiskEntry;
     bool diskPresent();
     // The inserted disk's title and files (empty without a disk).
     std::string diskTitle();
@@ -182,6 +188,30 @@ public:
     bool hasDriveRom() const { return hasDriveRom_.load(); }
     std::string lastError() const { return lastError_; }
 
+    // ------------------------------------------------------------ ROMs in the project
+    // An image the user handed over (the WCLAP's ROM dialog), recognised by its
+    // content and kept in the state, so the project plays wherever it is
+    // opened. The machine starts once KERNAL, BASIC and the character ROM are
+    // there; a ROM replaced while it runs starts it again. False (and why)
+    // when it is not a C64 or 1541 ROM.
+    bool installRom(const std::vector<uint8_t>& data, std::string& error);
+    // Which ROMs the machine has, and which the project carries
+    // (gui::RomBit: 1 KERNAL, 2 BASIC, 4 character ROM, 8 1541 DOS).
+    unsigned romsInUse() const;
+    unsigned romsInState() const;
+
+#if RESIDENT_WEBVIEW
+    // A message from the page (clap.webview receive); see WebView.cpp.
+    bool webReceive(const void* data, uint32_t size);
+    uint32_t webWidth() const { return webW_; }
+    uint32_t webHeight() const { return webH_; }
+    void setWebSize(uint32_t w, uint32_t h)
+    {
+        webW_ = w;
+        webH_ = h;
+    }
+#endif
+
 private:
     struct InputEvent
     {
@@ -212,6 +242,7 @@ private:
     void emitMidiOut(const clap_output_events_t* out);
     void configureMachine();
     void restartMedia();
+    void updateRomReport();
 
     clap_plugin_t plugin_{};
     const clap_host_t* host_;
@@ -227,6 +258,12 @@ private:
     std::atomic<bool> hasRoms_{false};
     std::atomic<bool> hasDriveRom_{false};
     std::string romReport_;
+    // The ROMs the project carries (state 2, ReSIDent 1.2.0): uploaded in the
+    // WCLAP, which has no ROM folder, or brought along by a loaded project.
+    // Natively the ROM folder wins; these run the machine only when the
+    // folder has no complete set (romsFromState_).
+    emu::Roms stateRoms_;
+    bool romsFromState_ = false;
     // A project loaded before the ROMs were there: applied once they are.
     std::vector<uint8_t> pendingSnapshot_, pendingAudio_;
     std::string lastError_;
@@ -267,7 +304,41 @@ private:
     double nextClockTick_ = -1.0;
     std::vector<float> silence_;
 
+    std::unique_ptr<gui::PluginLink> editorLink_;
     std::unique_ptr<gui::Editor> editor_;
+#if RESIDENT_WEBVIEW
+    // The page: its window size (logical pixels), and what it was last sent
+    // (WebView.cpp). The page asks, the plugin answers; never unasked.
+    void webPoll(const uint8_t* b, uint32_t size);
+    void webCommand(const uint8_t* b, uint32_t size);
+    void webUpload(const uint8_t* b, uint32_t size);
+    void webNotice(const std::string& text, bool error);
+    void webMarkDirty();
+    void webScreen(uint32_t pageSerial, std::vector<uint8_t>& out);
+    const clap_host_webview_t* hostWebview_ = nullptr;
+    uint32_t webW_ = 800, webH_ = 622;
+    uint32_t webValuesSerial_ = 1, webSettingsSerial_ = 1, webMediaSerial_ = 1, webNoticeSerial_ = 0;
+    std::vector<double> webValues_;
+    std::string webSettings_;
+    std::vector<uint8_t> webMedia_;
+    std::string webNotice_;
+    bool webNoticeError_ = false;
+    // The screen: the last frame sent (palette indices) and its serial; a
+    // page that has it gets only the lines that changed since.
+    std::vector<uint8_t> webFrame_, webFrameNew_;
+    uint32_t webFrameSerial_ = 0;
+    uint64_t webEngineFrame_ = ~0ull;
+    // Samples processed, and when a page last asked for the screen: the VIC
+    // draws only while one does.
+    uint64_t samplesRun_ = 0, webScreenAskedAt_ = 0;
+    bool webScreenAsked_ = false;
+    std::vector<uint8_t> webOut_;
+    // A file arriving in chunks.
+    std::vector<uint8_t> webUpload_;
+    std::string webUploadName_;
+    uint8_t webUploadKind_ = 0;
+    uint32_t webDiskInserts_ = 0; // so the page can offer a new disk's files
+#endif
     clap_id timerId_ = CLAP_INVALID_ID;
     int registeredFd_ = -1;
     std::atomic<bool> activated_{false};
