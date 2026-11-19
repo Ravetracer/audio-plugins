@@ -46,6 +46,8 @@
 #   endif
 #elif defined(__APPLE__)
 #   include "cocoaview.h"
+#elif defined(__wasm__)
+#   include "webcanvas.h"
 #else
 #   include <X11/Xlib.h>
 #   include <X11/Xutil.h>
@@ -64,6 +66,8 @@ namespace {
 class PluginWindow final : public Gui
 #if defined(__APPLE__)
    , private CocoaViewListener
+#elif defined(__wasm__)
+   , public WebCanvas
 #endif
 {
 public:
@@ -213,6 +217,20 @@ public:
 
    void setTitle(const char *) override {}
 
+#elif defined(__wasm__)
+   // The page's canvas stands in for the window (gui/webcanvas.h): there is
+   // nothing to create, embed or title, and the editor module copies each
+   // frame out of the buffer.
+   bool open() override {
+      mWebOpen = true;
+      allocateBuffer();
+      return true;
+   }
+
+   bool embed(uintptr_t) override { return mWebOpen; }
+   bool setTransientFor(uintptr_t) override { return false; }
+   void setTitle(const char *) override {}
+
 #else
    bool open() override {
       if (mWindow)
@@ -324,6 +342,9 @@ public:
       if (!mView.isOpen())
          return;
       mView.setSize(static_cast<int>(pixelW()), static_cast<int>(pixelH()));
+#elif defined(__wasm__)
+      if (!mWebOpen)
+         return;
 #else
       if (!mWindow)
          return;
@@ -348,6 +369,9 @@ public:
       if (!mView.isOpen())
          return;
       mView.show();
+#elif defined(__wasm__)
+      if (!mWebOpen)
+         return;
 #else
       if (!mWindow)
          return;
@@ -361,6 +385,9 @@ public:
 #if defined(__APPLE__)
       if (!mView.isOpen())
          return;
+#elif defined(__wasm__)
+      if (!mWebOpen)
+         return;
 #else
       if (!mWindow)
          return;
@@ -372,6 +399,8 @@ public:
       ShowWindow(mWindow, SW_HIDE);
 #elif defined(__APPLE__)
       mView.hide();
+#elif defined(__wasm__)
+      // The page goes away with the host's view; nothing to unmap.
 #else
       XUnmapWindow(mDisplay, mWindow);
       XFlush(mDisplay);
@@ -396,6 +425,12 @@ public:
       // (drawRect:), and the clock only says that one is due.
       if (mView.isOpen() && needsRepaint())
          mView.invalidate();
+#elif defined(__wasm__)
+      // Called once per animation frame by the editor module (webTick).
+      if (mWebOpen && needsRepaint()) {
+         paint();
+         webPublishFrame();
+      }
 #else
       if (!mDisplay)
          return;
@@ -421,6 +456,17 @@ private:
          mBuffer = nullptr;
       }
       // mBacking is the Retina factor on macOS and 1 everywhere else.
+#if defined(__wasm__)
+      // In a page it is the devicePixelRatio, and the buffer is the page's
+      // canvas, which is the host's view and may be larger than the layout.
+      if (mWebCssW > 0 && mWebCssH > 0) {
+         mBuffer = cairo_image_surface_create(CAIRO_FORMAT_RGB24,
+                                              static_cast<int>(mWebCssW * mBacking + 0.5),
+                                              static_cast<int>(mWebCssH * mBacking + 0.5));
+         mBufferCr = cairo_create(mBuffer);
+         return;
+      }
+#endif
       mBuffer = cairo_image_surface_create(CAIRO_FORMAT_RGB24,
                                            static_cast<int>(pixelW() * mBacking + 0.5),
                                            static_cast<int>(pixelH() * mBacking + 0.5));
@@ -451,6 +497,10 @@ private:
 #elif defined(__APPLE__)
       releaseKeyboard();
       mView.destroy();
+#elif defined(__wasm__)
+      releaseKeyboard();
+      cancelFileDialogs();
+      mWebOpen = false;
 #else
       if (mDisplay) {
          // Closing the display would drop the grab anyway, but say so plainly
@@ -1089,6 +1139,12 @@ private:
       if (hasWaveView())
          mWaveKey = mSpec.host->windowWaveKey();
 
+#if defined(__wasm__)
+      // The canvas can be larger than the layout at its scale; the rest of
+      // it is the chassis colour rather than whatever the last frame left.
+      cairo_set_source_rgb(cr, mSpec.theme.bgBottom.r, mSpec.theme.bgBottom.g, mSpec.theme.bgBottom.b);
+      cairo_paint(cr);
+#endif
       cairo_save(cr);
       cairo_scale(cr, mScale * mBacking, mScale * mBacking);
       cairo_set_line_join(cr, CAIRO_LINE_JOIN_ROUND);
@@ -1124,7 +1180,7 @@ private:
       cairo_set_source_surface(mTargetCr, mBuffer, 0, 0);
       cairo_paint(mTargetCr);
       cairo_surface_flush(mTarget);
-#if !defined(_WIN32) && !defined(__APPLE__)
+#if !defined(_WIN32) && !defined(__APPLE__) && !defined(__wasm__)
       XFlush(mDisplay);
 #endif
    }
@@ -1783,7 +1839,15 @@ private:
 
    void loadWavetable() {
       mDelegate.guiKeyboardTaken();
-      const std::string path = openFileDialog("Load a wavetable", "WAV file", "wav");
+#if defined(__wasm__)
+      openFileDialogAsync("Load a wavetable", "WAV file", "wav",
+                          [this](const std::string &path) { loadWavetableFrom(path); });
+#else
+      loadWavetableFrom(openFileDialog("Load a wavetable", "WAV file", "wav"));
+#endif
+   }
+
+   void loadWavetableFrom(const std::string &path) {
       if (path.empty())
          return;
       std::string error;
@@ -1831,7 +1895,10 @@ private:
       if (fileDialogAvailable())
          mTableRows.push_back(
             {TableRow::Kind::Table, "Load file...", "action:load", 0, false});
+#if !defined(__wasm__)
+      // A page has no file manager to show the folder in.
       mTableRows.push_back({TableRow::Kind::Table, "Open folder", "action:open", 0, false});
+#endif
       // Which rows show: everything but what is inside a closed folder.
       mTableShown.clear();
       int hiddenBelow = -1;
@@ -2280,6 +2347,9 @@ private:
 #if defined(__APPLE__)
       if (!mView.isOpen() || mKeyboardGrabbed)
          return;
+#elif defined(__wasm__)
+      if (!mWebOpen || mKeyboardGrabbed)
+         return;
 #else
       if (!mWindow || mKeyboardGrabbed)
          return;
@@ -2299,6 +2369,10 @@ private:
       // The same as on Windows: the view becomes the first responder, and the
       // host has its shortcuts back once the dialog closes.
       mKeyboardGrabbed = mView.takeKeyboard();
+#elif defined(__wasm__)
+      // The canvas takes the focus with the click that opened the field, and
+      // the page hands every key to the window from then on.
+      mKeyboardGrabbed = true;
 #else
       if (!mDisplay)
          return;
@@ -2321,6 +2395,7 @@ private:
 #elif defined(__APPLE__)
       mKeyboardGrabbed = false; // before the view lets go, which reports it
       mView.releaseKeyboard();
+#elif defined(__wasm__)
 #else
       if (mDisplay) {
          XErrorHandler previous = XSetErrorHandler(&ignoreXError);
@@ -2836,22 +2911,41 @@ private:
       std::string path = mDelegate.guiPackPathFor(folder);
       if (chooseWhere) {
          mDelegate.guiKeyboardTaken(); // a modal dialog takes the keyboard too
+#if defined(__wasm__)
+         saveFileDialogAsync("Export preset pack", path, "Preset pack", packExtensionFromPath(path),
+                             [this, folder](const std::string &chosen) {
+                                mDirty = true;
+                                if (!chosen.empty()) // empty: cancelled
+                                   writePack(folder, chosen);
+                             });
+         return;
+#else
          path = saveFileDialog("Export preset pack", path, "Preset pack",
                                packExtensionFromPath(path));
          if (path.empty()) {
             mDirty = true;
             return; // cancelled
          }
+#endif
       }
+      writePack(folder, path);
+   }
+
+   void writePack(const std::string &folder, const std::string &path) {
       if (path.empty()) {
          mBrowserStatus = "Nowhere to write a pack: no user config directory.";
          mDirty = true;
          return;
       }
       std::string error;
-      mBrowserStatus = mDelegate.guiExportPack(folder, path, error)
-                          ? "Wrote " + path
-                          : (error.empty() ? std::string("Could not write the pack.") : error);
+      const bool wrote = mDelegate.guiExportPack(folder, path, error);
+      mBrowserStatus = wrote ? "Wrote " + path
+                             : (error.empty() ? std::string("Could not write the pack.") : error);
+#if defined(__wasm__)
+      // The pack is in the editor's own file system; the user gets a copy.
+      if (wrote && webOfferDownload(path))
+         mBrowserStatus = "Downloaded " + path.substr(path.find_last_of('/') + 1);
+#endif
       mImportPacks = mDelegate.guiPresetPacks();
       mDirty = true;
    }
@@ -4438,6 +4532,10 @@ private:
 #elif defined(__APPLE__)
       // Not modal here: the drag runs on after this returns.
       dragFileOut(nullptr, reinterpret_cast<uintptr_t>(mView.nsView()), path);
+#elif defined(__wasm__)
+      // A page cannot drag a file out to the desktop or the host; the file is
+      // handed to the user as a download instead.
+      webOfferDownload(path);
 #else
       dragFileOut(mDisplay, static_cast<uintptr_t>(mWindow), path);
 #endif
@@ -5043,6 +5141,134 @@ private:
    void cocoaFocusLost() override { mKeyboardGrabbed = false; }
 
    void pumpEvents() {}
+#elif defined(__wasm__)
+   // WebCanvas: the editor module hands the page's input over here. Pointer
+   // positions are canvas pixels, the page's CSS pixels times mBacking.
+   // Everything below this block is shared again.
+   static unsigned long webNowMs() {
+      return static_cast<unsigned long>(std::chrono::duration_cast<std::chrono::milliseconds>(
+                                           std::chrono::steady_clock::now().time_since_epoch())
+                                           .count());
+   }
+
+   void webSetPage(int cssWidth, int cssHeight, double devicePixelRatio) override {
+      mWebCssW = std::max(1, cssWidth);
+      mWebCssH = std::max(1, cssHeight);
+      mBacking = devicePixelRatio >= 0.25 ? devicePixelRatio : 1.0;
+      // Zoomed to the largest scale that fits the host's view, as a host
+      // resizing the desktop window would have it.
+      mScale = scaleFor(static_cast<uint32_t>(mWebCssW), static_cast<uint32_t>(mWebCssH));
+      allocateBuffer();
+      mDirty = true;
+   }
+
+   void webDesignSize(uint32_t &width, uint32_t &height) const override {
+      designSize(&width, &height);
+   }
+
+   uint32_t webTick() override {
+      tick();
+      return mWebSerial;
+   }
+
+   // Cairo's RGB24 is a native-endian 0xXXRRGGBB word, B G R X in memory; a
+   // canvas wants R G B A.
+   void webPublishFrame() {
+      if (!mBuffer)
+         return;
+      cairo_surface_flush(mBuffer);
+      const int w = cairo_image_surface_get_width(mBuffer);
+      const int h = cairo_image_surface_get_height(mBuffer);
+      const int stride = cairo_image_surface_get_stride(mBuffer);
+      const unsigned char *src = cairo_image_surface_get_data(mBuffer);
+      mWebRgba.resize(static_cast<size_t>(w) * h * 4);
+      for (int y = 0; y < h; ++y) {
+         const uint32_t *row = reinterpret_cast<const uint32_t *>(src + static_cast<size_t>(y) * stride);
+         uint32_t *out = reinterpret_cast<uint32_t *>(mWebRgba.data() + static_cast<size_t>(y) * w * 4);
+         for (int x = 0; x < w; ++x) {
+            const uint32_t p = row[x];
+            out[x] = 0xff000000u | ((p & 0xffu) << 16) | (p & 0xff00u) | ((p >> 16) & 0xffu);
+         }
+      }
+      mWebFrameW = w;
+      mWebFrameH = h;
+      ++mWebSerial;
+   }
+
+   const uint8_t *webFrame(int &width, int &height) const override {
+      width = mWebFrameW;
+      height = mWebFrameH;
+      return mWebRgba.empty() ? nullptr : mWebRgba.data();
+   }
+
+   void webPointerDown(double x, double y, int button, unsigned mods) override {
+      if (button < 1 || button > 3)
+         return;
+      mWebButtons |= 1u << button;
+      onPointerDown(x / mBacking, y / mBacking, static_cast<unsigned>(button), webNowMs(),
+                    (mods & 1u) != 0);
+   }
+
+   void webPointerUp(double, double, int button, unsigned) override {
+      mWebButtons &= ~(1u << button);
+      onButtonRelease();
+   }
+
+   void webPointerMove(double x, double y, unsigned mods) override {
+      onMotion(x / mBacking / mScale, y / mBacking / mScale, (mods & 1u) != 0);
+   }
+
+   // The wheel as X11 has it: one button 4 or 5 press per notch. A trackpad
+   // reports fractions of one, which add up here.
+   void webWheel(double x, double y, double notches, unsigned mods) override {
+      mWebWheel += notches;
+      while (mWebWheel >= 1.0) {
+         mWebWheel -= 1.0;
+         onPointerDown(x / mBacking, y / mBacking, 4u, webNowMs(), (mods & 1u) != 0);
+      }
+      while (mWebWheel <= -1.0) {
+         mWebWheel += 1.0;
+         onPointerDown(x / mBacking, y / mBacking, 5u, webNowMs(), (mods & 1u) != 0);
+      }
+   }
+
+   void webLeave() override {
+      if (mDrag < 0) {
+         mHover = -1;
+         mHoverWidget = Widget::NoWidget;
+         mDirty = true;
+      }
+   }
+
+   // Keys go where the X11 window sends them: a field that is being typed
+   // into, else an open list. Anything else is the host's.
+   bool webKey(unsigned keysym, const char *text, int length, unsigned) override {
+      KeyCommand cmd = KeyCommand::NoCommand;
+      if (keysym == 0xff1b)
+         cmd = KeyCommand::Escape;
+      else if (keysym == 0xff0d || keysym == 0xff8d)
+         cmd = KeyCommand::Accept;
+      else if (keysym == 0xff08)
+         cmd = KeyCommand::Backspace;
+      else if (keysym == 0xff52)
+         cmd = KeyCommand::Up;
+      else if (keysym == 0xff54)
+         cmd = KeyCommand::Down;
+      if (mSaveOpen)
+         onSaveKey(cmd, text, length);
+      else if (mEntryParam >= 0)
+         onEntryKey(cmd, text, length);
+      else if (mTableOpen || mMenuParam >= 0 || mMixerOpen || mBrowserOpen)
+         onOverlayKey(cmd);
+      else
+         return false;
+      mDirty = true;
+      return true;
+   }
+
+   bool webButtonHeld() const override { return mWebButtons != 0; }
+
+   void pumpEvents() {}
 #else
    void pumpEvents() {
       XEvent ev;
@@ -5206,19 +5432,38 @@ private:
                      importPack(mImportPacks[static_cast<size_t>(row)]);
                   } else if (extra == 0) {
                      mDelegate.guiKeyboardTaken();
+#if defined(__wasm__)
+                     mImportOpen = false;
+                     openFileDialogAsync("Import preset pack", "Preset pack",
+                                         packExtensionFromPath(mDelegate.guiPackPathFor("pack")),
+                                         [this](const std::string &p) { importPack(p); });
+#else
                      importPack(openFileDialog("Import preset pack", "Preset pack",
                                                packExtensionFromPath(
                                                   mDelegate.guiPackPathFor("pack"))));
+#endif
                   } else if (extra == 1) {
                      // One foreign pattern file rather than a pack. The plugin
                      // tells them apart by what the path is, so the window does
                      // not have to know the formats -- only enough to put a
                      // useful filter on the chooser.
                      mDelegate.guiKeyboardTaken();
+#if defined(__wasm__)
+                     mImportOpen = false;
+                     openFileDialogAsync("Import a pattern", "Pattern file", "pat",
+                                         [this](const std::string &p) { importPack(p); });
+#else
                      importPack(openFileDialog("Import a pattern", "Pattern file", "pat"));
+#endif
                   } else {
                      mDelegate.guiKeyboardTaken();
+#if defined(__wasm__)
+                     mImportOpen = false;
+                     openFolderDialogAsync("Import a folder of patterns",
+                                           [this](const std::string &p) { importPack(p); });
+#else
                      importPack(openFolderDialog("Import a folder of patterns"));
+#endif
                   }
                   mDirty = true;
                   return;
@@ -5808,6 +6053,14 @@ private:
    bool mTrackingLeave = false;
 #elif defined(__APPLE__)
    CocoaView mView{*this};
+#elif defined(__wasm__)
+   bool mWebOpen = false;
+   int mWebCssW = 0, mWebCssH = 0;
+   std::vector<uint8_t> mWebRgba;
+   int mWebFrameW = 0, mWebFrameH = 0;
+   uint32_t mWebSerial = 0;
+   unsigned mWebButtons = 0;
+   double mWebWheel = 0.0;
 #else
    Display *mDisplay = nullptr;
    Window mWindow = 0;
@@ -6002,6 +6255,10 @@ LRESULT CALLBACK PluginWindow::wndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp
       return DefWindowProcW(hwnd, msg, wp, lp);
    return self->handleMessage(msg, wp, lp);
 }
+#endif
+
+#if defined(__wasm__)
+WebCanvas *webCanvasOf(Gui *gui) { return gui ? static_cast<PluginWindow *>(gui) : nullptr; }
 #endif
 
 Gui *createWindow(GuiDelegate &delegate, const WindowSpec &spec) {

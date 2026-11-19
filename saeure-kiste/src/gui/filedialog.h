@@ -15,6 +15,10 @@
 
 #include <string>
 
+#if defined(__wasm__)
+#include <functional>
+#endif
+
 namespace saeurekiste {
 
 // Whether there is a chooser to open at all. The window hides its "Other..."
@@ -38,5 +42,24 @@ std::string openFolderDialog(const std::string &title);
 // Shows a folder in the desktop's file manager, without waiting for it. For
 // the wavetable folder, so a user can see where the files go and drop some in.
 void revealFolder(const std::string &path);
+
+#if defined(__wasm__)
+// The WebAssembly editor's dialogs are the page's, and they do not block: the
+// result arrives later and is handed to `done` -- an empty path when the user
+// cancelled. A save dialog answers with a path under /download; the caller
+// writes the file there and hands it to the user with webOfferDownload().
+void openFileDialogAsync(const std::string &title, const std::string &filterName,
+                         const std::string &extension,
+                         std::function<void(const std::string &)> done);
+void saveFileDialogAsync(const std::string &title, const std::string &suggestedPath,
+                         const std::string &filterName, const std::string &extension,
+                         std::function<void(const std::string &)> done);
+void openFolderDialogAsync(const std::string &title,
+                           std::function<void(const std::string &)> done);
+// Forgets a dialog that is still open, for a window that is going away.
+void cancelFileDialogs();
+// Offers a file in the editor's file system to the user as a download.
+bool webOfferDownload(const std::string &path);
+#endif
 
 } // namespace saeurekiste

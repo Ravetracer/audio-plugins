@@ -38,8 +38,24 @@
 #include <filesystem>
 #include <fstream>
 #include <sstream>
+#endif
 
+// The window's interfaces, and GuiPreset, which the preset list is made of in
+// every build; nothing in it needs a window system.
 #include "gui/gui.h"
+
+// The WCLAP (WebAssembly) build: the page protocol, and the window's sizes for
+// the plugin that has no window of its own. See src/web/plugin_web.inc.
+#if defined(__wasm__)
+#include <functional>
+
+#include <clap/ext/draft/webview.h>
+
+#include "web/protocol.h"
+#ifdef SAEUREKISTE_WITH_GUI
+#include "gui/webcanvas.h"
+#include "web/mirror.h"
+#endif
 #endif
 
 namespace saeurekiste {
@@ -130,7 +146,10 @@ constexpr int kStateStepsInVersion1 = 16;
 
 } // namespace
 
-#ifdef SAEUREKISTE_WITH_GUI
+#if defined(SAEUREKISTE_WITH_GUI) && defined(__wasm__)
+class SaeureKistePlugin final : public GuiDelegate, public PatternAccess, public WindowHost,
+                                public WebMirror {
+#elif defined(SAEUREKISTE_WITH_GUI)
 class SaeureKistePlugin final : public GuiDelegate, public PatternAccess, public WindowHost {
 #else
 class SaeureKistePlugin : public PatternAccess {
@@ -751,6 +770,9 @@ private:
       // so the letters' names and ranges have to be re-read with it.
       plug->mInfoDirty.store(true, std::memory_order_release);
       plug->notifyParamValuesChanged();
+#if defined(__wasm__)
+      plug->webStateChanged();
+#endif
       return true;
    }
 
@@ -1123,6 +1145,9 @@ private:
          if (hostPreset && hostPreset->loaded)
             hostPreset->loaded(plug->mHost, locationKind, location, loadKey);
       }
+#if defined(__wasm__)
+      plug->webStateChanged();
+#endif
       return true;
    }
 
@@ -1632,6 +1657,9 @@ private:
          // whatever it did before, which is what makes the map invertible and
          // what stops a pad quietly doing two things at once.
          mNoteMap[key].store(static_cast<int8_t>(target), std::memory_order_relaxed);
+#if defined(__wasm__)
+         webStateChanged();
+#endif
          return true;
       }
 
@@ -2017,8 +2045,12 @@ private:
          // An old automation lane, or a render asking for a chain, sets every
          // pattern -- but only when it moves, so a host that resends the value
          // it already has does not flatten the per-pattern settings.
-         if (isLegacyChainParam(ev->param_id) && value != before)
+         if (isLegacyChainParam(ev->param_id) && value != before) {
             setChainFromLegacy();
+#if defined(__wasm__)
+            webStateChanged();
+#endif
+         }
          if (ev->param_id == kParamMode)
             syncPlayMode();
          break;
@@ -2598,6 +2630,8 @@ private:
       return slot < 0 || fxSlotType(slot) != 0;
    }
 
+#endif // SAEUREKISTE_WITH_GUI
+
    // ------------------------------------------------------ the FX structure
    //
    // Adding, removing and moving are edits to the chain rather than to the
@@ -2691,6 +2725,7 @@ private:
       return slot;
    }
 
+#ifdef SAEUREKISTE_WITH_GUI
    // A new effect is a Saturator on the master bus: the end of the chain is
    // the one place every chain has, and an insert that landed in front of the
    // ladder would change the sound before its own knobs were touched.
@@ -3454,6 +3489,11 @@ private:
          CFRunLoopAddTimer(CFRunLoopGetMain(), mGuiTimer, kCFRunLoopCommonModes);
       return;
 #endif
+#if defined(__wasm__)
+      // The editor module ticks the window from the page's animation frame;
+      // there are no threads.
+      return;
+#else
       mGuiThreadRun.store(true, std::memory_order_release);
       mGuiThread = std::thread([this] {
          while (mGuiThreadRun.load(std::memory_order_acquire)) {
@@ -3462,6 +3502,7 @@ private:
             std::this_thread::sleep_for(std::chrono::milliseconds(33));
          }
       });
+#endif
    }
 
    void stopGuiClock() {
@@ -3473,11 +3514,13 @@ private:
          return;
       }
 #endif
+#if !defined(__wasm__)
       if (mGuiThreadRun.exchange(false, std::memory_order_acq_rel)) {
          if (mGuiThread.joinable())
             mGuiThread.join();
          return;
       }
+#endif
       if (mHost && mTimerId != CLAP_INVALID_ID) {
          auto *timer = static_cast<const clap_host_timer_support_t *>(
             mHost->get_extension(mHost, CLAP_EXT_TIMER_SUPPORT));
@@ -3487,6 +3530,10 @@ private:
       mTimerId = CLAP_INVALID_ID;
    }
 #endif // SAEUREKISTE_WITH_GUI
+
+#if defined(__wasm__)
+#include "web/plugin_web.inc"
+#endif
 
    // ---------------------------------------------------------------- extensions
 
@@ -3529,6 +3576,13 @@ private:
          return &kGuiExt;
       if (std::strcmp(id, CLAP_EXT_TIMER_SUPPORT) == 0)
          return &kTimerExt;
+#endif
+#if defined(__wasm__) && defined(SAEUREKISTE_WITH_GUI)
+      if (std::strcmp(id, kWebMirrorExtension) == 0)
+         return static_cast<const WebMirror *>(this);
+#elif defined(__wasm__)
+      if (const void *ext = webExtension(id))
+         return ext;
 #endif
       return nullptr;
    }
@@ -3645,11 +3699,15 @@ private:
    // The kind of every entry in mPresets, in the same order.
    std::vector<PresetKind> mPresetKinds;
    bool mPresetEdited = false;
-#ifdef SAEUREKISTE_WITH_GUI
+   // What the window's browser lists. Empty in a build without a window; the
+   // host's preset loads still look it up.
    std::vector<GuiPreset> mPresets;
+#ifdef SAEUREKISTE_WITH_GUI
    Gui *mGui = nullptr;
    clap_id mTimerId = CLAP_INVALID_ID;
+#if !defined(__wasm__)
    std::thread mGuiThread;
+#endif
    std::atomic<bool> mGuiThreadRun{false};
 #if defined(__APPLE__)
    CFRunLoopTimerRef mGuiTimer = nullptr; // the fallback clock on macOS

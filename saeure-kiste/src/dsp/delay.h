@@ -31,6 +31,7 @@
 // thing in here that is not out of a book, and it is the reason the stage
 // cannot run away.
 
+#include <algorithm>
 #include <cstdint>
 #include <vector>
 

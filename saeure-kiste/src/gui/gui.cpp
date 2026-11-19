@@ -267,6 +267,10 @@ static_assert(rowWidth(3) <= kContentW, "row 3 is wider than the window");
 static_assert(kAdvancedRow > 0 && kAdvancedRow < kNumRows,
               "the collapsible section must be some but not all of the rows");
 static_assert(kWindowExpandedH > kWindowH, "opening the section has to make the window taller");
+static_assert(kContentW + 2 * kMargin == static_cast<int>(kEditorWidth) &&
+                 kWindowH == static_cast<int>(kEditorHeight) &&
+                 kWindowExpandedH == static_cast<int>(kEditorExpandedHeight),
+              "kEditorWidth, kEditorHeight and kEditorExpandedHeight in gui.h are out of date");
 
 // --------------------------------------------------------------------- theme
 //

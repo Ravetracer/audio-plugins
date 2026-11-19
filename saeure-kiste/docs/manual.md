@@ -9,7 +9,7 @@ subtitle: CLAP, VST3 and Audio Unit instrument for Linux, Windows and macOS
 *A monophonic acid bass synthesiser. Linux, Windows and macOS; CLAP and VST3,
 and an Audio Unit on macOS.*
 
-Version 0.18.0
+Version 0.19.0
 
 ---
 

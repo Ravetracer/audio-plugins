@@ -1,13 +1,35 @@
 # SäureKiste -- status
 
-Version 0.18.0. Linux, Windows and macOS; CLAP and VST3, and an Audio Unit on
-macOS. 252 parameters, 30 presets,
+Version 0.19.0. Linux, Windows and macOS; CLAP and VST3, and an Audio Unit on
+macOS; a WCLAP for browser hosts. 252 parameters, 30 presets,
 builds clean, self-test passes with no failures on Linux and under wine, and
 every factory preset renders bit for bit what 0.16.0 rendered at 44.1, 48 and
 96 kHz.
 
 Six of seven fixes were confirmed by backing the bug out and watching the suite
 fail; the seventh has no contract to assert. See `TODO.md` §3.
+
+0.19.0 adds the **WCLAP** (WebCLAP), for browser hosts such as openDAW:
+`cmake/wclap.cmake`, built with wasi-sdk into `build-wasm/saeurekiste.wclap.tar.gz`.
+`module.wasm` is the plugin without a window; `ui.wasm` is the desktop window
+itself, drawn into the page's canvas over a second instance of the plugin (the
+mirror) that sends what the window changed and loads what the plugin reports
+(`src/web/`, protocol in `src/web/protocol.h`). Presets, patterns, the bank,
+the FX page, the wavetable selector and the file dialogs all work as on the
+desktop; the MIDI drag and pack exports become downloads, picked files come
+from the browser's picker. `build-wasm/saeurekiste-wclap-selftest.wasm` (31
+checks, run with `node ../shared/tools/run-wasi.mjs`) covers the plugin's side
+of the protocol and the state round trip; 15 us per 128-frame block in node.
+The editor offscreen matches the X11 window to within 10 % per channel on
+every pixel (Noto Sans, subpixel, as fontconfig gives it here). Not yet loaded
+in openDAW itself, only in open-webclap's test host. The parameter under the
+pointer is not reported (clap.param-hovered), so openDAW's own right-click
+menu and value entry do not appear over the window, which keeps its own.
+No native behaviour changed: the self-test passes, every factory preset renders
+bit for bit what 0.18.0 rendered at 44.1 and 48 kHz, and the X11 window is
+pixel for pixel the same. The build without a window (`SAEUREKISTE_BUILD_GUI=OFF`),
+which no longer compiled, compiles again: the FX helpers and the preset list
+it needs had ended up behind the window's #ifdef.
 
 0.18.0 adds **macOS** (CLAP, VST3, AU), built and self-tested only by
 `.github/workflows/saeurekiste-macos.yml` -- see README.md. Nothing on the

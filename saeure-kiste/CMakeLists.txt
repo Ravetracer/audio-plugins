@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.16)
 # macOS: std::filesystem needs 10.15. Set before project(), ignored elsewhere.
 set(CMAKE_OSX_DEPLOYMENT_TARGET "10.15" CACHE STRING "Minimum macOS version")
-project(SaeureKiste VERSION 0.18.0 LANGUAGES CXX)
+project(SaeureKiste VERSION 0.19.0 LANGUAGES CXX)
 if(APPLE)
    # The window's Cocoa view and the file panels (src/gui/*.mm).
    enable_language(OBJCXX)
@@ -28,9 +28,10 @@ if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
    set(CMAKE_BUILD_TYPE Release CACHE STRING "Build type" FORCE)
 endif()
 
-if(NOT CMAKE_SYSTEM_NAME MATCHES "^(Linux|Windows|Darwin)$")
+if(NOT CMAKE_SYSTEM_NAME MATCHES "^(Linux|Windows|Darwin|WASI)$")
    message(FATAL_ERROR
-      "SaeureKiste builds for Linux, Windows and macOS. Nothing in it is specific to "
+      "SaeureKiste builds for Linux, Windows and macOS, and as a WCLAP for WebAssembly. "
+      "Nothing in it is specific to "
       "any of them beyond the window, which has a backend for each, so another "
       "platform is a matter of another backend -- but it has never been built or run "
       "there, and a plugin nobody has run is worse than one that refuses to configure.")
@@ -102,6 +103,13 @@ add_custom_command(
    VERBATIM
 )
 add_custom_target(saeurekiste_presets DEPENDS "${SAEUREKISTE_GENERATED_HEADER}")
+
+# WASI is the WCLAP, the plugin for browser hosts: two WebAssembly modules and
+# a page instead of a .clap. Everything it needs is in cmake/wclap.cmake.
+if(CMAKE_SYSTEM_NAME STREQUAL "WASI")
+   include(cmake/wclap.cmake)
+   return()
+endif()
 
 # ------------------------------------------------------------------- gui deps
 #
