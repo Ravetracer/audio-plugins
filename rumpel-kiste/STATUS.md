@@ -1,9 +1,17 @@
 # RumpelKiste -- status
 
-Version 0.3.0. Linux and Windows, CLAP and VST3; a WCLAP for browser hosts.
-76 parameters, 19 presets.
-Builds clean on both platforms; `render --selftest` passes all 190 checks on
+Version 0.4.0. Linux, Windows and macOS; CLAP and VST3, an Audio Unit on
+macOS, and a WCLAP for browser hosts. 76 parameters, 19 presets.
+Builds clean on Linux and Windows; `render --selftest` passes all 190 checks on
 the Linux build and on the Windows build under wine.
+
+0.4.0 adds **macOS** (CLAP, VST3, AU), built and self-tested only by
+`.github/workflows/rumpelkiste-macos.yml`, ported the way SäureKiste 0.18.0
+was: the window's Cocoa backend (`src/gui/cocoaview.{h,mm}`) and the file
+panels (`src/gui/filedialog_mac.mm`) are SäureKiste's, copied. Audio Unit
+codes `aumu`/`Rmpl`/`Rvtr`. Nothing on the Linux, Windows or WCLAP side changed
+behaviour: every factory preset renders bit for bit what 0.3.0 rendered. No Mac
+DAW has loaded it yet.
 
 0.3.0 adds the **WCLAP** (WebCLAP), for browser hosts such as openDAW, built
 the way SäureKiste 0.19.0's is: `cmake/wclap.cmake`, wasi-sdk,

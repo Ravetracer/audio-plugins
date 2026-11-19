@@ -1,12 +1,13 @@
 ---
 accent: #FF6E1A
 tagline: A rhythm composer, from the schematic up
-subtitle: CLAP and VST3 instrument for Linux and Windows
+subtitle: CLAP, VST3 and Audio Unit instrument for Linux, Windows and macOS
 ---
 
 # {{PLUGIN}} — manual
 
-*A drum machine with its own step sequencer. Linux and Windows, CLAP and VST3.*
+*A drum machine with its own step sequencer. Linux, Windows and macOS; CLAP and
+VST3, and an Audio Unit on macOS.*
 
 Version {{VERSION}}
 
@@ -40,6 +41,26 @@ Seventy-six parameters, nineteen presets.
 
 Not affiliated with or endorsed by Roland Corporation. *TR-909* is their
 trademark, used here only to name what was modelled.
+
+### On macOS
+
+The macOS download holds three bundles: `RumpelKiste.clap` for
+`~/Library/Audio/Plug-Ins/CLAP/`, `RumpelKiste.vst3` for
+`~/Library/Audio/Plug-Ins/VST3/` and the Audio Unit, `RumpelKiste.component`,
+for `~/Library/Audio/Plug-Ins/Components/`. Each is a folder -- copy it whole.
+It runs on macOS 10.15 (Catalina) or later, natively on Apple Silicon and on
+Intel.
+
+RumpelKiste is free and not notarized by Apple, so macOS blocks a downloaded
+plugin until its quarantine flag is cleared. In Terminal, once per bundle:
+
+```
+xattr -dr com.apple.quarantine ~/Library/Audio/Plug-Ins/CLAP/RumpelKiste.clap
+```
+
+and the same for the `.vst3` and the `.component`. Without it the DAW does not
+load the plugin, or calls it damaged. Your own presets are kept in
+`~/Library/Application Support/RumpelKiste/presets`.
 
 ## 2. Playing it
 

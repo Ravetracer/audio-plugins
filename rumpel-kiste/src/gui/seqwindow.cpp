@@ -45,6 +45,8 @@
 #   ifndef M_PI
 #      define M_PI 3.14159265358979323846
 #   endif
+#elif defined(__APPLE__)
+#   include "cocoaview.h"
 #elif defined(__wasm__)
 #   include "webcanvas.h"
 #else
@@ -63,7 +65,9 @@ namespace {
 // --------------------------------------------------------------- the window
 
 class PluginWindow final : public Gui
-#if defined(__wasm__)
+#if defined(__APPLE__)
+   , private CocoaViewListener
+#elif defined(__wasm__)
    , public WebCanvas
 #endif
 {
@@ -193,6 +197,27 @@ public:
          SetWindowTextA(mWindow, title);
    }
 
+#elif defined(__APPLE__)
+   // The view is made here and put into the host's view by embed(), the same
+   // two steps as the Win32 popup that becomes a child.
+   bool open() override {
+      if (mView.isOpen())
+         return true;
+      if (!mView.create(static_cast<int>(pixelW()), static_cast<int>(pixelH())))
+         return false;
+      allocateBuffer();
+      return true;
+   }
+
+   bool embed(uintptr_t parentWindow) override { return mView.embed(parentWindow); }
+
+   bool setTransientFor(uintptr_t) override {
+      // A child view has no transient hint; floating windows are not offered.
+      return mView.isOpen();
+   }
+
+   void setTitle(const char *) override {}
+
 #elif defined(__wasm__)
    // The page's canvas stands in for the window (gui/webcanvas.h): there is
    // nothing to create, embed or title, and the editor module copies each
@@ -309,12 +334,18 @@ public:
    // a scale change and for the collapsible section, which changes the height
    // at a fixed scale; both are the same job once the numbers have moved.
    void applySize() {
+#if defined(__APPLE__)
+      if (!mView.isOpen())
+         return;
+      mView.setSize(static_cast<int>(pixelW()), static_cast<int>(pixelH()));
+#else
       if (!mWindow)
          return;
+#endif
 #if defined(_WIN32)
       SetWindowPos(mWindow, nullptr, 0, 0, static_cast<int>(pixelW()),
                    static_cast<int>(pixelH()), SWP_NOMOVE | SWP_NOZORDER);
-#elif defined(__wasm__)
+#elif defined(__APPLE__) || defined(__wasm__)
 #else
       XResizeWindow(mDisplay, mWindow, pixelW(), pixelH());
       cairo_xlib_surface_set_size(mTarget, pixelW(), pixelH());
@@ -329,11 +360,17 @@ public:
    }
 
    void show() override {
+#if defined(__APPLE__)
+      if (!mView.isOpen())
+         return;
+      mView.show();
+#else
       if (!mWindow)
          return;
+#endif
 #if defined(_WIN32)
       ShowWindow(mWindow, SW_SHOWNA);
-#elif defined(__wasm__)
+#elif defined(__APPLE__) || defined(__wasm__)
 #else
       XMapWindow(mDisplay, mWindow);
       XFlush(mDisplay);
@@ -342,13 +379,20 @@ public:
    }
 
    void hide() override {
+#if defined(__APPLE__)
+      if (!mView.isOpen())
+         return;
+#else
       if (!mWindow)
          return;
+#endif
       if (mSaveOpen)
          closeSaveDialog();
       closeEntry();
 #if defined(_WIN32)
       ShowWindow(mWindow, SW_HIDE);
+#elif defined(__APPLE__)
+      mView.hide();
 #elif defined(__wasm__)
       // The page goes away with the host's view; nothing to unmap.
 #else
@@ -370,6 +414,11 @@ public:
       // is safe from any thread and the owning thread does the work.
       if (needsRepaint())
          InvalidateRect(mWindow, nullptr, FALSE);
+#elif defined(__APPLE__)
+      // As on Windows, the frame is drawn when the system asks for it
+      // (drawRect:), and the clock only says that one is due.
+      if (mView.isOpen() && needsRepaint())
+         mView.invalidate();
 #elif defined(__wasm__)
       // Called once per animation frame by the editor module (webTick).
       if (mWindow && needsRepaint()) {
@@ -410,6 +459,14 @@ private:
          mBufferCr = cairo_create(mBuffer);
          return;
       }
+#elif defined(__APPLE__)
+      // On macOS mBacking is the Retina factor: the buffer is drawn at device
+      // resolution and the view puts it on screen at its size in points.
+      mBuffer = cairo_image_surface_create(CAIRO_FORMAT_RGB24,
+                                           static_cast<int>(pixelW() * mBacking + 0.5),
+                                           static_cast<int>(pixelH() * mBacking + 0.5));
+      mBufferCr = cairo_create(mBuffer);
+      return;
 #endif
       mBuffer = cairo_image_surface_create(CAIRO_FORMAT_RGB24, static_cast<int>(pixelW()),
                                            static_cast<int>(pixelH()));
@@ -437,6 +494,9 @@ private:
             UnregisterClassW(windowClassName(), moduleInstance());
       }
       mWindow = nullptr;
+#elif defined(__APPLE__)
+      releaseKeyboard();
+      mView.destroy();
 #elif defined(__wasm__)
       releaseKeyboard();
       cancelFileDialogs();
@@ -748,6 +808,9 @@ private:
       cairo_paint(cr);
       cairo_save(cr);
       cairo_scale(cr, mScale * mBacking, mScale * mBacking);
+#elif defined(__APPLE__)
+      cairo_save(cr);
+      cairo_scale(cr, mScale * mBacking, mScale * mBacking);
 #else
       cairo_save(cr);
       cairo_scale(cr, mScale, mScale);
@@ -773,15 +836,16 @@ private:
 
       cairo_restore(cr);
 
-#if defined(__wasm__)
-      // No target: the editor module copies mBuffer out (webPublishFrame).
+#if defined(__wasm__) || defined(__APPLE__)
+      // No target: the editor module copies mBuffer out (webPublishFrame), or
+      // on macOS the view puts it on screen itself.
       if (!mTargetCr)
          return;
 #endif
       cairo_set_source_surface(mTargetCr, mBuffer, 0, 0);
       cairo_paint(mTargetCr);
       cairo_surface_flush(mTarget);
-#if !defined(_WIN32) && !defined(__wasm__)
+#if !defined(_WIN32) && !defined(__APPLE__) && !defined(__wasm__)
       XFlush(mDisplay);
 #endif
    }
@@ -1294,8 +1358,13 @@ private:
    // may hold one. The dialog says so and saving under the offered name still
    // works with the mouse.
    void grabKeyboard() {
+#if defined(__APPLE__)
+      if (!mView.isOpen() || mKeyboardGrabbed)
+         return;
+#else
       if (!mWindow || mKeyboardGrabbed)
          return;
+#endif
       // Said before the keyboard actually moves, because from here on the key
       // releases for anything the host is playing from its own computer
       // keyboard go to this window instead of to the host.
@@ -1307,6 +1376,10 @@ private:
       // its shortcuts, and focus returns on its own when the dialog closes.
       mPrevFocus = SetFocus(mWindow);
       mKeyboardGrabbed = GetFocus() == mWindow;
+#elif defined(__APPLE__)
+      // The same as on Windows: the view becomes the first responder, and the
+      // host has its shortcuts back once the dialog closes.
+      mKeyboardGrabbed = mView.takeKeyboard();
 #elif defined(__wasm__)
       // The canvas takes the focus with the click that opened the field, and
       // the page hands every key to the window from then on.
@@ -1330,6 +1403,9 @@ private:
       if (mPrevFocus && IsWindow(mPrevFocus))
          SetFocus(mPrevFocus);
       mPrevFocus = nullptr;
+#elif defined(__APPLE__)
+      mKeyboardGrabbed = false; // before the view lets go, which reports it
+      mView.releaseKeyboard();
 #elif defined(__wasm__)
 #else
       if (mDisplay) {
@@ -3317,6 +3393,9 @@ private:
          return;
 #if defined(_WIN32)
       dragFileOut(nullptr, reinterpret_cast<uintptr_t>(mWindow), path);
+#elif defined(__APPLE__)
+      // Not modal here: the drag runs on after this returns.
+      dragFileOut(nullptr, reinterpret_cast<uintptr_t>(mView.nsView()), path);
 #elif defined(__wasm__)
       // A page cannot drag a file out to the desktop or the host; the file is
       // handed to the user as a download instead.
@@ -3692,6 +3771,68 @@ private:
       }
       return DefWindowProcW(mWindow, msg, wp, lp);
    }
+#elif defined(__APPLE__)
+   // CocoaViewListener: the view hands its events over here, on the main
+   // thread. Everything below this block is shared again.
+   cairo_surface_t *cocoaRender(double backing) override {
+      if (backing < 1.0)
+         backing = 1.0;
+      if (std::fabs(backing - mBacking) > 1.0e-6 || !mBuffer) {
+         mBacking = backing;
+         allocateBuffer();
+      }
+      mDirty = true; // a paint request is not conditional on anything
+      paint();
+      return mBuffer;
+   }
+
+   void cocoaMouseDown(double x, double y, unsigned button, unsigned long timeMs,
+                       bool shift) override {
+      onPointerDown(x, y, button, timeMs, shift);
+   }
+
+   void cocoaMouseUp() override { onButtonRelease(); }
+
+   void cocoaMouseMoved(double x, double y, bool shift) override {
+      onMotion(x / mScale, y / mScale, shift);
+   }
+
+   void cocoaMouseExited() override {
+      if (mDrag < 0) {
+         mHover = -1;
+         mHoverWidget = Widget::NoWidget;
+         mDirty = true;
+      }
+   }
+
+   bool cocoaKey(CocoaViewListener::Key key, const char *text, int length) override {
+      KeyCommand cmd = KeyCommand::NoCommand;
+      switch (key) {
+      case CocoaViewListener::Key::Escape: cmd = KeyCommand::Escape; break;
+      case CocoaViewListener::Key::Accept: cmd = KeyCommand::Accept; break;
+      case CocoaViewListener::Key::Backspace: cmd = KeyCommand::Backspace; break;
+      case CocoaViewListener::Key::Up: cmd = KeyCommand::Up; break;
+      case CocoaViewListener::Key::Down: cmd = KeyCommand::Down; break;
+      case CocoaViewListener::Key::None: break;
+      }
+      if (mSaveOpen)
+         onSaveKey(cmd, text, length);
+      else if (mEntryParam >= 0)
+         onEntryKey(cmd, text, length);
+      else if (cmd != KeyCommand::NoCommand)
+         onOverlayKey(cmd);
+      else
+         return false;
+      mDirty = true;
+      return true;
+   }
+
+   // Somebody clicked into another view or window while a field was taking
+   // the keyboard. The field stays open, as on Windows; the keyboard simply
+   // has to be taken again, which the next click into the field does.
+   void cocoaFocusLost() override { mKeyboardGrabbed = false; }
+
+   void pumpEvents() {}
 #elif defined(__wasm__)
    // WebCanvas: the editor module hands the page's input over here. Pointer
    // positions are canvas pixels, the page's CSS pixels times mBacking.
@@ -4466,6 +4607,11 @@ private:
    HWND mWindow = nullptr;
    HWND mPrevFocus = nullptr;
    bool mTrackingLeave = false;
+#elif defined(__APPLE__)
+   CocoaView mView{*this};
+   // Device pixels per point of the buffer: the Retina factor. The view draws
+   // the buffer at its size in points.
+   double mBacking = 1.0;
 #elif defined(__wasm__)
    bool mWindow = false; // open, which is all there is to a canvas
    // Device pixels per CSS pixel: the page's devicePixelRatio.

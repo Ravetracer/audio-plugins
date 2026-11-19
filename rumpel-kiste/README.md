@@ -1,7 +1,7 @@
 # RumpelKiste
 
-A rhythm composer for Linux and Windows, as a native **CLAP** plugin and a
-VST3.
+A rhythm composer for Linux, Windows and macOS, as a native **CLAP** plugin,
+a VST3, and on macOS an Audio Unit.
 
 It models the Roland TR-909's voicing board from the June 1984 service notes.
 The seven analog voices are built as circuits, with every time constant, filter
@@ -61,6 +61,25 @@ Needs a CLAP SDK checkout at `../CLAP/clap` (or `-DCLAP_INCLUDE_DIR=`), and
 X11 and Cairo for the window. The Windows and VST3 builds need what the
 repository root's `CLAUDE.md` lists; `./release.sh` at the root builds all four
 binaries.
+
+### macOS
+
+macOS cannot be built on the development machine -- Apple's SDK may only be
+used on Apple hardware -- so `.github/workflows/rumpelkiste-macos.yml` builds it
+on GitHub's macOS runners: a static universal Cairo
+(`shared/cmake/build-macos-cairo.sh`), then the CLAP, the VST3 and an Audio Unit
+instrument (`aumu`, subtype `Rmpl`, manufacturer `Rvtr` -- permanent, AU hosts
+keep projects by them), universal arm64 + x86_64, macOS 10.15+. It runs the
+whole self-test against the built `.clap` on arm64 and under Rosetta, signs the
+bundles ad hoc, runs `auval` and uploads `RumpelKiste-<version>-macOS.zip`,
+which is attached to a published `rumpelkiste-v*` release. Not notarized: users
+clear the quarantine with `xattr`, as INSTALL.txt and the manual say.
+
+The window's macOS backend is `src/gui/cocoaview.mm`, an NSView child that puts
+the window's Cairo image surface on screen at the Retina factor; the drag of a
+pattern as a `.mid` and the file chooser are Cocoa's (`cocoaview.mm`,
+`filedialog_mac.mm`). Both are SäureKiste's, copied. **No Mac DAW has loaded
+it yet.**
 
 ## Tools
 

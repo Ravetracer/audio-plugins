@@ -25,6 +25,10 @@
 #ifdef RUMPELKISTE_WITH_GUI
 #include <thread>
 
+#if defined(__APPLE__)
+#   include <CoreFoundation/CoreFoundation.h>
+#endif
+
 #include <filesystem>
 #include <fstream>
 #include <sstream>
@@ -1467,6 +1471,11 @@ private:
    static uintptr_t nativeHandle(const clap_window_t &w) {
       return reinterpret_cast<uintptr_t>(w.win32);
    }
+#elif defined(__APPLE__)
+   static constexpr const char *kWindowApi = CLAP_WINDOW_API_COCOA;
+   static uintptr_t nativeHandle(const clap_window_t &w) {
+      return reinterpret_cast<uintptr_t>(w.cocoa);
+   }
 #else
    static constexpr const char *kWindowApi = CLAP_WINDOW_API_X11;
    static uintptr_t nativeHandle(const clap_window_t &w) { return static_cast<uintptr_t>(w.x11); }
@@ -1771,11 +1780,19 @@ private:
    }
 
    static bool guiSetScale(const clap_plugin_t *p, double scale) {
+#if defined(__APPLE__)
+      // The cocoa API works in logical sizes and has no scale to set; the view
+      // applies the Retina factor itself. Host resizing still zooms.
+      (void)p;
+      (void)scale;
+      return false;
+#else
       RumpelKistePlugin *plug = self(p);
       if (!plug->mGui)
          return false;
       plug->mGui->setScale(scale);
       return true;
+#endif
    }
 
    static bool guiGetSize(const clap_plugin_t *p, uint32_t *width, uint32_t *height) {
@@ -1854,7 +1871,8 @@ private:
    // ------------------------------------------------------------- gui clock
    //
    // The window is repainted from the host's timer, which is the main thread.
-   // Hosts are not required to offer timers, so there is a fallback thread.
+   // Hosts are not required to offer timers, so there is a fallback: a thread,
+   // or on macOS a timer on the main run loop.
 
    static void guiOnTimer(const clap_plugin_t *p, clap_id timerId) {
       RumpelKistePlugin *plug = self(p);
@@ -1870,7 +1888,23 @@ private:
             return;
       }
       mTimerId = CLAP_INVALID_ID;
-#if !defined(__wasm__)
+#if defined(__APPLE__)
+      // Not a thread on macOS: AppKit may only be touched from the main
+      // thread, so the fallback is a timer on the main run loop, which is
+      // what a host timer would have been.
+      CFRunLoopTimerContext context{};
+      context.info = this;
+      mGuiTimer = CFRunLoopTimerCreate(
+         kCFAllocatorDefault, CFAbsoluteTimeGetCurrent() + 0.033, 0.033, 0, 0,
+         [](CFRunLoopTimerRef, void *info) {
+            auto *plug = static_cast<RumpelKistePlugin *>(info);
+            if (plug->mGui)
+               plug->mGui->tick();
+         },
+         &context);
+      if (mGuiTimer)
+         CFRunLoopAddTimer(CFRunLoopGetMain(), mGuiTimer, kCFRunLoopCommonModes);
+#elif !defined(__wasm__)
       // (The editor module ticks the window from the page's animation frame;
       // a WebAssembly build has no threads.)
       mGuiThreadRun.store(true, std::memory_order_release);
@@ -1885,6 +1919,14 @@ private:
    }
 
    void stopGuiClock() {
+#if defined(__APPLE__)
+      if (mGuiTimer) {
+         CFRunLoopTimerInvalidate(mGuiTimer);
+         CFRelease(mGuiTimer);
+         mGuiTimer = nullptr;
+         return;
+      }
+#endif
 #if !defined(__wasm__)
       if (mGuiThreadRun.exchange(false, std::memory_order_acq_rel)) {
          if (mGuiThread.joinable())
@@ -2021,6 +2063,9 @@ private:
    std::thread mGuiThread;
 #endif
    std::atomic<bool> mGuiThreadRun{false};
+#if defined(__APPLE__)
+   CFRunLoopTimerRef mGuiTimer = nullptr; // the fallback clock on macOS
+#endif
 #endif
 
    DrumEngine mEngine;
