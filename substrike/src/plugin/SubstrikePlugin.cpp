@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdint>
 #include <cstdio>
 #include <cstring>
 #include <string>
@@ -51,18 +52,32 @@ SubstrikePlugin* self(const clap_plugin_t* p) { return static_cast<SubstrikePlug
 constexpr const char* kWindowApi = CLAP_WINDOW_API_WEBVIEW;
 #elif defined(_WIN32)
 constexpr const char* kWindowApi = CLAP_WINDOW_API_WIN32;
+#elif defined(__APPLE__)
+constexpr const char* kWindowApi = CLAP_WINDOW_API_COCOA;
 #else
 constexpr const char* kWindowApi = CLAP_WINDOW_API_X11;
 #endif
 
-// Denormals flush-to-zero for the duration of a process call. WebAssembly
-// has no control register for it.
+// Denormals flush-to-zero for the duration of a process call: FTZ and DAZ in
+// MXCSR on x86, FZ (bit 24) in FPCR on arm64. WebAssembly has no control
+// register for it.
 #if defined(__SSE__)
 struct ScopedFtz
 {
     unsigned int saved;
     ScopedFtz() : saved(_mm_getcsr()) { _mm_setcsr(saved | 0x8040); }
     ~ScopedFtz() { _mm_setcsr(saved); }
+};
+#elif defined(__aarch64__)
+struct ScopedFtz
+{
+    uint64_t saved;
+    ScopedFtz()
+    {
+        asm volatile("mrs %0, fpcr" : "=r"(saved));
+        asm volatile("msr fpcr, %0" : : "r"(saved | (uint64_t{1} << 24)));
+    }
+    ~ScopedFtz() { asm volatile("msr fpcr, %0" : : "r"(saved)); }
 };
 #else
 struct ScopedFtz
@@ -311,7 +326,7 @@ const void* SubstrikePlugin::getExtension(const char* id)
     if (!std::strcmp(id, CLAP_EXT_TIMER_SUPPORT))
         return &PluginGlue::timer;
 #endif
-#if !defined(_WIN32) && !defined(__wasm__)
+#if !defined(_WIN32) && !defined(__wasm__) && !defined(__APPLE__)
     if (!std::strcmp(id, CLAP_EXT_POSIX_FD_SUPPORT))
         return &PluginGlue::posixFd;
 #endif
@@ -1068,11 +1083,18 @@ void SubstrikePlugin::guiDestroy()
 
 bool SubstrikePlugin::guiSetScale(double scale)
 {
+#if defined(__APPLE__)
+    // The cocoa API works in logical sizes and has no scale to set; the
+    // window applies the Retina factor itself.
+    (void)scale;
+    return false;
+#else
     if (!editor_)
         return false;
     // The host scale replaces the desktop guess; the user scaling still applies.
     editor_->setScale(scale * Settings::get().getDouble("gui_scaling", 1.0));
     return true;
+#endif
 }
 
 bool SubstrikePlugin::guiGetSize(uint32_t* w, uint32_t* h)
@@ -1108,6 +1130,8 @@ bool SubstrikePlugin::guiSetParent(const clap_window_t* window)
         return false;
 #if defined(_WIN32)
     const auto parent = reinterpret_cast<uintptr_t>(window->win32);
+#elif defined(__APPLE__)
+    const auto parent = reinterpret_cast<uintptr_t>(window->cocoa);
 #else
     const auto parent = static_cast<uintptr_t>(window->x11);
 #endif

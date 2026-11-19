@@ -1,13 +1,14 @@
 ---
 accent: #8F7CF7
 tagline: A kick drum designer for every style
-subtitle: CLAP and VST3 instrument for Linux and Windows
+subtitle: CLAP, VST3 and Audio Unit instrument for Linux, Windows and macOS
 ---
 
 # {{PLUGIN}} — manual
 
 *Eight synthesised layers, effect chains in any order, a rumble floor,
-modulation and over a hundred presets. Linux and Windows, CLAP and VST3.*
+modulation and over a hundred presets. Linux, Windows and macOS; CLAP and
+VST3, and an Audio Unit on macOS.*
 
 Version {{VERSION}}
 
@@ -45,14 +46,43 @@ Copy the plugin where your host looks for plugins:
 |---|---|---|
 | Linux | `~/.clap/Substrike.clap` | `~/.vst3/Substrike.vst3` |
 | Windows | `C:\Program Files\Common Files\CLAP\Substrike.clap` | `C:\Program Files\Common Files\VST3\Substrike.vst3` |
+| macOS | `~/Library/Audio/Plug-Ins/CLAP/Substrike.clap` | `~/Library/Audio/Plug-Ins/VST3/Substrike.vst3` |
+
+On macOS the Audio Unit, `Substrike.component`, goes into
+`~/Library/Audio/Plug-Ins/Components/`; it is what Logic Pro and GarageBand
+use. On macOS all three are folders — copy them whole. Substrike runs on any
+Mac with macOS 10.15 (Catalina) or later, natively on Apple Silicon and on
+Intel.
 
 Then let the host rescan its plugins. Substrike is an instrument: put it on
 an instrument track and play it with notes. The factory presets are inside
 the plugin; there is nothing else to install.
 
 Your own presets, exported hits and settings are kept in
-`~/.local/share/Substrike` and `~/.config/Substrike` on Linux, and in
-`%APPDATA%\Substrike` on Windows.
+`~/.local/share/Substrike` and `~/.config/Substrike` on Linux, in
+`%APPDATA%\Substrike` on Windows and in
+`~/Library/Application Support/Substrike` on macOS.
+
+### macOS: letting the plugin load
+
+Substrike is free and is not notarized by Apple. macOS therefore blocks
+plugins downloaded from the internet until their quarantine flag is cleared:
+the DAW does not load them, or reports them as damaged. After copying, open
+**Terminal** and run, for the formats you installed:
+
+```
+xattr -dr com.apple.quarantine ~/Library/Audio/Plug-Ins/CLAP/Substrike.clap
+xattr -dr com.apple.quarantine ~/Library/Audio/Plug-Ins/VST3/Substrike.vst3
+xattr -dr com.apple.quarantine ~/Library/Audio/Plug-Ins/Components/Substrike.component
+```
+
+Then restart the DAW. The `~/Library` folder is hidden in the Finder: use
+**Go → Go to Folder…** and type the path.
+
+On a Mac, **Command**-click takes the place of **Ctrl**-click (it sets a
+control to its default), and **Control**-click is a right-click. The keyboard
+shortcuts written with Ctrl work with Control, and with Command unless the
+DAW keeps that shortcut for itself.
 
 ## 3. The first five minutes
 

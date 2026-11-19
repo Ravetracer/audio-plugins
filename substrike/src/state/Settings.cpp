@@ -34,6 +34,22 @@ std::string homeDir()
 }
 } // namespace
 
+#if defined(__APPLE__)
+// ~/Library/Application Support/Substrike for both, as on Windows. The XDG
+// variables still win when they are set, so the tests can keep the real
+// folder out of it.
+std::string Settings::configDir()
+{
+    const char* x = std::getenv("XDG_CONFIG_HOME");
+    return (x && *x ? std::string(x) : homeDir() + "/Library/Application Support") + "/Substrike";
+}
+
+std::string Settings::dataDir()
+{
+    const char* x = std::getenv("XDG_DATA_HOME");
+    return (x && *x ? std::string(x) : homeDir() + "/Library/Application Support") + "/Substrike";
+}
+#else
 std::string Settings::configDir()
 {
     const char* x = std::getenv("XDG_CONFIG_HOME");
@@ -45,6 +61,7 @@ std::string Settings::dataDir()
     const char* x = std::getenv("XDG_DATA_HOME");
     return (x && *x ? std::string(x) : homeDir() + "/.local/share") + "/Substrike";
 }
+#endif
 
 #endif
 

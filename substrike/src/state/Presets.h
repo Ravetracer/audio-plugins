@@ -38,7 +38,8 @@ const std::vector<std::string>& factoryCategories();
 // The text of a factory preset, or null.
 const char* factoryPresetText(const std::string& key);
 
-// $XDG_DATA_HOME/Substrike/Presets, %APPDATA%\Substrike\Presets on Windows.
+// $XDG_DATA_HOME/Substrike/Presets, %APPDATA%\Substrike\Presets on Windows,
+// ~/Library/Application Support/Substrike/Presets on macOS.
 std::string userPresetDir();
 // The user's presets, by name. Reads the folder; main thread.
 std::vector<PresetInfo> userPresets();

@@ -229,7 +229,7 @@ bool FileDialog::poll(std::string& result)
 
 } // namespace substrike::gui
 
-#else
+#elif !defined(__APPLE__) // macOS: FileDialogMac.mm
 
 #include <fcntl.h>
 #include <signal.h>

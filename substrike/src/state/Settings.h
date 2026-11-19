@@ -6,8 +6,10 @@
 namespace substrike {
 
 // Global user preferences shared by all instances (window size and scaling,
-// export options). Stored in $XDG_CONFIG_HOME/Substrike/settings.ini, or
-// %APPDATA%\Substrike\settings.ini on Windows. Main thread only.
+// export options). Stored in $XDG_CONFIG_HOME/Substrike/settings.ini,
+// %APPDATA%\Substrike\settings.ini on Windows, or ~/Library/Application
+// Support/Substrike/settings.ini on macOS (where XDG_CONFIG_HOME, when set,
+// still comes first). Main thread only.
 class Settings
 {
 public:

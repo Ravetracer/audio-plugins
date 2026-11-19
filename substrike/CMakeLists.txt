@@ -1,14 +1,22 @@
 cmake_minimum_required(VERSION 3.21)
-project(Substrike VERSION 1.2.0 LANGUAGES C CXX)
+# macOS: std::filesystem needs 10.15. Set before project(), ignored elsewhere.
+set(CMAKE_OSX_DEPLOYMENT_TARGET "10.15" CACHE STRING "Minimum macOS version")
+project(Substrike VERSION 1.3.0 LANGUAGES C CXX)
+if (APPLE)
+    enable_language(OBJCXX)
+endif()
 
 # Substrike builds as a CLAP and, through the clap-wrapper, as a VST3, for
-# Linux and Windows (cross-compiled with mingw-w64). Like Aurum it does not use
-# ../shared; the Windows and VST3 blocks below follow ../aurum/CMakeLists.txt,
-# and ../saeure-kiste/CMakeLists.txt is where the reasons for each link option
-# are written down.
+# Linux and Windows (cross-compiled with mingw-w64), and on macOS as a CLAP, a
+# VST3 and an Audio Unit, built natively by
+# .github/workflows/substrike-macos.yml. Like Aurum it does not use ../shared;
+# the Windows and VST3 blocks below follow ../aurum/CMakeLists.txt,
+# ../saeure-kiste/CMakeLists.txt is where the reasons for each link option are
+# written down, and the macOS blocks follow ../resident.
 #
-# The editor is drawn with Cairo, on X11 (Linux) or win32 (Windows); the window
-# backends and widgets come from ../aurum and belong to Substrike from then on.
+# The editor is drawn with Cairo, on X11 (Linux), win32 (Windows) or Cocoa
+# (macOS); the window backends and widgets come from ../aurum and belong to
+# Substrike from then on.
 #
 # Configured with wasi-sdk's toolchain file it builds the WCLAP instead, the
 # plugin for browser hosts: see cmake/wclap.cmake.
@@ -26,12 +34,13 @@ endif()
 # as openDAW, see cmake/wclap.cmake): the plugin with its editor as a page.
 if (CMAKE_SYSTEM_NAME STREQUAL "WASI")
     set(SUBSTRIKE_WASM ON)
-elseif (NOT CMAKE_SYSTEM_NAME STREQUAL "Linux" AND NOT CMAKE_SYSTEM_NAME STREQUAL "Windows")
-    message(FATAL_ERROR "Substrike builds for Linux, for Windows and as a WCLAP only.")
+elseif (NOT CMAKE_SYSTEM_NAME MATCHES "^(Linux|Windows|Darwin)$")
+    message(FATAL_ERROR "Substrike builds for Linux, Windows, macOS and as a WCLAP only.")
 endif()
 
 set(SUBSTRIKE_SDK_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../CLAP" CACHE PATH "Directory holding clap, clap-wrapper and vst3sdk")
 option(SUBSTRIKE_BUILD_VST3 "Also build a VST3 through the clap-wrapper" ON)
+option(SUBSTRIKE_BUILD_AUV2 "Also build an Audio Unit through the clap-wrapper (macOS only)" ON)
 # The renderer and self-test. release.sh switches them off as <PROJECT>_BUILD_TOOLS.
 option(SUBSTRIKE_BUILD_TOOLS "Build the offline renderer and self-test" ON)
 
@@ -47,6 +56,12 @@ if (SUBSTRIKE_WASM)
     set(SUBSTRIKE_ARCH_FLAGS "-msimd128" CACHE STRING "Target architecture flags")
     # wasi-sdk's libc++ has no exception runtime; Substrike catches nothing.
     add_compile_options(-fno-exceptions)
+elseif (APPLE)
+    # A universal build compiles every file for arm64 and x86_64 at once, so
+    # the x86 level is passed to the x86_64 half only (arm64 has NEON as its
+    # baseline). v2, not v3: Intel Macs from before 2013 that still run 10.15
+    # have no AVX2, and Rosetta before macOS 15 does not translate it.
+    set(SUBSTRIKE_ARCH_FLAGS "SHELL:-Xarch_x86_64 -march=x86-64-v2" CACHE STRING "Target architecture flags")
 else()
     set(SUBSTRIKE_ARCH_FLAGS "-march=x86-64-v3" CACHE STRING "Target architecture flags")
 endif()
@@ -112,6 +127,22 @@ if (CMAKE_SYSTEM_NAME STREQUAL "Windows")
     # static, which is how it is built here.
     target_compile_definitions(substrike-gui-deps INTERFACE CAIRO_WIN32_STATIC_BUILD)
     set(SUBSTRIKE_WINDOW_SOURCE src/gui/Win32Window.cpp)
+elseif (APPLE)
+    # A static Cairo with its Quartz backend (fonts) and pixman, universal,
+    # from ../shared/cmake/build-macos-cairo.sh. Nothing from Homebrew: its
+    # libraries are dylibs for one architecture and this macOS version only.
+    set(SUBSTRIKE_MAC_CAIRO "${CMAKE_CURRENT_SOURCE_DIR}/../macbuild/cairo-macos"
+        CACHE PATH "Static Cairo for macOS (shared/cmake/build-macos-cairo.sh)")
+    if (NOT EXISTS "${SUBSTRIKE_MAC_CAIRO}/lib/libcairo.a")
+        message(FATAL_ERROR "Substrike: no macOS Cairo at SUBSTRIKE_MAC_CAIRO=${SUBSTRIKE_MAC_CAIRO}; run ../shared/cmake/build-macos-cairo.sh")
+    endif()
+    target_include_directories(substrike-gui-deps INTERFACE
+        "${SUBSTRIKE_MAC_CAIRO}/include" "${SUBSTRIKE_MAC_CAIRO}/include/cairo")
+    target_link_libraries(substrike-gui-deps INTERFACE
+        "${SUBSTRIKE_MAC_CAIRO}/lib/libcairo.a" "${SUBSTRIKE_MAC_CAIRO}/lib/libpixman-1.a"
+        "-framework Cocoa" "-framework CoreGraphics" "-framework CoreText"
+        "-framework CoreFoundation" "-framework ApplicationServices")
+    set(SUBSTRIKE_WINDOW_SOURCE src/gui/CocoaWindow.mm src/gui/FileDialogMac.mm)
 else()
     find_package(PkgConfig REQUIRED)
     pkg_check_modules(SUBSTRIKE_GUI REQUIRED IMPORTED_TARGET cairo x11)
@@ -151,13 +182,27 @@ target_link_libraries(substrike-impl PUBLIC clap substrike-gui-deps Threads::Thr
 # ------------------------------------------------------------- the CLAP module
 add_library(Substrike MODULE src/entry.cpp)
 target_link_libraries(Substrike PRIVATE substrike-impl)
-set_target_properties(Substrike PROPERTIES PREFIX "" OUTPUT_NAME "Substrike" SUFFIX ".clap")
+if (APPLE)
+    # A bundle: Substrike.clap/Contents/MacOS/Substrike, as clap-wrapper's
+    # target_add_clap_configuration lays it out. Only clap_entry is exported.
+    set_target_properties(Substrike PROPERTIES
+        BUNDLE TRUE
+        BUNDLE_EXTENSION clap
+        LIBRARY_OUTPUT_NAME "Substrike"
+        MACOSX_BUNDLE_GUI_IDENTIFIER "de.ravetracer.substrike"
+        MACOSX_BUNDLE_BUNDLE_NAME "Substrike"
+        MACOSX_BUNDLE_BUNDLE_VERSION "${PROJECT_VERSION}"
+        MACOSX_BUNDLE_SHORT_VERSION_STRING "${PROJECT_VERSION}")
+    target_link_options(Substrike PRIVATE "-Wl,-exported_symbol,_clap_entry")
+else()
+    set_target_properties(Substrike PROPERTIES PREFIX "" OUTPUT_NAME "Substrike" SUFFIX ".clap")
+endif()
 if (CMAKE_SYSTEM_NAME STREQUAL "Windows")
     # clap_entry carries dllexport from CLAP_EXPORT; --exclude-all-symbols
     # keeps the rest of the DLL to itself.
     target_link_options(Substrike PRIVATE "-Wl,--exclude-all-symbols" "-Wl,--no-undefined")
     substrike_static_runtime(Substrike)
-else()
+elseif (NOT APPLE)
     target_link_options(Substrike PRIVATE "-Wl,--no-undefined")
 endif()
 
@@ -166,20 +211,35 @@ endif()
 # The same plugin behind the clap-wrapper. Needs CLAP/clap-wrapper and
 # CLAP/vst3sdk (3.8 or newer), with ../shared/patches/ applied to the wrapper.
 # release.sh builds the target Substrike-vst3 and picks the bundle up from
-# build/vst3/Substrike.vst3.
-if (SUBSTRIKE_BUILD_VST3)
+# build/vst3/Substrike.vst3 (on macOS the wrapper puts it in build/ itself).
+if (NOT APPLE)
+    set(SUBSTRIKE_BUILD_AUV2 OFF)
+endif()
+if (SUBSTRIKE_BUILD_VST3 OR SUBSTRIKE_BUILD_AUV2)
     if (NOT EXISTS "${SUBSTRIKE_SDK_DIR}/clap-wrapper/cmake/wrap_vst3.cmake")
         message(FATAL_ERROR "Substrike: no clap-wrapper at ${SUBSTRIKE_SDK_DIR}/clap-wrapper")
     endif()
-    if (NOT EXISTS "${SUBSTRIKE_SDK_DIR}/vst3sdk/public.sdk/source/main/pluginfactory.cpp")
-        message(FATAL_ERROR "Substrike: no VST3 SDK at ${SUBSTRIKE_SDK_DIR}/vst3sdk")
-    endif()
-    set(VST3_SDK_ROOT "${SUBSTRIKE_SDK_DIR}/vst3sdk" CACHE PATH "" FORCE)
     set(CLAP_WRAPPER_DOWNLOAD_DEPENDENCIES FALSE CACHE BOOL "" FORCE)
     set(CLAP_WRAPPER_OUTPUT_NAME "Substrike" CACHE STRING "" FORCE)
     set(CLAP_WRAPPER_BUILD_TESTS FALSE CACHE BOOL "" FORCE)
+    if (SUBSTRIKE_BUILD_VST3)
+        if (NOT EXISTS "${SUBSTRIKE_SDK_DIR}/vst3sdk/public.sdk/source/main/pluginfactory.cpp")
+            message(FATAL_ERROR "Substrike: no VST3 SDK at ${SUBSTRIKE_SDK_DIR}/vst3sdk")
+        endif()
+        set(VST3_SDK_ROOT "${SUBSTRIKE_SDK_DIR}/vst3sdk" CACHE PATH "" FORCE)
+    endif()
+    if (SUBSTRIKE_BUILD_AUV2)
+        # Apple's AudioUnitSDK (Apache 2.0), checked out beside the others:
+        #   git clone --branch AudioUnitSDK-1.1.0 https://github.com/apple/AudioUnitSDK.git CLAP/AudioUnitSDK
+        if (NOT EXISTS "${SUBSTRIKE_SDK_DIR}/AudioUnitSDK/src/AudioUnitSDK")
+            message(FATAL_ERROR "Substrike: no AudioUnitSDK at ${SUBSTRIKE_SDK_DIR}/AudioUnitSDK")
+        endif()
+        set(AUDIOUNIT_SDK_ROOT "${SUBSTRIKE_SDK_DIR}/AudioUnitSDK" CACHE PATH "" FORCE)
+    endif()
     add_subdirectory("${SUBSTRIKE_SDK_DIR}/clap-wrapper" clap-wrapper EXCLUDE_FROM_ALL)
+endif()
 
+if (SUBSTRIKE_BUILD_VST3)
     add_library(Substrike-vst3 MODULE src/entry.cpp)
     target_link_libraries(Substrike-vst3 PRIVATE substrike-impl)
     target_add_vst3_wrapper(
@@ -198,6 +258,29 @@ if (SUBSTRIKE_BUILD_VST3)
         target_link_options(Substrike-vst3 PRIVATE "-Wl,--no-undefined")
         substrike_static_runtime(Substrike-vst3)
     endif()
+endif()
+
+# ------------------------------------------------------------------------ AUv2
+#
+# macOS only: the same plugin as an Audio Unit (an instrument, "aumu": it
+# plays MIDI notes), with the CLAP entry linked in as the VST3 has it. The
+# lane outputs become the AU's further output busses. The codes are
+# Substrike's for good: Logic and every other AU host keep projects by them.
+if (SUBSTRIKE_BUILD_AUV2)
+    add_library(Substrike-auv2 MODULE src/entry.cpp)
+    target_link_libraries(Substrike-auv2 PRIVATE substrike-impl)
+    target_add_auv2_wrapper(
+        TARGET Substrike-auv2
+        OUTPUT_NAME "Substrike"
+        BUNDLE_IDENTIFIER "de.ravetracer.substrike.auv2"
+        BUNDLE_VERSION "${PROJECT_VERSION}"
+        MANUFACTURER_NAME "Ravetracer"
+        MANUFACTURER_CODE "Rvtr"
+        SUBTYPE_CODE "Sbst"
+        INSTRUMENT_TYPE "aumu"
+    )
+    # Part of the default build, as the .clap is.
+    add_custom_target(substrike-auv2-all ALL DEPENDS Substrike-auv2)
 endif()
 
 # ---------------------------------------------------------------------- install
@@ -224,20 +307,23 @@ if (SUBSTRIKE_BUILD_TOOLS)
     target_link_libraries(substrike-preset-check PRIVATE substrike-impl)
     substrike_static_runtime(substrike-preset-check)
 
-    # The editor rendered offscreen to a PNG, with frame timings.
+    # The editor rendered offscreen to a PNG (a PPM where Cairo has no PNG),
+    # with frame timings.
     add_executable(substrike-gui-snapshot tests/gui_snapshot.cpp)
     target_link_libraries(substrike-gui-snapshot PRIVATE substrike-impl)
     substrike_static_runtime(substrike-gui-snapshot)
 
     # A minimal CLAP host that opens the plugin's window: X11 on Linux, a real
     # win32 window on Windows (under wine, how the win32 backend gets
-    # exercised from here at all).
-    add_executable(substrike-gui-host tests/clap_gui_host.cpp)
-    target_link_libraries(substrike-gui-host PRIVATE clap Threads::Threads)
-    if (CMAKE_SYSTEM_NAME STREQUAL "Windows")
-        target_link_libraries(substrike-gui-host PRIVATE user32 gdi32)
-        substrike_static_runtime(substrike-gui-host)
-    else()
-        target_link_libraries(substrike-gui-host PRIVATE PkgConfig::SUBSTRIKE_GUI ${CMAKE_DL_LIBS})
+    # exercised from here at all). It has no Cocoa path.
+    if (NOT APPLE)
+        add_executable(substrike-gui-host tests/clap_gui_host.cpp)
+        target_link_libraries(substrike-gui-host PRIVATE clap Threads::Threads)
+        if (CMAKE_SYSTEM_NAME STREQUAL "Windows")
+            target_link_libraries(substrike-gui-host PRIVATE user32 gdi32)
+            substrike_static_runtime(substrike-gui-host)
+        else()
+            target_link_libraries(substrike-gui-host PRIVATE PkgConfig::SUBSTRIKE_GUI ${CMAKE_DL_LIBS})
+        endif()
     endif()
 endif()

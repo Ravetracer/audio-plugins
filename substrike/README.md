@@ -1,7 +1,8 @@
 # Substrike
 
-A kick drum designer for Linux and Windows as a native CLAP instrument (plus
-VST3 through clap-wrapper). Everything is synthesised; nothing is sampled.
+A kick drum designer for Linux, Windows and macOS as a native CLAP instrument
+(plus VST3 through clap-wrapper, and an Audio Unit on macOS). Everything is
+synthesised; nothing is sampled.
 
 The goal is one instrument for every kind of kick, from ambient through hip
 hop, techno and trance to hardstyle and hardcore: up to eight layers, each with
@@ -9,7 +10,11 @@ its own effect chain in free order, layers feeding one another for rumble, a
 master chain, and modulation. The design and the phases are in
 [docs/PLAN.md](docs/PLAN.md).
 
-## Status: 1.2.0
+## Status: 1.3.0
+
+Linux and Windows, CLAP and VST3, and a WCLAP for browser hosts; macOS (CLAP,
+VST3 and Audio Unit, universal, 10.15 or later) is built by a GitHub workflow
+since 1.3.0 and has not been played in a DAW yet.
 
 What exists:
 
@@ -188,7 +193,8 @@ preset to load it and hear it (the menu's "Play Presets When Loaded" turns
 the playing off); Up and Down step through the list, Esc closes. **Save
 As...** saves the current state as a user preset in
 `$XDG_DATA_HOME/Substrike/Presets` (`%APPDATA%\Substrike\Presets` on
-Windows); right-click a user preset to delete it. The state remembers the
+Windows, `~/Library/Application Support/Substrike/Presets` on macOS);
+right-click a user preset to delete it. The state remembers the
 preset it came from.
 
 Loading a preset or a state is a fresh start: what still sounds fades out
@@ -247,14 +253,17 @@ changes. **Click it** (or Play) to hear it through the plugin without a
 keyboard; **drag it** into the DAW to drop it as a 24-bit WAV. Export saves
 it wherever you choose. Dragged hits are kept in
 `$XDG_DATA_HOME/Substrike/Exports` (`%APPDATA%\Substrike\Exports` on
-Windows) so the DAW can go on referring to them. The menu has the window
+Windows, `~/Library/Application Support/Substrike/Exports` on macOS) so the DAW can go on referring to them. The menu has the window
 size, scaling and "Normalise Exported Hits" (to -0.3 dBFS; off by default,
 so an export is as loud as the hit).
 
 Every control: drag vertically (Shift for fine), wheel, double-click to type
-a value, Ctrl-click for the default. Window size and scaling are kept in
+a value, Ctrl-click for the default (Command-click on macOS, where
+Control-click is a right-click). Window size and scaling are kept in
 `$XDG_CONFIG_HOME/Substrike/settings.ini` (`%APPDATA%\Substrike` on
-Windows).
+Windows, `~/Library/Application Support/Substrike` on macOS, where the XDG
+variables still take precedence when set, which is how the tests keep out of
+the real folder).
 
 ## Build
 
@@ -287,6 +296,25 @@ whole self-test against the Windows binary under wine, and
 `substrike-gui-host.exe` opens the win32 window there. No Windows DAW has
 loaded Substrike yet. Building needs the cross-built Cairo from
 `../setup-winbuild.sh`.
+
+### macOS
+
+macOS cannot be built here (its SDK may only be used on Apple hardware): the
+workflow `../.github/workflows/substrike-macos.yml` builds it on GitHub's
+macOS runners -- a static universal Cairo from
+`../shared/cmake/build-macos-cairo.sh`, the CLAP, VST3 and Audio Unit bundles
+(type `aumu`, subtype `Sbst`, manufacturer `Rvtr`; never change them, AU
+hosts keep projects by them; the lane outputs are the AU's further output
+busses), `substrike-render --selftest`, the preset check and an offscreen
+editor render on arm64 and, under Rosetta, x86_64, ad-hoc signing and Apple's
+`auval` -- and uploads `Substrike-<version>-macOS.zip`; publishing a
+`substrike-v*` release attaches it there. The bundles are not notarized:
+users clear the quarantine flag (the archive's INSTALL.txt and the manual say
+how). The window backend is `src/gui/CocoaWindow.mm` (the hit drag is an
+`NSDraggingSession` carrying the exported file's URL), the file chooser
+`src/gui/FileDialogMac.mm`. The x86_64 half is built for x86-64-v2, not v3:
+Intel Macs from before 2013 that still run 10.15 have no AVX2, and Rosetta
+before macOS 15 does not translate it.
 
 ### WCLAP
 

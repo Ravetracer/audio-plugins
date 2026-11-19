@@ -14,8 +14,10 @@ Substrike.
 
 ## Targets
 
-- Formats: CLAP (native), VST3 (clap-wrapper). Linux x86-64 (X11), Windows
-  x86-64 (win32, cross-built with mingw-w64).
+- Formats: CLAP (native), VST3 (clap-wrapper), AUv2 on macOS (clap-wrapper).
+  Linux x86-64 (X11), Windows x86-64 (win32, cross-built with mingw-w64),
+  macOS 10.15+ universal arm64/x86_64 (Cocoa, built by a GitHub workflow), and
+  the WCLAP.
 - C++20, the same build setup as Aurum: the mingw toolchain file,
   `../winbuild/cairo-mingw`, a static runtime and a per-module window class.
 - Identity: `de.ravetracer.substrike`, vendor `Ravetracer`, display name
@@ -547,6 +549,37 @@ in the page and talks to the plugin through messages
   measured by the WASI self-test), and 0.3 us asleep.
 - Hosts may only take the main output; the lane outputs are still offered.
 
+1.3.0: macOS. CLAP, VST3 and Audio Unit, one universal binary each (arm64
+and x86_64, macOS 10.15+), built natively by
+`.github/workflows/substrike-macos.yml` on GitHub's macOS runners, the same
+way as ReSIDent and Aurum.
+
+- `gui/CocoaWindow.mm`, from Aurum's: an NSView child of the host's view,
+  Cairo into an image surface drawn as a CGImage at the Retina factor; sizes
+  in points (`guiSetScale` returns false); the view class is made at run time
+  under a name carrying the module's load address. Command or Control are
+  ModCtrl, Option ModAlt, Control+click a right click.
+- The hit drag: an `NSDraggingSession` with the exported WAV's file URL (the
+  file is written to the export folder first, as on the other platforms), the
+  file's icon under the pointer, a copy operation. Cocoa runs the drag from
+  then on and the view sees no button release, so the window sends the
+  listener one when the session ends, as the win32 window does after
+  `DoDragDrop`. The view keeps itself alive until then and does not take its
+  own drag back as a drop.
+- `gui/FileDialogMac.mm`: NSOpenPanel/NSSavePanel, modeless, polled.
+- Settings, user presets and exports in
+  `~/Library/Application Support/Substrike` (the XDG variables still win when
+  set, which keeps the self-test out of it), Quartz fonts ("Helvetica Neue").
+- x86_64 at x86-64-v2; arm64 with NEON as its baseline. Denormals: FPCR.FZ
+  on arm64 beside MXCSR FTZ/DAZ on x86.
+- AU codes: manufacturer `Rvtr`, subtype `Sbst`, type `aumu`. Keep them.
+  The lane outputs are further output busses; the AUv2 main-bus patch in
+  `shared/patches/` keeps auval from reading them as main-bus layouts.
+- Linux, Windows and the WCLAP: only the version changes; the code they
+  compile is unchanged (same object code, bit-identical renders).
+- **Untested in a DAW.** CI checks the build, the self-test, the preset check
+  and an offscreen editor render on both architectures, and auval.
+
 ## Phases
 
 1. **Scaffold and first kick.**
@@ -593,7 +626,7 @@ in the page and talks to the plugin through messages
 - **Hit export.** The current hit can be rendered offline to a WAV file
   (length from the tail, peak-normalised as an option). The rendered file
   can also be dragged straight from the window into the DAW's arranger:
-  an XDND drag source on X11 and an OLE `DoDragDrop` with `CF_HDROP` on
-  win32. This comes in phase 4 with the GUI.
+  an XDND drag source on X11, an OLE `DoDragDrop` with `CF_HDROP` on
+  win32 and an `NSDraggingSession` on macOS (1.3.0). This comes in phase 4 with the GUI.
 - **Theme: violet.** The accent is a cold violet, `#8F7CF7`, with the chassis
   greys tinted towards it.
