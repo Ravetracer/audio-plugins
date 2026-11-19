@@ -1,11 +1,18 @@
 cmake_minimum_required(VERSION 3.21)
-project(Aurum VERSION 0.4.0 LANGUAGES C CXX)
+# macOS: std::filesystem needs 10.15. Set before project(), ignored elsewhere.
+set(CMAKE_OSX_DEPLOYMENT_TARGET "10.15" CACHE STRING "Minimum macOS version")
+project(Aurum VERSION 0.5.0 LANGUAGES C CXX)
+if (APPLE)
+    enable_language(OBJCXX)
+endif()
 
 # Aurum builds as a CLAP and, through the clap-wrapper, as a VST3, for Linux
-# (X11 + Cairo) and for Windows (win32 + Cairo, cross-compiled with mingw-w64).
-# It does not use ../shared; the Windows and VST3 blocks below follow
-# ../saeure-kiste/CMakeLists.txt, which is where the reasons for each link
-# option are written down.
+# (X11 + Cairo) and for Windows (win32 + Cairo, cross-compiled with mingw-w64),
+# and on macOS (Cocoa + Cairo) as a CLAP, a VST3 and an Audio Unit, built
+# natively by .github/workflows/aurum-macos.yml. It does not use ../shared;
+# the Windows and VST3 blocks below follow ../saeure-kiste/CMakeLists.txt,
+# which is where the reasons for each link option are written down, and the
+# macOS blocks follow ../resident.
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -20,17 +27,19 @@ endif()
 # the engine and the plugin without the window.
 if (CMAKE_SYSTEM_NAME STREQUAL "WASI")
     set(AURUM_WASM ON)
-elseif (NOT CMAKE_SYSTEM_NAME STREQUAL "Linux" AND NOT CMAKE_SYSTEM_NAME STREQUAL "Windows")
-    message(FATAL_ERROR "Aurum builds for Linux and for Windows; the window has a backend for those two only.")
+elseif (NOT CMAKE_SYSTEM_NAME MATCHES "^(Linux|Windows|Darwin)$")
+    message(FATAL_ERROR "Aurum builds for Linux, Windows, macOS and WASI (the WCLAP); the window has a backend for those only.")
 endif()
 
 set(AURUM_SDK_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../CLAP" CACHE PATH "Directory holding clap, clap-wrapper and vst3sdk")
 option(AURUM_BUILD_PLUGIN "Build the CLAP plugin" ON)
 option(AURUM_BUILD_VST3 "Also build a VST3 through the clap-wrapper" ON)
+option(AURUM_BUILD_AUV2 "Also build an Audio Unit through the clap-wrapper (macOS only)" ON)
 # The test programs. release.sh switches them off as <PROJECT>_BUILD_TOOLS.
 option(AURUM_BUILD_TOOLS "Build the tests and test hosts" ON)
 
-# CLAP plugins live in ~/.clap on Linux. A cross build has no business guessing
+# CLAP plugins live in ~/.clap on Linux (the macOS workflow packs the bundles
+# itself and does not install). A cross build has no business guessing
 # a path on the target machine (release.sh sets it to a staging tree).
 if (CMAKE_INSTALL_PREFIX_INITIALIZED_TO_DEFAULT AND NOT CMAKE_CROSSCOMPILING)
     set(CMAKE_INSTALL_PREFIX "$ENV{HOME}/.clap" CACHE PATH "Install prefix" FORCE)
@@ -43,6 +52,13 @@ if (AURUM_WASM)
     set(AURUM_ARCH_FLAGS "-msimd128" CACHE STRING "Target architecture flags")
     # wasi-sdk's libc++ has no exception runtime; Aurum catches nothing.
     add_compile_options(-fno-exceptions)
+elseif (APPLE)
+    # A universal build compiles every file for arm64 and x86_64 at once, so
+    # the x86 level is passed to the x86_64 half only (arm64 has NEON as its
+    # baseline). v2, not v3: Intel Macs from before 2013 that still run 10.15
+    # have no AVX2, and Rosetta before macOS 15 does not translate it, so an
+    # Intel-only host on Apple Silicon would fault on a v3 build.
+    set(AURUM_ARCH_FLAGS "SHELL:-Xarch_x86_64 -march=x86-64-v2" CACHE STRING "Target architecture flags")
 else()
     set(AURUM_ARCH_FLAGS "-march=x86-64-v3" CACHE STRING "Target architecture flags")
 endif()

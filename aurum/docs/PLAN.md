@@ -1,17 +1,19 @@
 # Aurum Reverb – Implementation Plan
 
-Native algorithmic reverb for Linux and Windows (CLAP first, VST3 via
-clap-wrapper). Original
+Native algorithmic reverb for Linux, Windows and macOS (CLAP first, VST3 via
+clap-wrapper, an Audio Unit on macOS). Original
 design based on public reverb literature (Schroeder, Moorer, Jot, Dattorro).
 No third-party code, assets or data are used.
 
 ## Targets
 
-- Formats: CLAP (native), VST3 (clap-wrapper). Linux x86-64 (X11) and
-  Windows x86-64 (win32, cross-built with mingw-w64).
+- Formats: CLAP (native), VST3 (clap-wrapper), AUv2 on macOS (clap-wrapper).
+  Linux x86-64 (X11), Windows x86-64 (win32, cross-built with mingw-w64) and
+  macOS 10.15+ universal arm64/x86_64 (Cocoa, built by a GitHub workflow).
 - Channels: mono and stereo.
-- GUI: own widget toolkit on Cairo, with an X11 and a win32 window backend
-  (`gui/X11Window`, `gui/Win32Window`, selected by `gui/NativeWindow.h`),
+- GUI: own widget toolkit on Cairo, with an X11, a win32 and a Cocoa window
+  backend (`gui/X11Window`, `gui/Win32Window`, `gui/CocoaWindow`, selected by
+  `gui/NativeWindow.h`),
   HiDPI aware, resizable.
 
 ## Signal flow
@@ -73,7 +75,34 @@ factory presets are close to the reference. Remaining preset differences
 are accepted -- the reference applies modulation that Aurum deliberately
 does not replicate, and Aurum keeps its own character rather than aiming
 for a clone. No further preset fitting is planned.
-Open: VST3 build not yet verified in a host; surround support (see TODO).
+Since 0.5.0 macOS (see below). Open: VST3 build not yet verified in a host;
+surround support (see TODO).
+
+### macOS (0.5.0)
+
+CLAP, VST3 and Audio Unit, one universal binary each (arm64 and x86_64,
+macOS 10.15+), built natively by `.github/workflows/aurum-macos.yml` on
+GitHub's macOS runners, the same way as ReSIDent and SaeureKiste.
+
+- `gui/CocoaWindow.mm`: an NSView child of the host's view, Cairo into an
+  image surface drawn as a CGImage at the Retina factor; sizes in points (the
+  cocoa API never sets a scale, `guiSetScale` returns false). The view class
+  is made at run time under a name carrying the module's load address -- the
+  Objective-C runtime has one class namespace per process, the same trap as
+  the Win32 window class. Command or Control are ModCtrl, Option ModAlt,
+  Control+click a right click; the wheel goes by the hand's direction,
+  trackpad points summed into notches. File drops in (IR import).
+- `gui/FileDialogMac.mm`: NSOpenPanel/NSSavePanel, modeless, polled.
+- Settings and presets in `~/Library/Application Support/Aurum` (the XDG
+  variables still win when set), Quartz fonts ("Helvetica Neue").
+- x86_64 at x86-64-v2 (no AVX2/FMA): Intel Macs before 2013 run 10.15, and
+  Rosetta before macOS 15 has no AVX2. arm64 gets NEON as its baseline.
+  Denormals: FPCR.FZ on arm64 beside MXCSR FTZ/DAZ on x86.
+- AU codes: manufacturer `Rvtr`, subtype `Aurm`, type `aumf` (a music effect, so AU hosts send it MIDI for MIDI learn). Keep them.
+- Linux and Windows: only the version changes; the code they compile is
+  unchanged (same object code, same renders).
+- **Untested in a DAW.** CI checks the build, the engine, import and
+  offscreen GUI tests on both architectures, and auval.
 
 ## Phases
 

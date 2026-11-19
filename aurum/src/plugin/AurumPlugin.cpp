@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdint>
 #include <cstdio>
 #include <cstring>
 #include <filesystem>
@@ -12,8 +13,8 @@
 #endif
 
 #include "aurum.h"
-// The native window exists for Linux and Windows; a WebAssembly build (WCLAP)
-// has none and is driven by the host's generic parameter view.
+// The native window exists for Linux, Windows and macOS; a WebAssembly build
+// (WCLAP) has none and is driven by the host's generic parameter view.
 #ifndef AURUM_WITH_GUI
 #if defined(__wasm__)
 #define AURUM_WITH_GUI 0
@@ -79,6 +80,8 @@ AurumPlugin* self(const clap_plugin_t* p) { return static_cast<AurumPlugin*>(p->
 constexpr const char* kWindowApi = CLAP_WINDOW_API_WEBVIEW;
 #elif defined(_WIN32)
 constexpr const char* kWindowApi = CLAP_WINDOW_API_WIN32;
+#elif defined(__APPLE__)
+constexpr const char* kWindowApi = CLAP_WINDOW_API_COCOA;
 #else
 constexpr const char* kWindowApi = CLAP_WINDOW_API_X11;
 #endif
@@ -91,14 +94,26 @@ struct PortsConfig
 };
 constexpr PortsConfig kConfigs[] = {{"Stereo", 2, 2}, {"Mono", 1, 1}, {"Mono to Stereo", 1, 2}};
 
-// Denormals flush-to-zero for the duration of a process call. WebAssembly
-// has no control register for it (and its SIMD may flush anyway).
+// Denormals flush-to-zero for the duration of a process call: FTZ and DAZ in
+// MXCSR on x86, FZ (bit 24) in FPCR on arm64. WebAssembly has no control
+// register for it (and its SIMD may flush anyway).
 #if defined(__SSE__)
 struct ScopedFtz
 {
     unsigned int saved;
     ScopedFtz() : saved(_mm_getcsr()) { _mm_setcsr(saved | 0x8040); }
     ~ScopedFtz() { _mm_setcsr(saved); }
+};
+#elif defined(__aarch64__)
+struct ScopedFtz
+{
+    uint64_t saved;
+    ScopedFtz()
+    {
+        asm volatile("mrs %0, fpcr" : "=r"(saved));
+        asm volatile("msr fpcr, %0" : : "r"(saved | (uint64_t{1} << 24)));
+    }
+    ~ScopedFtz() { asm volatile("msr fpcr, %0" : : "r"(saved)); }
 };
 #else
 struct ScopedFtz
@@ -429,8 +444,11 @@ const void* AurumPlugin::getExtension(const char* id)
 #if AURUM_WITH_GUI
     if (!std::strcmp(id, CLAP_EXT_TIMER_SUPPORT))
         return &PluginGlue::timer;
+#if !defined(__APPLE__)
+    // The X11 window's event socket; Cocoa delivers events through the view.
     if (!std::strcmp(id, CLAP_EXT_POSIX_FD_SUPPORT))
         return &PluginGlue::posixFd;
+#endif
 #endif
     return nullptr;
 }
@@ -985,11 +1003,18 @@ void AurumPlugin::guiDestroy()
 
 bool AurumPlugin::guiSetScale(double scale)
 {
+#if defined(__APPLE__)
+    // The cocoa API works in logical sizes and has no scale to set; the
+    // window applies the Retina factor itself.
+    (void)scale;
+    return false;
+#else
     if (!editor_)
         return false;
     // The host scale replaces the desktop guess; the user scaling still applies.
     editor_->setScale(scale * Settings::get().getDouble("gui_scaling", 1.0));
     return true;
+#endif
 }
 
 bool AurumPlugin::guiGetSize(uint32_t* w, uint32_t* h)
@@ -1025,6 +1050,8 @@ bool AurumPlugin::guiSetParent(const clap_window_t* window)
         return false;
 #if defined(_WIN32)
     const auto parent = reinterpret_cast<uintptr_t>(window->win32);
+#elif defined(__APPLE__)
+    const auto parent = reinterpret_cast<uintptr_t>(window->cocoa);
 #else
     const auto parent = static_cast<uintptr_t>(window->x11);
 #endif

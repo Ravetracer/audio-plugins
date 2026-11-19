@@ -1,13 +1,13 @@
 ---
 accent: #C9A66B
 tagline: An algorithmic reverb with a decay you can draw
-subtitle: CLAP and VST3 effect for Linux and Windows
+subtitle: CLAP, VST3 and Audio Unit effect for Linux, Windows and macOS
 ---
 
 # {{PLUGIN}} — manual
 
 *An algorithmic reverb with three engines, a per-frequency decay and a tone EQ.
-Linux and Windows, CLAP and VST3.*
+Linux, Windows and macOS; CLAP and VST3, and an Audio Unit on macOS.*
 
 Version {{VERSION}}
 
@@ -56,14 +56,42 @@ Copy the plugin into your host's plugin folder and rescan:
 |---|---|---|
 | **Linux** | `~/.clap/` | `~/.vst3/` |
 | **Windows** | `C:\Program Files\Common Files\CLAP\` | `C:\Program Files\Common Files\VST3\` |
+| **macOS** | `~/Library/Audio/Plug-Ins/CLAP/` | `~/Library/Audio/Plug-Ins/VST3/` |
 
-The CLAP and the VST3 are the same plugin with the same sound and the same
-window; install whichever your host prefers. A `.vst3` is a folder — copy it
-whole.
+On macOS the Audio Unit, `Aurum.component`, goes into
+`~/Library/Audio/Plug-Ins/Components/`; it is what Logic Pro and GarageBand
+use.
 
-**Aurum needs a processor with AVX2 and FMA**: any Intel Core from the 4th
-generation (2013) on and any AMD Ryzen. Some low-cost Pentium, Celeron and Atom
-models lack it; on those, the host will refuse to load the plugin.
+The CLAP, the VST3 and the Audio Unit are the same plugin with the same sound
+and the same window; install whichever your host prefers. A `.vst3` (and on
+macOS every one of the three) is a folder — copy it whole.
+
+On Linux and Windows, **Aurum needs a processor with AVX2 and FMA**: any Intel
+Core from the 4th generation (2013) on and any AMD Ryzen. Some low-cost
+Pentium, Celeron and Atom models lack it; on those, the host will refuse to
+load the plugin. On macOS it runs on any Mac with macOS 10.15 (Catalina) or
+later, natively on Apple Silicon and on Intel.
+
+### macOS: letting the plugin load
+
+Aurum is free and is not notarized by Apple. macOS therefore blocks plugins
+downloaded from the internet until their quarantine flag is cleared: the DAW
+does not load them, or reports them as damaged. After copying, open
+**Terminal** and run, for the formats you installed:
+
+```
+xattr -dr com.apple.quarantine ~/Library/Audio/Plug-Ins/CLAP/Aurum.clap
+xattr -dr com.apple.quarantine ~/Library/Audio/Plug-Ins/VST3/Aurum.vst3
+xattr -dr com.apple.quarantine ~/Library/Audio/Plug-Ins/Components/Aurum.component
+```
+
+Then restart the DAW. The `~/Library` folder is hidden in the Finder: use
+**Go → Go to Folder…** and type the path.
+
+On a Mac, **Command**+click takes the place of **Ctrl**+click (it resets a
+knob), and **Control**+click is a right-click. The keyboard shortcuts written
+with Ctrl work with Control, and with Command unless the DAW keeps that
+shortcut for itself.
 
 ### Channels
 
@@ -79,10 +107,10 @@ your Mix when you step through presets (§6).
 
 ### Where Aurum keeps its files
 
-| | Linux | Windows |
-|---|---|---|
-| **Presets** | `~/.local/share/Aurum/Presets` | `%APPDATA%\Aurum\Presets` |
-| **Settings** | `~/.config/Aurum/settings.ini` | `%APPDATA%\Aurum\settings.ini` |
+| | Linux | Windows | macOS |
+|---|---|---|---|
+| **Presets** | `~/.local/share/Aurum/Presets` | `%APPDATA%\Aurum\Presets` | `~/Library/Application Support/Aurum/Presets` |
+| **Settings** | `~/.config/Aurum/settings.ini` | `%APPDATA%\Aurum\settings.ini` | `~/Library/Application Support/Aurum/settings.ini` |
 
 The factory presets are written into the preset folder the first time Aurum
 opens. The settings file holds what applies to every instance: window size and

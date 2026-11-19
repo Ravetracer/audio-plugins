@@ -1,7 +1,12 @@
 # Aurum Reverb
 
-Algorithmic reverb for Linux and Windows as a native CLAP plugin (plus VST3
-through clap-wrapper), with its own Cairo interface on X11 and win32.
+Algorithmic reverb for Linux, Windows and macOS as a native CLAP plugin (plus
+VST3 through clap-wrapper, and an Audio Unit on macOS), with its own Cairo
+interface on X11, win32 and Cocoa.
+
+**Status: 0.5.0.** Linux and Windows, CLAP and VST3; macOS (CLAP, VST3 and
+Audio Unit, universal, 10.15 or later) is built by a GitHub workflow since
+0.5.0 and has not been played in a DAW yet.
 
 ## Features
 
@@ -46,7 +51,8 @@ ninja -C build
 ```
 
 The default target architecture is x86-64-v3 (AVX2/FMA), on Windows as well.
-For older CPUs use `-DAURUM_ARCH_FLAGS=-march=x86-64-v2`.
+For older CPUs use `-DAURUM_ARCH_FLAGS=-march=x86-64-v2`. The macOS build is
+universal: arm64, and x86_64 at x86-64-v2 (see below).
 
 ### Windows
 
@@ -62,13 +68,37 @@ ninja -C build-win          # build-win/Aurum.clap, build-win/vst3/Aurum.vst3
 The runtime and Cairo are linked in; the binaries need no DLLs beside them.
 `../release.sh` builds both platforms and both formats.
 
+### macOS
+
+macOS cannot be built here (its SDK may only be used on Apple hardware): the
+workflow `../.github/workflows/aurum-macos.yml` builds it on GitHub's macOS
+runners -- a static universal Cairo from `../shared/cmake/build-macos-cairo.sh`,
+the CLAP, VST3 and Audio Unit bundles (type `aumf`, subtype `Aurm`,
+manufacturer `Rvtr`; never change them, AU hosts keep projects by them), the
+engine, import and offscreen GUI tests on arm64 and, under Rosetta, x86_64,
+ad-hoc signing and Apple's `auval` -- and uploads `Aurum-<version>-macOS.zip`;
+publishing an `aurum-v*` release attaches it there. The bundles are not
+notarized: users clear the quarantine flag (the archive's INSTALL.txt and the
+manual say how). The window backend is `src/gui/CocoaWindow.mm`, the file
+chooser `src/gui/FileDialogMac.mm`.
+
+The x86_64 half is built for x86-64-v2, not v3: Intel Macs from before 2013
+that still run 10.15 have no AVX2, and Rosetta before macOS 15 does not
+translate it, so an Intel-only host on Apple Silicon would fault on a v3
+build. The Linux and Windows builds are not affected.
+
 ## Files
 
 - Presets: `$XDG_DATA_HOME/Aurum/Presets` (default `~/.local/share/Aurum/Presets`);
-  on Windows `%APPDATA%\Aurum\Presets`.
+  on Windows `%APPDATA%\Aurum\Presets`, on macOS
+  `~/Library/Application Support/Aurum/Presets`.
 - Settings (GUI size, lock mix, MIDI map, favourites):
-  `$XDG_CONFIG_HOME/Aurum/settings.ini`; on Windows `%APPDATA%\Aurum\settings.ini`.
-- File dialogs use `zenity` or `kdialog` on Linux, the system dialogs on Windows.
+  `$XDG_CONFIG_HOME/Aurum/settings.ini`; on Windows `%APPDATA%\Aurum\settings.ini`,
+  on macOS `~/Library/Application Support/Aurum/settings.ini`. On macOS
+  `XDG_CONFIG_HOME` and `XDG_DATA_HOME` still take precedence when set, which is
+  how the tests keep out of the real folder.
+- File dialogs use `zenity` or `kdialog` on Linux, the system dialogs on Windows
+  and macOS.
 
 ## Manual
 
@@ -88,9 +118,9 @@ Xvfb, xdotool and ImageMagick.
 - `build/import_test <tmpdir> [ffp-preset-dir]` - IR import round trip and
   preset conversion.
 - `build/gui_snapshot out.png [scale]` - renders the editor offscreen (a PPM
-  on Windows, whose Cairo has no PNG support).
+  on Windows and macOS, whose Cairo has no PNG support).
 - `build/clap_gui_host Aurum.clap [seconds]` - minimal CLAP host for GUI tests
-  (e.g. under Xvfb with xdotool).
+  (e.g. under Xvfb with xdotool); X11 and win32 only.
 - `clap-validator validate build/Aurum.clap`
 
 The Windows build of every test runs under wine. Use a scratch `WINEPREFIX`:

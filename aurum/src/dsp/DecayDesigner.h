@@ -10,14 +10,38 @@
 #define AURUM_DECAY_WORKER 0
 #else
 #define AURUM_DECAY_WORKER 1
-#include <semaphore>
 #include <thread>
+#if defined(__APPLE__)
+#include <dispatch/dispatch.h>
+#else
+#include <semaphore>
+#endif
 #endif
 
 #include "DecayModel.h"
 #include "Geq.h"
 
 namespace aurum::dsp {
+
+#if AURUM_DECAY_WORKER && defined(__APPLE__)
+// What std::binary_semaphore does here, for macOS before 11, where libc++ has
+// no semaphores: a dispatch semaphore, which signals without a lock, so
+// post() stays safe on the audio thread. Surplus signals only make the worker
+// look for a request once more.
+class WakeSignal
+{
+public:
+    WakeSignal() : sem_(dispatch_semaphore_create(0)) {}
+    ~WakeSignal() { dispatch_release(sem_); }
+    WakeSignal(const WakeSignal&) = delete;
+    WakeSignal& operator=(const WakeSignal&) = delete;
+    void release() { dispatch_semaphore_signal(sem_); }
+    void acquire() { dispatch_semaphore_wait(sem_, DISPATCH_TIME_FOREVER); }
+
+private:
+    dispatch_semaphore_t sem_;
+};
+#endif
 
 // Lock-free single-producer/single-consumer triple buffer.
 template <typename T> class TripleBuffer
@@ -111,7 +135,11 @@ private:
     std::unique_ptr<TripleBuffer<DecayRequest>> requests_;
     std::unique_ptr<TripleBuffer<DecayCoeffSet>> results_;
 #if AURUM_DECAY_WORKER
+#if defined(__APPLE__)
+    WakeSignal wake_;
+#else
     std::binary_semaphore wake_{0};
+#endif
     std::atomic<bool> running_{false};
     std::thread thread_;
 #endif

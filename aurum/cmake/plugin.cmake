@@ -30,6 +30,23 @@ if (CMAKE_SYSTEM_NAME STREQUAL "Windows")
     target_compile_definitions(aurum-gui-deps INTERFACE CAIRO_WIN32_STATIC_BUILD)
     set(AURUM_WINDOW_SOURCE src/gui/Win32Window.cpp)
     message(STATUS "Aurum: building the plugin window (Win32 + Cairo)")
+elseif (APPLE)
+    # A static Cairo with its Quartz backend (fonts) and pixman, universal,
+    # from ../shared/cmake/build-macos-cairo.sh. Nothing from Homebrew: its
+    # libraries are dylibs for one architecture and this macOS version only.
+    set(AURUM_MAC_CAIRO "${CMAKE_CURRENT_SOURCE_DIR}/../macbuild/cairo-macos"
+        CACHE PATH "Static Cairo for macOS (shared/cmake/build-macos-cairo.sh)")
+    if (NOT EXISTS "${AURUM_MAC_CAIRO}/lib/libcairo.a")
+        message(FATAL_ERROR "Aurum: no macOS Cairo at AURUM_MAC_CAIRO=${AURUM_MAC_CAIRO}; run ../shared/cmake/build-macos-cairo.sh")
+    endif()
+    target_include_directories(aurum-gui-deps INTERFACE
+        "${AURUM_MAC_CAIRO}/include" "${AURUM_MAC_CAIRO}/include/cairo")
+    target_link_libraries(aurum-gui-deps INTERFACE
+        "${AURUM_MAC_CAIRO}/lib/libcairo.a" "${AURUM_MAC_CAIRO}/lib/libpixman-1.a"
+        "-framework Cocoa" "-framework CoreGraphics" "-framework CoreText"
+        "-framework CoreFoundation" "-framework ApplicationServices")
+    set(AURUM_WINDOW_SOURCE src/gui/CocoaWindow.mm src/gui/FileDialogMac.mm)
+    message(STATUS "Aurum: building the plugin window (Cocoa + Cairo)")
 else()
     find_package(PkgConfig REQUIRED)
     pkg_check_modules(AURUM_GUI REQUIRED IMPORTED_TARGET cairo x11)
@@ -62,13 +79,27 @@ target_link_libraries(aurum-impl PUBLIC aurum-dsp clap aurum-gui-deps)
 # ------------------------------------------------------------- the CLAP module
 add_library(Aurum MODULE src/entry.cpp)
 target_link_libraries(Aurum PRIVATE aurum-impl)
-set_target_properties(Aurum PROPERTIES PREFIX "" OUTPUT_NAME "Aurum" SUFFIX ".clap")
+if (APPLE)
+    # A bundle: Aurum.clap/Contents/MacOS/Aurum, as clap-wrapper's
+    # target_add_clap_configuration lays it out. Only clap_entry is exported.
+    set_target_properties(Aurum PROPERTIES
+        BUNDLE TRUE
+        BUNDLE_EXTENSION clap
+        LIBRARY_OUTPUT_NAME "Aurum"
+        MACOSX_BUNDLE_GUI_IDENTIFIER "de.ravetracer.aurum"
+        MACOSX_BUNDLE_BUNDLE_NAME "Aurum"
+        MACOSX_BUNDLE_BUNDLE_VERSION "${PROJECT_VERSION}"
+        MACOSX_BUNDLE_SHORT_VERSION_STRING "${PROJECT_VERSION}")
+    target_link_options(Aurum PRIVATE "-Wl,-exported_symbol,_clap_entry")
+else()
+    set_target_properties(Aurum PROPERTIES PREFIX "" OUTPUT_NAME "Aurum" SUFFIX ".clap")
+endif()
 if (CMAKE_SYSTEM_NAME STREQUAL "Windows")
     # clap_entry carries dllexport from CLAP_EXPORT; --exclude-all-symbols
     # keeps the rest of the DLL to itself.
     target_link_options(Aurum PRIVATE "-Wl,--exclude-all-symbols" "-Wl,--no-undefined")
     aurum_static_runtime(Aurum)
-else()
+elseif (NOT APPLE)
     target_link_options(Aurum PRIVATE "-Wl,--no-undefined")
 endif()
 
@@ -77,20 +108,36 @@ endif()
 # The same plugin behind the clap-wrapper, which implements a CLAP host against
 # the VST3 API. Needs CLAP/clap-wrapper and CLAP/vst3sdk (3.8 or newer), with
 # ../shared/patches/ applied to the wrapper. release.sh builds the target
-# Aurum-vst3 and picks the bundle up from build/vst3/Aurum.vst3.
-if (AURUM_BUILD_VST3)
+# Aurum-vst3 and picks the bundle up from build/vst3/Aurum.vst3 (on macOS the
+# wrapper puts it in build/ itself).
+if (NOT APPLE)
+    set(AURUM_BUILD_AUV2 OFF)
+endif()
+if (AURUM_BUILD_VST3 OR AURUM_BUILD_AUV2)
     if (NOT EXISTS "${AURUM_SDK_DIR}/clap-wrapper/cmake/wrap_vst3.cmake")
         message(FATAL_ERROR "Aurum: no clap-wrapper at ${AURUM_SDK_DIR}/clap-wrapper")
     endif()
-    if (NOT EXISTS "${AURUM_SDK_DIR}/vst3sdk/public.sdk/source/main/pluginfactory.cpp")
-        message(FATAL_ERROR "Aurum: no VST3 SDK at ${AURUM_SDK_DIR}/vst3sdk")
-    endif()
-    set(VST3_SDK_ROOT "${AURUM_SDK_DIR}/vst3sdk" CACHE PATH "" FORCE)
     set(CLAP_WRAPPER_DOWNLOAD_DEPENDENCIES FALSE CACHE BOOL "" FORCE)
     set(CLAP_WRAPPER_OUTPUT_NAME "Aurum" CACHE STRING "" FORCE)
     set(CLAP_WRAPPER_BUILD_TESTS FALSE CACHE BOOL "" FORCE)
+    if (AURUM_BUILD_VST3)
+        if (NOT EXISTS "${AURUM_SDK_DIR}/vst3sdk/public.sdk/source/main/pluginfactory.cpp")
+            message(FATAL_ERROR "Aurum: no VST3 SDK at ${AURUM_SDK_DIR}/vst3sdk")
+        endif()
+        set(VST3_SDK_ROOT "${AURUM_SDK_DIR}/vst3sdk" CACHE PATH "" FORCE)
+    endif()
+    if (AURUM_BUILD_AUV2)
+        # Apple's AudioUnitSDK (Apache 2.0), checked out beside the others:
+        #   git clone --branch AudioUnitSDK-1.1.0 https://github.com/apple/AudioUnitSDK.git CLAP/AudioUnitSDK
+        if (NOT EXISTS "${AURUM_SDK_DIR}/AudioUnitSDK/src/AudioUnitSDK")
+            message(FATAL_ERROR "Aurum: no AudioUnitSDK at ${AURUM_SDK_DIR}/AudioUnitSDK")
+        endif()
+        set(AUDIOUNIT_SDK_ROOT "${AURUM_SDK_DIR}/AudioUnitSDK" CACHE PATH "" FORCE)
+    endif()
     add_subdirectory("${AURUM_SDK_DIR}/clap-wrapper" clap-wrapper EXCLUDE_FROM_ALL)
+endif()
 
+if (AURUM_BUILD_VST3)
     add_library(Aurum-vst3 MODULE src/entry.cpp)
     target_link_libraries(Aurum-vst3 PRIVATE aurum-impl)
     target_add_vst3_wrapper(
@@ -109,6 +156,29 @@ if (AURUM_BUILD_VST3)
         target_link_options(Aurum-vst3 PRIVATE "-Wl,--no-undefined")
         aurum_static_runtime(Aurum-vst3)
     endif()
+endif()
+
+# ------------------------------------------------------------------------ AUv2
+#
+# macOS only: the same plugin as an Audio Unit (a music effect, "aumf", so AU
+# hosts send it MIDI for MIDI learn, as Shapeau's), with the
+# CLAP entry linked in as the VST3 has it. The codes are Aurum's for good:
+# Logic and every other AU host keep projects by them.
+if (AURUM_BUILD_AUV2)
+    add_library(Aurum-auv2 MODULE src/entry.cpp)
+    target_link_libraries(Aurum-auv2 PRIVATE aurum-impl)
+    target_add_auv2_wrapper(
+        TARGET Aurum-auv2
+        OUTPUT_NAME "Aurum"
+        BUNDLE_IDENTIFIER "de.ravetracer.aurum.auv2"
+        BUNDLE_VERSION "${PROJECT_VERSION}"
+        MANUFACTURER_NAME "Ravetracer"
+        MANUFACTURER_CODE "Rvtr"
+        SUBTYPE_CODE "Aurm"
+        INSTRUMENT_TYPE "aumf"
+    )
+    # Part of the default build, as the .clap is.
+    add_custom_target(aurum-auv2-all ALL DEPENDS Aurum-auv2)
 endif()
 
 # ---------------------------------------------------------------------- install
@@ -133,13 +203,15 @@ if (AURUM_BUILD_TOOLS)
 
     # A minimal CLAP host that opens the plugin's window: X11 on Linux, a real
     # win32 window on Windows (run under wine, it is how the win32 backend gets
-    # exercised from here at all).
-    add_executable(clap_gui_host tests/clap_gui_host.cpp)
-    target_link_libraries(clap_gui_host PRIVATE clap Threads::Threads)
-    if (CMAKE_SYSTEM_NAME STREQUAL "Windows")
-        target_link_libraries(clap_gui_host PRIVATE user32 gdi32)
-        aurum_static_runtime(clap_gui_host)
-    else()
-        target_link_libraries(clap_gui_host PRIVATE PkgConfig::AURUM_GUI ${CMAKE_DL_LIBS})
+    # exercised from here at all). It has no Cocoa path.
+    if (NOT APPLE)
+        add_executable(clap_gui_host tests/clap_gui_host.cpp)
+        target_link_libraries(clap_gui_host PRIVATE clap Threads::Threads)
+        if (CMAKE_SYSTEM_NAME STREQUAL "Windows")
+            target_link_libraries(clap_gui_host PRIVATE user32 gdi32)
+            aurum_static_runtime(clap_gui_host)
+        else()
+            target_link_libraries(clap_gui_host PRIVATE PkgConfig::AURUM_GUI ${CMAKE_DL_LIBS})
+        endif()
     endif()
 endif()
