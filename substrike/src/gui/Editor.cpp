@@ -375,7 +375,11 @@ public:
         repaint();
     }
 
+#if defined(__wasm__)
+    std::string tooltip() const override { return "Click to play the hit, drag it out to download it as a WAV"; }
+#else
     std::string tooltip() const override { return "Click to play the hit, drag it into your DAW as a WAV"; }
+#endif
 
 private:
     Editor& ed_;
@@ -1800,8 +1804,14 @@ std::string Editor::exportHit(const std::string& requested)
     std::string path = requested;
     if (path.empty())
     {
+#if defined(__wasm__)
+        // In the browser the file is only on its way to a download, and the
+        // persisted home folder is no place for audio.
+        const std::filesystem::path dir = "/download";
+#else
         // A drag leaves the file where the DAW can keep referring to it.
         const std::filesystem::path dir = toPath(Settings::dataDir()) / "Exports";
+#endif
         std::error_code ec;
         std::filesystem::create_directories(dir, ec);
         const std::time_t now = std::time(nullptr);
@@ -1831,6 +1841,13 @@ void Editor::dragHit()
 
 void Editor::saveHitAs()
 {
+#if defined(__wasm__)
+    // The browser has no save dialog to ask with: the hit becomes a download.
+    const std::string path = exportHit();
+    if (!path.empty() && window_.startFileDrag(path))
+        notify("Downloaded " + fromPath(toPath(path).filename()));
+    return;
+#endif
     if (dialog_ && dialog_->running())
         return;
     dialog_ = std::make_unique<FileDialog>();
@@ -1984,8 +2001,15 @@ void Editor::settlePreview()
     checkPreview(nowSeconds());
     previewStale_ = false;
     preview_.request(lastValues_, lastCurves_, controller_.sampleRate());
+#if SUBSTRIKE_PREVIEW_THREAD
     for (int i = 0; i < 2000 && !preview_.poll(); ++i)
         std::this_thread::sleep_for(std::chrono::milliseconds(5));
+#else
+    // Each poll renders a slice of it.
+    while (!preview_.poll())
+    {
+    }
+#endif
     if (structure() != built_)
         rebuild();
     markDirty();

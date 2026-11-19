@@ -9,7 +9,7 @@ its own effect chain in free order, layers feeding one another for rumble, a
 master chain, and modulation. The design and the phases are in
 [docs/PLAN.md](docs/PLAN.md).
 
-## Status: 1.1.0, released
+## Status: 1.2.0
 
 What exists:
 
@@ -74,6 +74,9 @@ What exists:
 - **A live oscilloscope** of the output at the foot of the rack.
 - **The editor** (see below), with the Body's pitch and amplitude curves as
   breakpoint curves, a preview of the hit, and the hit export.
+- **A WCLAP** (since 1.2.0) for browser hosts such as openDAW: the same
+  plugin compiled to WebAssembly, with the whole editor in its page. The
+  exported hit is a download there. See *WCLAP* below.
 
 ## Effect slots
 
@@ -284,6 +287,24 @@ whole self-test against the Windows binary under wine, and
 `substrike-gui-host.exe` opens the win32 window there. No Windows DAW has
 loaded Substrike yet. Building needs the cross-built Cairo from
 `../setup-winbuild.sh`.
+
+### WCLAP
+
+The plugin for browser hosts (openDAW), compiled with wasi-sdk:
+
+```sh
+cmake -S . -B build-wasm -G Ninja -DCMAKE_TOOLCHAIN_FILE=<wasi-sdk>/share/cmake/wasi-sdk-p1.cmake \
+      -DWASI_SDK_PREFIX=<wasi-sdk>
+ninja -C build-wasm         # build-wasm/substrike.wclap.tar.gz
+node ../shared/tools/run-wasi.mjs build-wasm/substrike-wclap-selftest.wasm
+```
+
+`module.wasm` is the plugin and `ui.wasm` the editor, which runs in the page
+and reaches the plugin only through the webview messages
+(`src/plugin/WebProtocol.h`); `cmake/wclap.cmake` describes the parts. The
+editor needs the wasm Cairo from `../shared/cmake/build-wasm-cairo.sh`.
+Hosts may only take the main output; the lane outputs are there for those
+that do not.
 
 ## Tools
 

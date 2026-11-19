@@ -1,10 +1,18 @@
 #pragma once
 
 #include <array>
-#include <atomic>
 #include <memory>
-#include <thread>
 #include <vector>
+
+// A WebAssembly build without wasi-threads has no std::thread: there the
+// preview renders on the editor's own thread, a slice per frame.
+#if defined(__wasm__) && !defined(_REENTRANT)
+#define SUBSTRIKE_PREVIEW_THREAD 0
+#else
+#define SUBSTRIKE_PREVIEW_THREAD 1
+#include <atomic>
+#include <thread>
+#endif
 
 #include "plugin/HitRender.h"
 
@@ -25,6 +33,9 @@ struct HitView
 // Renders hits on a worker thread so a long tail never stalls the window.
 // One render at a time; a request while one runs is kept and started when it
 // finishes, so the newest state always gets drawn. Main thread only.
+//
+// Without threads poll() renders the next slice itself, a few milliseconds'
+// worth (the first hit, when there is nothing to show yet, in larger ones).
 class HitPreview
 {
 public:
@@ -48,11 +59,16 @@ private:
     };
     void start(Job job);
 
+#if SUBSTRIKE_PREVIEW_THREAD
     std::thread thread_;
     std::atomic<bool> done_{false};
+    std::shared_ptr<HitView> result_; // written by the worker until done_
+#else
+    std::unique_ptr<HitRenderer> renderer_;
+    double sampleRate_ = 48000.0;
+#endif
     bool running_ = false;
     std::unique_ptr<Job> queued_;
-    std::shared_ptr<HitView> result_; // written by the worker until done_
     std::shared_ptr<const HitView> view_;
 };
 

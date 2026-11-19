@@ -6,6 +6,9 @@
 #include <vector>
 
 #include <clap/clap.h>
+#if defined(__wasm__)
+#include <clap/ext/draft/webview.h>
+#endif
 
 #include "Controller.h"
 #include "Params.h"
@@ -108,6 +111,12 @@ private:
     bool guiHide();
     void onTimer(clap_id id);
     void onFd(int fd, clap_posix_fd_flags_t flags);
+#if defined(__wasm__)
+    // The WCLAP's page (clap.webview, plugin/WebProtocol.h): the editor runs
+    // there and reaches the plugin only through these messages.
+    bool webReceive(const void* data, uint32_t size);
+    void webSendStatus(uint32_t page, uint32_t serial, uint32_t edits);
+#endif
 
     void handleEvent(const clap_event_header_t* ev, const clap_output_events_t* out);
     // A new value for a parameter, from the host or the GUI (audio thread).
@@ -187,9 +196,27 @@ private:
     SpscQueue<CurveEvent> curveEvents_{64};
     std::array<bool, dsp::kNumCurves> curvePending_{};
 
+#if defined(__wasm__)
+    // The page: its window size (logical pixels), and what pages were last
+    // told, each item with the serial it changed at.
+    const clap_host_webview_t* hostWebview_ = nullptr;
+    uint32_t webW_ = 1120, webH_ = 720;
+    uint32_t webSerial_ = 1;
+    std::vector<double> webValues_;
+    std::vector<uint32_t> webValueSerial_;
+    std::array<dsp::Curve, dsp::kNumCurves> webCurves_{};
+    std::array<uint32_t, dsp::kNumCurves> webCurveSerial_{};
+    std::string webPreset_;
+    uint32_t webPresetSerial_ = 0;
+    uint32_t webModGeneration_ = 0;
+    uint32_t webModSerial_ = 0;
+    std::vector<float> webScopeLo_, webScopeHi_;
+    std::vector<uint8_t> webOut_;
+#else
     std::unique_ptr<gui::Editor> editor_;
     clap_id timerId_ = CLAP_INVALID_ID;
     int registeredFd_ = -1;
+#endif
 
     Player player_;
     // Render target for ports the host did not connect, and for the right

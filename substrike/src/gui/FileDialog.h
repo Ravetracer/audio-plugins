@@ -5,6 +5,7 @@
 #if defined(_WIN32)
 #include <atomic>
 #include <thread>
+#elif defined(__wasm__)
 #else
 #include <sys/types.h>
 #endif
@@ -13,7 +14,8 @@ namespace substrike::gui {
 
 // Native file chooser that never blocks the host's GUI thread. On Linux it is
 // zenity or kdialog run as a child process; on Windows the system's own
-// dialog, run on a worker thread. Poll from the GUI timer.
+// dialog, run on a worker thread; in the browser the page's file picker, whose
+// files are copied into the editor's file system. Poll from the GUI timer.
 class FileDialog
 {
 public:
@@ -32,6 +34,8 @@ private:
     std::thread thread_;
     std::atomic<bool> done_{false};
     std::atomic<unsigned long> threadId_{0};
+#elif defined(__wasm__)
+    int id_ = 0;
 #else
     pid_t pid_ = -1;
     int fd_ = -1;

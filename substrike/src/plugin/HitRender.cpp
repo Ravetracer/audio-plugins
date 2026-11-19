@@ -12,51 +12,75 @@
 
 namespace substrike {
 
+HitRenderer::HitRenderer(const std::vector<double>& values, const std::array<dsp::Curve, dsp::kNumCurves>& curves,
+                         double sampleRate, double maxSeconds)
+{
+    out_.sampleRate = sampleRate;
+    // The engine is large (voices, chains, oversamplers): keep it off the stack.
+    engine_ = std::make_unique<Player>();
+    engine_->setTapLanes(true);
+    engine_->setValues(values.data());
+    engine_->prepare(sampleRate);
+    for (int i = 0; i < dsp::kNumCurves; ++i)
+        engine_->curve(i) = curves[static_cast<size_t>(i)];
+    engine_->noteOn(engine_->rootNote(), 1.0);
+    limit_ = static_cast<size_t>(std::max(1.0, maxSeconds * sampleRate));
+}
+
+HitRenderer::~HitRenderer() = default;
+
+bool HitRenderer::step(int blocks)
+{
+    dsp::Bus buses[dsp::Engine::kNumBuses];
+    for (int b = 0; b < dsp::Engine::kNumBuses; ++b)
+        buses[b] = {buf_[static_cast<size_t>(2 * b)].data(), buf_[static_cast<size_t>(2 * b + 1)].data()};
+
+    for (int k = 0; k < blocks && !finished_; ++k)
+    {
+        if (done_ >= limit_)
+        {
+            finished_ = true;
+            break;
+        }
+        const int n = static_cast<int>(std::min<size_t>(kBlock, limit_ - done_));
+        engine_->process(buses, n);
+        out_.left.insert(out_.left.end(), buses[0].l, buses[0].l + n);
+        out_.right.insert(out_.right.end(), buses[0].r, buses[0].r + n);
+        for (int l = 0; l < dsp::kNumLanes; ++l)
+        {
+            out_.laneLeft[static_cast<size_t>(l)].insert(out_.laneLeft[static_cast<size_t>(l)].end(), buses[1 + l].l,
+                                                         buses[1 + l].l + n);
+            out_.laneRight[static_cast<size_t>(l)].insert(out_.laneRight[static_cast<size_t>(l)].end(),
+                                                          buses[1 + l].r, buses[1 + l].r + n);
+        }
+        done_ += static_cast<size_t>(n);
+        if (engine_->idle())
+        {
+            out_.complete = true;
+            finished_ = true;
+        }
+        else if (done_ >= limit_)
+            finished_ = true;
+    }
+    if (finished_ && engine_)
+    {
+        for (size_t i = 0; i < out_.left.size(); ++i)
+            out_.peak = std::max({out_.peak, std::fabs(out_.left[i]), std::fabs(out_.right[i])});
+        engine_.reset();
+    }
+    return finished_;
+}
+
+HitRender HitRenderer::take() { return std::move(out_); }
+
 HitRender renderHit(const std::vector<double>& values, const std::array<dsp::Curve, dsp::kNumCurves>& curves,
                     double sampleRate, double maxSeconds)
 {
-    HitRender out;
-    out.sampleRate = sampleRate;
-    // The engine is large (voices, chains, oversamplers): keep it off the stack.
-    auto engine = std::make_unique<Player>();
-    engine->setTapLanes(true);
-    engine->setValues(values.data());
-    engine->prepare(sampleRate);
-    for (int i = 0; i < dsp::kNumCurves; ++i)
-        engine->curve(i) = curves[static_cast<size_t>(i)];
-    engine->noteOn(engine->rootNote(), 1.0);
-
-    constexpr int kBlock = 256;
-    const size_t limit = static_cast<size_t>(std::max(1.0, maxSeconds * sampleRate));
-    std::array<std::array<float, kBlock>, 2 * dsp::Engine::kNumBuses> buf{};
-    dsp::Bus buses[dsp::Engine::kNumBuses];
-    for (int b = 0; b < dsp::Engine::kNumBuses; ++b)
-        buses[b] = {buf[static_cast<size_t>(2 * b)].data(), buf[static_cast<size_t>(2 * b + 1)].data()};
-
-    size_t done = 0;
-    while (done < limit)
+    HitRenderer r(values, curves, sampleRate, maxSeconds);
+    while (!r.step(1 << 30))
     {
-        const int n = static_cast<int>(std::min<size_t>(kBlock, limit - done));
-        engine->process(buses, n);
-        out.left.insert(out.left.end(), buses[0].l, buses[0].l + n);
-        out.right.insert(out.right.end(), buses[0].r, buses[0].r + n);
-        for (int l = 0; l < dsp::kNumLanes; ++l)
-        {
-            out.laneLeft[static_cast<size_t>(l)].insert(out.laneLeft[static_cast<size_t>(l)].end(), buses[1 + l].l,
-                                                        buses[1 + l].l + n);
-            out.laneRight[static_cast<size_t>(l)].insert(out.laneRight[static_cast<size_t>(l)].end(),
-                                                         buses[1 + l].r, buses[1 + l].r + n);
-        }
-        done += static_cast<size_t>(n);
-        if (engine->idle())
-        {
-            out.complete = true;
-            break;
-        }
     }
-    for (size_t i = 0; i < out.left.size(); ++i)
-        out.peak = std::max({out.peak, std::fabs(out.left[i]), std::fabs(out.right[i])});
-    return out;
+    return r.take();
 }
 
 namespace {

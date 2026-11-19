@@ -1,6 +1,7 @@
 #include "HitPreview.h"
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 
 namespace substrike::gui {
@@ -24,7 +25,21 @@ void reduce(const std::vector<float>& l, const std::vector<float>& r, std::array
         max = std::max(max, v);
 }
 
+// The peak envelopes of a finished render, and the render itself.
+void finish(HitView& out, std::shared_ptr<HitRender> render, double sampleRate)
+{
+    const size_t total = render->left.size();
+    out.seconds = static_cast<double>(total) / sampleRate;
+    reduce(render->left, render->right, out.peaks[0], out.max[0], total);
+    for (int l = 0; l < dsp::kNumLanes; ++l)
+        reduce(render->laneLeft[static_cast<size_t>(l)], render->laneRight[static_cast<size_t>(l)],
+               out.peaks[static_cast<size_t>(1 + l)], out.max[static_cast<size_t>(1 + l)], total);
+    out.render = std::move(render);
+}
+
 } // namespace
+
+#if SUBSTRIKE_PREVIEW_THREAD
 
 HitPreview::~HitPreview()
 {
@@ -52,15 +67,8 @@ void HitPreview::start(Job job)
     done_.store(false);
     result_ = std::make_shared<HitView>();
     thread_ = std::thread([this, job = std::move(job), out = result_]() {
-        auto render =
-            std::make_shared<HitRender>(renderHit(job.values, job.curves, job.sampleRate, kMaxSeconds));
-        const size_t total = render->left.size();
-        out->seconds = static_cast<double>(total) / job.sampleRate;
-        reduce(render->left, render->right, out->peaks[0], out->max[0], total);
-        for (int l = 0; l < dsp::kNumLanes; ++l)
-            reduce(render->laneLeft[static_cast<size_t>(l)], render->laneRight[static_cast<size_t>(l)],
-                   out->peaks[static_cast<size_t>(1 + l)], out->max[static_cast<size_t>(1 + l)], total);
-        out->render = std::move(render);
+        finish(*out, std::make_shared<HitRender>(renderHit(job.values, job.curves, job.sampleRate, kMaxSeconds)),
+               job.sampleRate);
         done_.store(true, std::memory_order_release);
     });
 }
@@ -79,5 +87,54 @@ bool HitPreview::poll()
     }
     return true;
 }
+
+#else
+
+HitPreview::~HitPreview() = default;
+
+void HitPreview::request(const std::vector<double>& values, const std::array<dsp::Curve, dsp::kNumCurves>& curves,
+                         double sampleRate)
+{
+    Job job{values, curves, sampleRate};
+    if (running_)
+    {
+        queued_ = std::make_unique<Job>(std::move(job));
+        return;
+    }
+    start(std::move(job));
+}
+
+void HitPreview::start(Job job)
+{
+    running_ = true;
+    sampleRate_ = job.sampleRate;
+    renderer_ = std::make_unique<HitRenderer>(job.values, job.curves, job.sampleRate, kMaxSeconds);
+}
+
+bool HitPreview::poll()
+{
+    if (!running_)
+        return false;
+    // About a third of a frame at 60 Hz, checked every few blocks; more while
+    // there is nothing to show at all, which is most often all of a hit.
+    using clock = std::chrono::steady_clock;
+    const auto until = clock::now() + std::chrono::milliseconds(view_ ? 6 : 100);
+    while (!renderer_->step(4))
+        if (clock::now() >= until)
+            return false;
+    auto out = std::make_shared<HitView>();
+    finish(*out, std::make_shared<HitRender>(renderer_->take()), sampleRate_);
+    renderer_.reset();
+    running_ = false;
+    view_ = std::move(out);
+    if (queued_)
+    {
+        std::unique_ptr<Job> next = std::move(queued_);
+        start(std::move(*next));
+    }
+    return true;
+}
+
+#endif
 
 } // namespace substrike::gui

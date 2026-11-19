@@ -6,9 +6,17 @@
 #include <cstring>
 #include <string>
 
+#if defined(__SSE__)
 #include <xmmintrin.h>
+#endif
 
+// The WCLAP (WebAssembly) has no native window: its editor runs in the page
+// (ui.wasm) and talks to this module through clap.webview.
+#if defined(__wasm__)
+#include "WebProtocol.h"
+#else
 #include "gui/Editor.h"
+#endif
 #include "state/PresetProvider.h"
 #include "state/Presets.h"
 #include "state/Settings.h"
@@ -39,19 +47,29 @@ const clap_plugin_descriptor_t kDescriptor = {
 SubstrikePlugin* self(const clap_plugin_t* p) { return static_cast<SubstrikePlugin*>(p->plugin_data); }
 
 // The one window API each platform's editor is written against.
-#if defined(_WIN32)
+#if defined(__wasm__)
+constexpr const char* kWindowApi = CLAP_WINDOW_API_WEBVIEW;
+#elif defined(_WIN32)
 constexpr const char* kWindowApi = CLAP_WINDOW_API_WIN32;
 #else
 constexpr const char* kWindowApi = CLAP_WINDOW_API_X11;
 #endif
 
-// Denormals flush-to-zero for the duration of a process call.
+// Denormals flush-to-zero for the duration of a process call. WebAssembly
+// has no control register for it.
+#if defined(__SSE__)
 struct ScopedFtz
 {
     unsigned int saved;
     ScopedFtz() : saved(_mm_getcsr()) { _mm_setcsr(saved | 0x8040); }
     ~ScopedFtz() { _mm_setcsr(saved); }
 };
+#else
+struct ScopedFtz
+{
+    ScopedFtz() {}
+};
+#endif
 
 } // namespace
 
@@ -132,6 +150,25 @@ struct PluginGlue
     static void guiSuggestTitle(const clap_plugin_t*, const char*) {}
     static bool guiShow(const clap_plugin_t* p) { return self(p)->guiShow(); }
     static bool guiHide(const clap_plugin_t* p) { return self(p)->guiHide(); }
+#if defined(__wasm__)
+    static int32_t webviewGetUri(const clap_plugin_t*, char* uri, uint32_t capacity)
+    {
+        static const char page[] = "/index.html";
+        if (uri && capacity > 0)
+            std::snprintf(uri, capacity, "%s", page);
+        return static_cast<int32_t>(sizeof(page));
+    }
+    // The host serves the bundle's files (index.html, ui.wasm, fonts) itself.
+    static bool webviewGetResource(const clap_plugin_t*, const char*, char*, uint32_t, const clap_ostream_t*)
+    {
+        return false;
+    }
+    static bool webviewReceive(const clap_plugin_t* p, const void* data, uint32_t size)
+    {
+        return self(p)->webReceive(data, size);
+    }
+    static const clap_plugin_webview_t webview;
+#endif
     static void timerTick(const clap_plugin_t* p, clap_id id) { self(p)->onTimer(id); }
     static void fdReady(const clap_plugin_t* p, int fd, clap_posix_fd_flags_t flags) { self(p)->onFd(fd, flags); }
 
@@ -160,6 +197,9 @@ const clap_plugin_gui_t PluginGlue::gui = {guiApiSupported, guiPreferredApi, gui
                                            guiAdjustSize,   guiSetSize,      guiSetParent,   guiSetTransient,
                                            guiSuggestTitle, guiShow,         guiHide};
 const clap_plugin_timer_support_t PluginGlue::timer = {timerTick};
+#if defined(__wasm__)
+const clap_plugin_webview_t PluginGlue::webview = {webviewGetUri, webviewGetResource, webviewReceive};
+#endif
 const clap_plugin_posix_fd_support_t PluginGlue::posixFd = {fdReady};
 
 const clap_plugin_descriptor_t* SubstrikePlugin::descriptor() { return &kDescriptor; }
@@ -206,6 +246,9 @@ bool SubstrikePlugin::init()
     hostGui_ = static_cast<const clap_host_gui_t*>(host_->get_extension(host_, CLAP_EXT_GUI));
     hostTimer_ = static_cast<const clap_host_timer_support_t*>(host_->get_extension(host_, CLAP_EXT_TIMER_SUPPORT));
     hostFd_ = static_cast<const clap_host_posix_fd_support_t*>(host_->get_extension(host_, CLAP_EXT_POSIX_FD_SUPPORT));
+#if defined(__wasm__)
+    hostWebview_ = static_cast<const clap_host_webview_t*>(host_->get_extension(host_, CLAP_EXT_WEBVIEW));
+#endif
     return true;
 }
 
@@ -261,9 +304,14 @@ const void* SubstrikePlugin::getExtension(const char* id)
         return &PluginGlue::presetLoadExt;
     if (!std::strcmp(id, CLAP_EXT_GUI))
         return &PluginGlue::gui;
+#if defined(__wasm__)
+    if (!std::strcmp(id, CLAP_EXT_WEBVIEW))
+        return &PluginGlue::webview;
+#else
     if (!std::strcmp(id, CLAP_EXT_TIMER_SUPPORT))
         return &PluginGlue::timer;
-#if !defined(_WIN32)
+#endif
+#if !defined(_WIN32) && !defined(__wasm__)
     if (!std::strcmp(id, CLAP_EXT_POSIX_FD_SUPPORT))
         return &PluginGlue::posixFd;
 #endif
@@ -990,6 +1038,8 @@ void SubstrikePlugin::publishModulation()
 
 // ---------------------------------------------------------------- GUI
 
+#if !defined(__wasm__)
+
 bool SubstrikePlugin::guiCreate()
 {
     if (editor_)
@@ -1094,6 +1144,264 @@ void SubstrikePlugin::onFd(int fd, clap_posix_fd_flags_t)
     if (editor_ && fd == registeredFd_)
         editor_->onFd();
 }
+
+#else
+
+// The window is the host's webview showing the bundle's page; sizes are
+// logical pixels (no set_scale with the webview API). The page scales the
+// editor to whatever it gets, down to half its smallest size.
+namespace {
+constexpr uint32_t kWebMinW = 500, kWebMinH = 330;
+}
+
+bool SubstrikePlugin::guiCreate() { return true; }
+void SubstrikePlugin::guiDestroy() {}
+bool SubstrikePlugin::guiSetScale(double) { return false; }
+bool SubstrikePlugin::guiGetSize(uint32_t* w, uint32_t* h)
+{
+    *w = webW_;
+    *h = webH_;
+    return true;
+}
+bool SubstrikePlugin::guiAdjustSize(uint32_t* w, uint32_t* h)
+{
+    *w = std::clamp<uint32_t>(*w, kWebMinW, 4000);
+    *h = std::clamp<uint32_t>(*h, kWebMinH, 3000);
+    return true;
+}
+bool SubstrikePlugin::guiSetSize(uint32_t w, uint32_t h)
+{
+    webW_ = w;
+    webH_ = h;
+    return true;
+}
+bool SubstrikePlugin::guiSetParent(const clap_window_t*) { return true; }
+bool SubstrikePlugin::guiShow() { return true; }
+bool SubstrikePlugin::guiHide() { return true; }
+void SubstrikePlugin::onTimer(clap_id) {}
+void SubstrikePlugin::onFd(int, clap_posix_fd_flags_t) {}
+
+// ---------------------------------------------------------------- page
+
+void SubstrikePlugin::webSendStatus(uint32_t page, uint32_t pageSerial, uint32_t edits)
+{
+    if (!hostWebview_)
+        return;
+    const int n = table_.count();
+    // What changed since the last poll gets the next serial.
+    const uint32_t next = webSerial_ + 1;
+    bool changed = false;
+    if (webValues_.size() != static_cast<size_t>(n))
+    {
+        webValues_.assign(static_cast<size_t>(n), std::nan(""));
+        webValueSerial_.assign(static_cast<size_t>(n), 0);
+    }
+    for (int i = 0; i < n; ++i)
+    {
+        const double v = paramValue(i);
+        if (v != webValues_[static_cast<size_t>(i)])
+        {
+            webValues_[static_cast<size_t>(i)] = v;
+            webValueSerial_[static_cast<size_t>(i)] = next;
+            changed = true;
+        }
+    }
+    for (int i = 0; i < dsp::kNumCurves; ++i)
+        if (curves_[static_cast<size_t>(i)] != webCurves_[static_cast<size_t>(i)] ||
+            webCurveSerial_[static_cast<size_t>(i)] == 0)
+        {
+            webCurves_[static_cast<size_t>(i)] = curves_[static_cast<size_t>(i)];
+            webCurveSerial_[static_cast<size_t>(i)] = next;
+            changed = true;
+        }
+    if (presetName_ != webPreset_ || webPresetSerial_ == 0)
+    {
+        webPreset_ = presetName_;
+        webPresetSerial_ = next;
+        changed = true;
+    }
+    if (const uint32_t g = modulationGeneration(); g != webModGeneration_ || webModSerial_ == 0)
+    {
+        webModGeneration_ = g;
+        webModSerial_ = next;
+        changed = true;
+    }
+    if (changed)
+        webSerial_ = next;
+
+    // Serial 0, or one this plugin never gave out (a new instance): all of it.
+    const uint32_t since = pageSerial == 0 || pageSerial > webSerial_ ? 0 : pageSerial;
+    auto& o = webOut_;
+    o.assign(web::kStatusHeader, 0);
+    o[0] = web::PluginStatus;
+    uint8_t flags = 0;
+    if (canUndo())
+        flags |= web::StatusCanUndo;
+    if (canRedo())
+        flags |= web::StatusCanRedo;
+    std::memcpy(o.data() + 4, &page, 4);
+    std::memcpy(o.data() + 8, &webSerial_, 4);
+    std::memcpy(o.data() + 12, &edits, 4);
+    std::memcpy(o.data() + 16, &sampleRate_, 8);
+
+    uint16_t values = 0, curves = 0, modulated = 0, bins = 0;
+    for (int i = 0; i < n; ++i)
+        if (webValueSerial_[static_cast<size_t>(i)] > since)
+        {
+            web::put(o, static_cast<uint16_t>(i));
+            web::put(o, webValues_[static_cast<size_t>(i)]);
+            ++values;
+        }
+    for (int i = 0; i < dsp::kNumCurves; ++i)
+        if (webCurveSerial_[static_cast<size_t>(i)] > since)
+        {
+            web::put(o, static_cast<uint8_t>(i));
+            web::putCurve<uint8_t>(o, webCurves_[static_cast<size_t>(i)]);
+            ++curves;
+        }
+    if (webPresetSerial_ > since)
+    {
+        flags |= web::StatusPreset;
+        web::putString(o, webPreset_);
+    }
+    if (webModSerial_ > since)
+    {
+        flags |= web::StatusModulation;
+        for (int r = 0; r < modPublishedCount_; ++r)
+        {
+            const int d = modPublished_[static_cast<size_t>(r)];
+            web::put(o, static_cast<uint16_t>(d));
+            web::put(o, modulatedValue(d));
+            ++modulated;
+        }
+    }
+    // The scope's new bins, only for the page that asked: they are taken.
+    constexpr int kMaxBins = 4096;
+    webScopeLo_.resize(kMaxBins);
+    webScopeHi_.resize(kMaxBins);
+    const int got = readScope(webScopeLo_.data(), webScopeHi_.data(), kMaxBins);
+    for (int i = 0; i < got; ++i)
+    {
+        auto q = [](float x) {
+            return static_cast<int16_t>(std::lround(std::clamp(x * web::kScopeScale, -32767.0f, 32767.0f)));
+        };
+        web::put(o, q(webScopeLo_[static_cast<size_t>(i)]));
+        web::put(o, q(webScopeHi_[static_cast<size_t>(i)]));
+        ++bins;
+    }
+    o[1] = flags;
+    std::memcpy(o.data() + 24, &values, 2);
+    std::memcpy(o.data() + 26, &curves, 2);
+    std::memcpy(o.data() + 28, &modulated, 2);
+    std::memcpy(o.data() + 30, &bins, 2);
+    hostWebview_->send(host_, o.data(), static_cast<uint32_t>(o.size()));
+}
+
+bool SubstrikePlugin::webReceive(const void* data, uint32_t size)
+{
+    const auto* b = static_cast<const uint8_t*>(data);
+    if (size < 4)
+        return false;
+    auto u32 = [&](size_t at) {
+        uint32_t v = 0;
+        if (at + 4 <= size)
+            std::memcpy(&v, b + at, 4);
+        return v;
+    };
+    const int n = table_.count();
+    auto dirty = [&] {
+        if (hostState_)
+            hostState_->mark_dirty(host_);
+    };
+    switch (b[0])
+    {
+    case web::PagePoll:
+        if (size < 16)
+            return false;
+        webSendStatus(u32(4), u32(8), u32(12));
+        return true;
+    case web::PageBegin:
+    case web::PageSet:
+    case web::PageEnd:
+    {
+        const int index = static_cast<int>(u32(4));
+        if (size < 8 || index < 0 || index >= n)
+            return false;
+        if (b[0] == web::PageBegin)
+            beginEdit(index);
+        else if (b[0] == web::PageEnd)
+        {
+            endEdit(index);
+            dirty(); // one undo step in the host per gesture
+        }
+        else
+        {
+            double v;
+            if (size < 16)
+                return false;
+            std::memcpy(&v, b + 8, 8);
+            performEdit(index, v);
+        }
+        return true;
+    }
+    case web::PageCurve:
+    {
+        const int index = static_cast<int>(u32(4));
+        size_t pos = 8;
+        dsp::Curve c;
+        if (index < 0 || index >= dsp::kNumCurves || !web::getCurve<uint32_t>(b, size, pos, c))
+            return false;
+        setCurve(index, c);
+        return true;
+    }
+    case web::PageLoad:
+    {
+        const uint32_t count = u32(4);
+        if (count != static_cast<uint32_t>(n) || size < 8 + 8u * count)
+            return false;
+        StateDocument doc;
+        doc.values.resize(count);
+        std::memcpy(doc.values.data(), b + 8, 8u * count);
+        size_t pos = 8 + 8u * count;
+        for (int i = 0; i < dsp::kNumCurves; ++i)
+            if (!web::getCurve<uint8_t>(b, size, pos, doc.curves[static_cast<size_t>(i)]))
+                return false;
+        std::string name;
+        if (!web::getString(b, size, pos, name))
+            return false;
+        loadDocument(doc, name);
+        return true;
+    }
+    case web::PageAudition:
+        audition();
+        return true;
+    case web::PageCheckpoint:
+        checkpoint();
+        return true;
+    case web::PageUndo:
+    case web::PageRedo:
+        if (b[0] == web::PageUndo ? undo() : redo())
+            dirty();
+        return true;
+    case web::PageResize:
+    {
+        uint32_t w = u32(4), h = u32(8);
+        if (!w || !h)
+            return false;
+        guiAdjustSize(&w, &h);
+        if (hostGui_ && hostGui_->request_resize(host_, w, h))
+        {
+            webW_ = w;
+            webH_ = h;
+        }
+        return true;
+    }
+    default:
+        return false;
+    }
+}
+
+#endif
 
 // ---------------------------------------------------------------- factory
 

@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.21)
-project(Substrike VERSION 1.1.0 LANGUAGES C CXX)
+project(Substrike VERSION 1.2.0 LANGUAGES C CXX)
 
 # Substrike builds as a CLAP and, through the clap-wrapper, as a VST3, for
 # Linux and Windows (cross-compiled with mingw-w64). Like Aurum it does not use
@@ -9,6 +9,9 @@ project(Substrike VERSION 1.1.0 LANGUAGES C CXX)
 #
 # The editor is drawn with Cairo, on X11 (Linux) or win32 (Windows); the window
 # backends and widgets come from ../aurum and belong to Substrike from then on.
+#
+# Configured with wasi-sdk's toolchain file it builds the WCLAP instead, the
+# plugin for browser hosts: see cmake/wclap.cmake.
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -19,8 +22,12 @@ if (NOT CMAKE_BUILD_TYPE)
     set(CMAKE_BUILD_TYPE Release)
 endif()
 
-if (NOT CMAKE_SYSTEM_NAME STREQUAL "Linux" AND NOT CMAKE_SYSTEM_NAME STREQUAL "Windows")
-    message(FATAL_ERROR "Substrike builds for Linux and for Windows only.")
+# WASI is the WCLAP build (CLAP compiled to WebAssembly for browser hosts such
+# as openDAW, see cmake/wclap.cmake): the plugin with its editor as a page.
+if (CMAKE_SYSTEM_NAME STREQUAL "WASI")
+    set(SUBSTRIKE_WASM ON)
+elseif (NOT CMAKE_SYSTEM_NAME STREQUAL "Linux" AND NOT CMAKE_SYSTEM_NAME STREQUAL "Windows")
+    message(FATAL_ERROR "Substrike builds for Linux, for Windows and as a WCLAP only.")
 endif()
 
 set(SUBSTRIKE_SDK_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../CLAP" CACHE PATH "Directory holding clap, clap-wrapper and vst3sdk")
@@ -35,7 +42,14 @@ if (CMAKE_INSTALL_PREFIX_INITIALIZED_TO_DEFAULT AND NOT CMAKE_CROSSCOMPILING)
 endif()
 
 add_compile_options(-Wall -Wextra -Wno-unused-parameter -Wno-missing-field-initializers)
-set(SUBSTRIKE_ARCH_FLAGS "-march=x86-64-v3" CACHE STRING "Target architecture flags")
+# WebAssembly gets its 128-bit SIMD instead of x86-64-v3.
+if (SUBSTRIKE_WASM)
+    set(SUBSTRIKE_ARCH_FLAGS "-msimd128" CACHE STRING "Target architecture flags")
+    # wasi-sdk's libc++ has no exception runtime; Substrike catches nothing.
+    add_compile_options(-fno-exceptions)
+else()
+    set(SUBSTRIKE_ARCH_FLAGS "-march=x86-64-v3" CACHE STRING "Target architecture flags")
+endif()
 add_compile_options(${SUBSTRIKE_ARCH_FLAGS} -fno-math-errno)
 
 # On Windows every binary links the runtime in, so nothing needs MinGW DLLs
@@ -51,6 +65,25 @@ endfunction()
 
 set(CLAP_SDK_ROOT "${SUBSTRIKE_SDK_DIR}/clap" CACHE PATH "" FORCE)
 add_subdirectory("${CLAP_SDK_ROOT}" clap-sdk EXCLUDE_FROM_ALL)
+
+# The factory presets, compiled in: presets/*.substrike as a header of string
+# literals. A preset added or removed is picked up at the next configure; an
+# edit to one at the next build.
+file(GLOB SUBSTRIKE_PRESET_FILES CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/presets/*.substrike")
+set(SUBSTRIKE_PRESET_HEADER "${CMAKE_CURRENT_BINARY_DIR}/generated/FactoryPresetData.h")
+add_custom_command(
+    OUTPUT "${SUBSTRIKE_PRESET_HEADER}"
+    COMMAND "${CMAKE_COMMAND}" -DPRESET_DIR="${CMAKE_CURRENT_SOURCE_DIR}/presets"
+            -DOUTPUT="${SUBSTRIKE_PRESET_HEADER}" -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/embed_presets.cmake"
+    DEPENDS ${SUBSTRIKE_PRESET_FILES} "${CMAKE_CURRENT_SOURCE_DIR}/cmake/embed_presets.cmake"
+    COMMENT "Embedding the factory presets")
+add_custom_target(substrike-presets DEPENDS "${SUBSTRIKE_PRESET_HEADER}")
+
+if (SUBSTRIKE_WASM)
+    include(cmake/wclap.cmake)
+    return()
+endif()
+
 find_package(Threads REQUIRED)
 
 # ------------------------------------------------------------------- gui deps
@@ -85,19 +118,6 @@ else()
     target_link_libraries(substrike-gui-deps INTERFACE PkgConfig::SUBSTRIKE_GUI)
     set(SUBSTRIKE_WINDOW_SOURCE src/gui/X11Window.cpp)
 endif()
-
-# The factory presets, compiled in: presets/*.substrike as a header of string
-# literals. A preset added or removed is picked up at the next configure; an
-# edit to one at the next build.
-file(GLOB SUBSTRIKE_PRESET_FILES CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/presets/*.substrike")
-set(SUBSTRIKE_PRESET_HEADER "${CMAKE_CURRENT_BINARY_DIR}/generated/FactoryPresetData.h")
-add_custom_command(
-    OUTPUT "${SUBSTRIKE_PRESET_HEADER}"
-    COMMAND "${CMAKE_COMMAND}" -DPRESET_DIR="${CMAKE_CURRENT_SOURCE_DIR}/presets"
-            -DOUTPUT="${SUBSTRIKE_PRESET_HEADER}" -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/embed_presets.cmake"
-    DEPENDS ${SUBSTRIKE_PRESET_FILES} "${CMAKE_CURRENT_SOURCE_DIR}/cmake/embed_presets.cmake"
-    COMMENT "Embedding the factory presets")
-add_custom_target(substrike-presets DEPENDS "${SUBSTRIKE_PRESET_HEADER}")
 
 add_library(substrike-impl STATIC
     src/dsp/Engine.cpp

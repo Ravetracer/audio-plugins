@@ -516,6 +516,37 @@ width in Hz (Width, a share of the spacing; a constant Q would widen the
 upper bands until they cut the harmonics between them), a gain and a taper.
 Chain Key Track moves its Start and Spacing. Comb Hollow uses it.
 
+1.2.0: the WCLAP, Substrike for browser hosts (openDAW first), built by
+`cmake/wclap.cmake` with wasi-sdk after Aurum's. `module.wasm` is the plugin
+with `clap.gui` (webview API only) and `clap.webview`; `ui.wasm` is the whole
+native editor drawn with Cairo into the page. openDAW runs the module, page
+messages included, on its audio worklet thread, so the editor can only live
+in the page and talks to the plugin through messages
+(`src/plugin/WebProtocol.h`). Decided while building it:
+
+- The page polls about 30 times a second; the plugin answers with what
+  changed since the serial the page names: values, curves, the preset's name,
+  the parameters the matrix moves, the scope's new bins (int16 pairs) and
+  whether there is something to undo. A still plugin answers with 32 bytes,
+  the first answer is about 16 KB. Answers name the page that asked, and a
+  page keeps a value of its own while its edit is still on the way (the
+  answer echoes how many edits it had seen).
+- The undo history stays in the plugin, as natively: the page sends
+  checkpoints, undo and redo. A gesture's end and a curve edit mark the state
+  dirty, which is one undo step in openDAW.
+- A preset loaded in the page goes over as all its values and curves at once
+  (`loadDocument`), binary, so nothing is lost to a text round trip.
+- The hit preview and the export render in the page with the same engine
+  code. Without threads the preview renders a slice of about 6 ms per frame
+  (`HitRenderer`, which `renderHit` now runs to the end, so the native render
+  is unchanged); a factory preset's hit takes 63 ms on average there, 530 ms
+  at most (an 8 s tail). The export is a download: the browser has no file
+  drag out of a canvas and the page may not open a save dialog.
+- The module costs 38 us per 128-frame block on average over every factory
+  preset in the second after a hit (median 18, 99th percentile 190; node,
+  measured by the WASI self-test), and 0.3 us asleep.
+- Hosts may only take the main output; the lane outputs are still offered.
+
 ## Phases
 
 1. **Scaffold and first kick.**

@@ -61,6 +61,8 @@ public:
     void renderTo(cairo_t* cr);
     // Renders the preview now and waits for it (tests and screenshots).
     void settlePreview();
+    // The window backend, for a host that feeds it events itself (the WCLAP page).
+    NativeWindow& window() { return window_; }
 
     // WindowListener
     void onPaint(cairo_t* cr, int physW, int physH) override;
