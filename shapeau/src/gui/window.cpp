@@ -35,6 +35,10 @@
 #   ifndef M_PI
 #      define M_PI 3.14159265358979323846
 #   endif
+#elif defined(__wasm__)
+// The WCLAP's editor (web/uimain.cpp): no window system. The frame is an image
+// surface the page copies into its canvas, and the page hands the input in.
+#   include <string>
 #else
 #   include <X11/Xlib.h>
 #   include <X11/Xutil.h>
@@ -50,7 +54,11 @@ namespace {
 
 // --------------------------------------------------------------- the window
 
+#if defined(__wasm__)
+class PluginWindow final : public WebGui {
+#else
 class PluginWindow final : public Gui {
+#endif
 public:
    PluginWindow(GuiDelegate &delegate, const WindowSpec &spec, CurveAccess &curves)
       : mDelegate(delegate), mSpec(spec), mCurves(curves),
@@ -170,6 +178,122 @@ public:
          SetWindowTextA(mWindow, title);
    }
 
+#elif defined(__wasm__)
+   bool open() override {
+      mWindow = true;
+      allocateBuffer();
+      return true;
+   }
+   bool embed(uintptr_t) override { return true; }
+   bool setTransientFor(uintptr_t) override { return true; }
+   void setTitle(const char *) override {}
+
+   // The canvas, in physical pixels, and the zoom the layout is drawn at. The
+   // layout keeps its proportions; what the canvas has beyond it is filled with
+   // the background.
+   void webSetFrame(int width, int height, double scale) override {
+      width = std::max(width, 1);
+      height = std::max(height, 1);
+      scale = std::min(8.0, std::max(0.25, scale));
+      if (std::fabs(scale - mScale) >= 0.001) {
+         mScale = scale;
+         allocateBuffer();
+      }
+      if (!mTarget || mFrameW != width || mFrameH != height) {
+         if (mTargetCr)
+            cairo_destroy(mTargetCr);
+         if (mTarget)
+            cairo_surface_destroy(mTarget);
+         mFrameW = width;
+         mFrameH = height;
+         mTarget = cairo_image_surface_create(CAIRO_FORMAT_RGB24, width, height);
+         mTargetCr = cairo_create(mTarget);
+         setColor(mTargetCr, mSpec.theme.bgBottom);
+         cairo_paint(mTargetCr);
+      }
+      mDirty = true;
+   }
+
+   // Paints when something changed; true when a new frame is ready.
+   bool webRender() override {
+      if (!mWindow || !mTarget || !needsRepaint())
+         return false;
+      paint();
+      // Cairo's RGB24 is a native-endian 0xXXRRGGBB word, B G R X in memory;
+      // a canvas wants R G B A.
+      const int stride = cairo_image_surface_get_stride(mTarget);
+      const uint8_t *src = cairo_image_surface_get_data(mTarget);
+      mFrame.resize(static_cast<size_t>(mFrameW) * mFrameH * 4);
+      for (int y = 0; y < mFrameH; ++y) {
+         const uint32_t *row = reinterpret_cast<const uint32_t *>(src + static_cast<size_t>(y) * stride);
+         uint32_t *out = reinterpret_cast<uint32_t *>(mFrame.data() + static_cast<size_t>(y) * mFrameW * 4);
+         for (int x = 0; x < mFrameW; ++x) {
+            const uint32_t px = row[x];
+            out[x] = 0xff000000u | ((px & 0xffu) << 16) | (px & 0xff00u) | ((px >> 16) & 0xffu);
+         }
+      }
+      return true;
+   }
+
+   const uint8_t *webFrame() const override { return mFrame.data(); }
+   int webFrameWidth() const override { return mFrameW; }
+   int webFrameHeight() const override { return mFrameH; }
+
+   // Input from the page, in canvas pixels. Buttons 1 left, 2 middle, 3
+   // right; modifiers 1 shift, 2 ctrl, 4 alt.
+   void webPointerDown(double x, double y, unsigned button, unsigned mods, double timeMs) override {
+      onPointerDown(x, y, button, static_cast<unsigned long>(timeMs), (mods & 1u) != 0);
+   }
+   void webPointerUp(double, double, unsigned, unsigned) override { onButtonRelease(); }
+   void webPointerMove(double x, double y, unsigned mods) override {
+      onMotion(x / mScale, y / mScale, (mods & 1u) != 0);
+   }
+   // A notch of the wheel is a press of button 4 or 5, as X11 reports it.
+   // Finer steps (a touchpad) are added up to whole notches.
+   void webWheel(double x, double y, double notches, unsigned mods, double timeMs) override {
+      mWheelRest += notches;
+      while (std::fabs(mWheelRest) >= 0.5) {
+         const bool up = mWheelRest > 0.0;
+         mWheelRest += up ? -1.0 : 1.0;
+         onPointerDown(x, y, up ? kWheelUp : kWheelDown, static_cast<unsigned long>(timeMs),
+                       (mods & 1u) != 0);
+      }
+   }
+   void webLeave() override {
+      if (mDrag < 0) {
+         mHover = -1;
+         mHoverWidget = Widget::NoWidget;
+         mDirty = true;
+      }
+   }
+   // X11 keysyms; `text` is what the key types. True when the key was used.
+   bool webKey(unsigned keysym, const char *text, unsigned mods) override {
+      (void)mods;
+      KeyCommand cmd = KeyCommand::NoCommand;
+      if (keysym == 0xff1b)
+         cmd = KeyCommand::Escape;
+      else if (keysym == 0xff0d || keysym == 0xff8d)
+         cmd = KeyCommand::Accept;
+      else if (keysym == 0xff08)
+         cmd = KeyCommand::Backspace;
+      else if (keysym == 0xff52 || keysym == 0xff97)
+         cmd = KeyCommand::Up;
+      else if (keysym == 0xff54 || keysym == 0xff99)
+         cmd = KeyCommand::Down;
+      const int n = text ? static_cast<int>(std::strlen(text)) : 0;
+      if (mSaveOpen) {
+         onSaveKey(cmd, text, n);
+         return true;
+      }
+      if (mEntryParam >= 0) {
+         onEntryKey(cmd, text, n);
+         return true;
+      }
+      const bool overlay = mMenuParam >= 0 || mMixerOpen || mBrowserOpen;
+      onOverlayKey(cmd);
+      return overlay;
+   }
+
 #else
    bool open() override {
       if (mWindow)
@@ -270,6 +394,7 @@ public:
 #if defined(_WIN32)
       SetWindowPos(mWindow, nullptr, 0, 0, static_cast<int>(pixelW()),
                    static_cast<int>(pixelH()), SWP_NOMOVE | SWP_NOZORDER);
+#elif defined(__wasm__)
 #else
       XResizeWindow(mDisplay, mWindow, pixelW(), pixelH());
       cairo_xlib_surface_set_size(mTarget, pixelW(), pixelH());
@@ -288,6 +413,7 @@ public:
          return;
 #if defined(_WIN32)
       ShowWindow(mWindow, SW_SHOWNA);
+#elif defined(__wasm__)
 #else
       XMapWindow(mDisplay, mWindow);
       XFlush(mDisplay);
@@ -303,6 +429,7 @@ public:
       closeEntry();
 #if defined(_WIN32)
       ShowWindow(mWindow, SW_HIDE);
+#elif defined(__wasm__)
 #else
       XUnmapWindow(mDisplay, mWindow);
       XFlush(mDisplay);
@@ -321,6 +448,8 @@ public:
       // is safe from any thread and the owning thread does the work.
       if (needsRepaint())
          InvalidateRect(mWindow, nullptr, FALSE);
+#elif defined(__wasm__)
+      webRender();
 #else
       if (!mDisplay)
          return;
@@ -371,6 +500,8 @@ private:
             UnregisterClassW(windowClassName(), moduleInstance());
       }
       mWindow = nullptr;
+#elif defined(__wasm__)
+      mWindow = false;
 #else
       if (mDisplay) {
          // Closing the display would drop the grab anyway, but say so plainly
@@ -603,7 +734,7 @@ private:
       cairo_set_source_surface(mTargetCr, mBuffer, 0, 0);
       cairo_paint(mTargetCr);
       cairo_surface_flush(mTarget);
-#if !defined(_WIN32)
+#if !defined(_WIN32) && !defined(__wasm__)
       XFlush(mDisplay);
 #endif
    }
@@ -1191,6 +1322,9 @@ private:
       // its shortcuts, and focus returns on its own when the dialog closes.
       mPrevFocus = SetFocus(mWindow);
       mKeyboardGrabbed = GetFocus() == mWindow;
+#elif defined(__wasm__)
+      // The page sends every key to the editor; there is nothing to take.
+      mKeyboardGrabbed = true;
 #else
       if (!mDisplay)
          return;
@@ -1210,6 +1344,7 @@ private:
       if (mPrevFocus && IsWindow(mPrevFocus))
          SetFocus(mPrevFocus);
       mPrevFocus = nullptr;
+#elif defined(__wasm__)
 #else
       if (mDisplay) {
          XErrorHandler previous = XSetErrorHandler(&ignoreXError);
@@ -2177,6 +2312,8 @@ private:
       }
       return DefWindowProcW(mWindow, msg, wp, lp);
    }
+#elif defined(__wasm__)
+   void pumpEvents() {}
 #else
    void pumpEvents() {
       XEvent ev;
@@ -2626,6 +2763,11 @@ private:
    HWND mWindow = nullptr;
    HWND mPrevFocus = nullptr;
    bool mTrackingLeave = false;
+#elif defined(__wasm__)
+   bool mWindow = false;
+   int mFrameW = 0, mFrameH = 0;
+   std::vector<uint8_t> mFrame; // RGBA, for the page's canvas
+   double mWheelRest = 0.0;
 #else
    Display *mDisplay = nullptr;
    Window mWindow = 0;

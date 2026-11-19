@@ -1,6 +1,7 @@
 #include "shapeau.h"
 
 #include <cctype>
+#include <cstdlib>
 #include <fstream>
 #include <sstream>
 
@@ -77,12 +78,14 @@ bool parseCurveLine(const std::string &line, CurveSet &set) {
    const int m = moduleFromKey(module);
    if (m < 0)
       return false;
-   int band = -1;
-   try {
-      band = std::stoi(bandText);
-   } catch (...) {
+   // strtol rather than std::stoi: the WebAssembly build has no exceptions.
+   // Like stoi it reads the leading number and ignores what follows it.
+   const char *start = bandText.c_str();
+   char *end = nullptr;
+   const long parsedBand = std::strtol(start, &end, 10);
+   if (end == start)
       return false;
-   }
+   const int band = parsedBand < 0 || parsedBand > kNumBands ? -1 : static_cast<int>(parsedBand);
    if (band < 0 || band >= kNumBands)
       return false;
 

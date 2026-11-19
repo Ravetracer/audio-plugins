@@ -200,4 +200,11 @@ Gui *createGui(GuiDelegate &delegate, CurveAccess &curves) {
    return createWindow(delegate, spec, curves);
 }
 
+#if defined(__wasm__)
+WebGui *createWebGui(GuiDelegate &delegate, CurveAccess &curves) {
+   // createWindow() makes the fork's window, which is a WebGui in this build.
+   return static_cast<WebGui *>(createGui(delegate, curves));
+}
+#endif
+
 } // namespace shapeau

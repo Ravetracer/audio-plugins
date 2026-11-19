@@ -14,10 +14,22 @@
 #include "dsp/engine.h"
 #include "entry.h"
 #include "factories.h"
-#include "gui/curveaccess.h"
+#include "gui/curvemodel.h"
 #include "params.h"
+#include "presetlibrary.h"
 #include "presets_generated.h"
 #include "shapeau.h"
+
+// The WCLAP (a WebAssembly build) has no native window. Its editor runs in the
+// host's webview page as a module of its own (web/uimain.cpp) and talks to the
+// plugin through clap.webview messages (web/protocol.h).
+#if defined(__wasm__) && !defined(SHAPEAU_WITH_GUI)
+#   define SHAPEAU_WEBVIEW 1
+#   include <clap/ext/draft/webview.h>
+#   include "web/protocol.h"
+#else
+#   define SHAPEAU_WEBVIEW 0
+#endif
 
 #ifdef SHAPEAU_WITH_GUI
 #include <chrono>
@@ -42,8 +54,6 @@ const clap_plugin_descriptor_t kDescriptor = {
    kPluginDescription, kFeatures,
 };
 
-constexpr const char *kFactoryFolder = "Factory Presets";
-
 // 'SHAP' little-endian.
 constexpr uint32_t kStateMagic = 0x50414853u;
 // Version 1: header, one (id, value) pair per parameter, then twelve shapes as
@@ -62,12 +72,16 @@ double clampv(double v, double lo, double hi) { return v < lo ? lo : (v > hi ? h
 
 } // namespace
 
-class ShapeauPlugin final : public GuiDelegate, public CurveAccess {
+class ShapeauPlugin final : public GuiDelegate, public CurveModel {
 public:
    explicit ShapeauPlugin(const clap_host_t *host) : mHost(host) {
       for (uint32_t i = 0; i < kNumParams; ++i)
          mValues[i].store(paramTable()[i].def, std::memory_order_relaxed);
       resetCurves(mCurves);
+#if SHAPEAU_WEBVIEW
+      for (auto &bin : mScopeShadow)
+         bin[web::kScopeFields - 1] = web::scopeEncode(-1.0f, true); // a cleared trace
+#endif
       mPlugin.desc = &kDescriptor;
       mPlugin.plugin_data = this;
       mPlugin.init = [](const clap_plugin_t *) { return true; };
@@ -501,6 +515,7 @@ private:
       }
 
       plug->mEngine.publishCurves(plug->mCurves);
+      plug->curvesShown();
       plug->mParamsDirty.store(true, std::memory_order_release);
       plug->notifyParamValuesChanged();
       return true;
@@ -519,6 +534,7 @@ private:
       }
       mCurves = curves;
       mEngine.publishCurves(mCurves);
+      curvesShown();
       mParamsDirty.store(true, std::memory_order_release);
       notifyParamValuesChanged();
    }
@@ -736,6 +752,9 @@ private:
                     static_cast<double>(CLAP_BEATTIME_FACTOR);
       }
 
+#if SHAPEAU_WEBVIEW
+      webScopeAlive(frames);
+#endif
       const plugincore::ScopedNoDenormals denormals;
       mEngine.process(l, r, frames, beats, bpm, sideL, sideR, notes, noteCount);
       publishOutputPeaks(l, r, frames);
@@ -765,61 +784,7 @@ private:
          return;
       mPresetsScanned = true;
 #ifdef SHAPEAU_WITH_GUI
-      for (unsigned i = 0; i < kNumBuiltinPresets; ++i) {
-         PresetData data;
-         std::string error;
-         if (!parsePreset(kBuiltinPresets[i].text, std::strlen(kBuiltinPresets[i].text), data,
-                          error))
-            continue;
-         GuiPreset entry;
-         entry.name = data.name.empty() ? kBuiltinPresets[i].loadKey : data.name;
-         entry.description = data.description;
-         entry.loadKey = kBuiltinPresets[i].loadKey;
-         entry.folder = kFactoryFolder;
-         mPresets.push_back(entry);
-      }
-
-      const std::string dir = userPresetDir();
-      std::error_code ec;
-      if (dir.empty() || !std::filesystem::is_directory(dir, ec))
-         return;
-      std::vector<GuiPreset> user;
-      const std::string suffix = std::string(".") + kPresetExtension;
-      auto scan = [&](const std::filesystem::path &from, const std::string &folder) {
-         std::error_code dirEc;
-         for (const auto &entry : std::filesystem::directory_iterator(from, dirEc)) {
-            if (!entry.is_regular_file())
-               continue;
-            const std::string name = entry.path().filename().string();
-            if (name.size() <= suffix.size() ||
-                name.compare(name.size() - suffix.size(), suffix.size(), suffix) != 0)
-               continue;
-            const std::string path = entry.path().string();
-            PresetData data;
-            std::string error;
-            if (!parsePresetFile(path, data, error))
-               continue;
-            GuiPreset item;
-            item.name = data.name.empty() ? name.substr(0, name.size() - suffix.size()) : data.name;
-            item.description = data.description;
-            item.path = path;
-            item.userContent = true;
-            item.folder = folder;
-            user.push_back(item);
-         }
-      };
-      scan(dir, std::string());
-      std::vector<std::string> folders;
-      for (const auto &entry : std::filesystem::directory_iterator(dir, ec))
-         if (entry.is_directory())
-            folders.push_back(entry.path().filename().string());
-      std::sort(folders.begin(), folders.end());
-      for (const auto &folder : folders)
-         scan(std::filesystem::path(dir) / folder, folder);
-      std::sort(user.begin(), user.end(), [](const GuiPreset &a, const GuiPreset &b) {
-         return a.folder == b.folder ? a.name < b.name : a.folder < b.folder;
-      });
-      mPresets.insert(mPresets.end(), user.begin(), user.end());
+      mPresets = presetLibrary();
 #endif
    }
 
@@ -950,25 +915,20 @@ private:
                                 nullptr);
    }
 
-   // -------------------------------------------------------------- CurveAccess
+   // -------------------------------------------------------------- CurveModel
+   //
+   // The editing rules are CurveModel's; what the plugin adds is where the
+   // parameters live, the publishing of the shapes to the audio thread, and
+   // the scope.
 
-   int curveModule() const override { return mCurveModule.load(); }
-   int curveBand() const override { return mCurveBand.load(); }
-
-   void curveSelectModule(int module) override {
-      mCurveModule.store(std::clamp(module, 0, kNumModules - 1));
+   double modelRealValue(uint32_t id) const override { return realValue(id); }
+   void modelBeginEdit(uint32_t id) override { guiBeginEdit(id); }
+   void modelSetParam(uint32_t id, double raw) override { guiSetParam(id, raw); }
+   void modelEndEdit(uint32_t id) override { guiEndEdit(id); }
+   void modelCurvesChanged() override { curveChanged(); }
+   void modelViewChanged() override {
       updateScopeTarget();
-   }
-   void curveSelectBand(int band) override {
-      mCurveBand.store(std::clamp(band, 0, kNumBands - 1));
-      mEditAllBands.store(false);
-      updateScopeTarget();
-   }
-
-   bool curveEditAllBands() const override { return mEditAllBands.load(); }
-   void curveSetEditAllBands(bool all) override {
-      mEditAllBands.store(all);
-      updateScopeTarget();
+      curvesShown();
    }
 
    // The scope follows what the editor shows, and runs only while a window is
@@ -980,260 +940,19 @@ private:
 
    const Scope *curveScope() const override { return &mEngine.scope(); }
 
-   // ------------------------------------------------------------ the chain
-   //
-   // The effects in the chain, in order: the listed ones, then any that are
-   // switched on without being listed (see CurveSet). Every edit first writes
-   // that whole order into the list, so what the bar showed is what the edit
-   // starts from, and then publishes it to the audio thread with the shapes.
-
-   int curveChain(int *out) const override {
-      bool on[kNumModules];
-      for (int m = 0; m < kNumModules; ++m)
-         on[m] = switched(onParamForModule(m));
-      return effectiveChain(mCurves, on, out);
-   }
-
-   void materializeChain() {
-      int order[kNumModules];
-      const int n = curveChain(order);
-      mCurves.chainCount = 0;
-      for (int i = 0; i < n; ++i)
-         chainAdd(mCurves, order[i]);
-   }
-
-   void curveChainAdd(int module) override {
-      materializeChain();
-      chainAdd(mCurves, module);
-      curveChanged();
-      if (!switched(onParamForModule(module)))
-         guiSetParam(onParamForModule(module), 1.0);
-      curveSelectModule(module);
-   }
-
-   // Out of the list and switched off, or it would come back as an unlisted
-   // effect that is on. The editor moves to the effect that took its place.
-   void curveChainRemove(int module) override {
-      materializeChain();
-      int at = 0;
-      while (at < mCurves.chainCount && mCurves.chain[at] != module)
-         ++at;
-      chainRemove(mCurves, module);
-      curveChanged();
-      if (switched(onParamForModule(module)))
-         guiSetParam(onParamForModule(module), 0.0);
-      if (mCurves.chainCount > 0)
-         curveSelectModule(mCurves.chain[std::min(at, mCurves.chainCount - 1)]);
-   }
-
-   void curveChainMove(int module, int place) override {
-      materializeChain();
-      chainMove(mCurves, module, place);
-      curveChanged();
-   }
-
-   // The power dot: bypass without leaving the chain. Listed first, so an
-   // effect switched off stays on the bar instead of vanishing from it.
-   void curveToggleModule(int module) override {
-      materializeChain();
-      curveChanged();
-      const uint32_t on = onParamForModule(module);
-      guiSetParam(on, switched(on) ? 0.0 : 1.0);
-   }
-
-   const Curve &curveAt(int module, int band) const override {
-      return mCurves.curve[std::clamp(module, 0, kNumModules - 1)]
-                         [std::clamp(band, 0, kNumBands - 1)];
-   }
-
-   bool curveModuleEnabled(int module) const override {
-      return switched(onParamForModule(module));
-   }
-   bool curveBandEnabled(int band) const override {
-      return switched(kParamBandLow + std::clamp(band, 0, kNumBands - 1));
-   }
-
-   void curveEnableModule(int module) override { ensureStageForEdit(module); }
-
    void curveChanged() {
       mEngine.publishCurves(mCurves);
       mPresetEdited.store(true);
+      curvesShown();
    }
 
-   int curveAddPoint(int module, int band, float x, float y, int weight) override {
-      (void)band;
-      ensureStageForEdit(module);
-      int result = -1;
-      forEditedBands([&](int b) {
-         const int index =
-            mCurves.curve[module][b].addPoint(x, y, static_cast<uint8_t>(weight));
-         if (b == mCurveBand.load())
-            result = index;
-      });
-      curveChanged();
-      return result;
-   }
-
-   void curveMovePoint(int module, int band, int index, float x, float y) override {
-      (void)band;
-      ensureStageForEdit(module);
-      // In ALL mode the bands need not hold the same number of points (a loaded
-      // preset can differ), so an index alone would move the wrong point in a
-      // band that is shorter. The selected band's x is the anchor and each
-      // other band moves its nearest point to it.
-      const float anchor = mCurves.curve[module][mCurveBand.load()].point(index).x;
-      forEditedBands([&](int b) {
-         Curve &c = mCurves.curve[module][b];
-         c.movePoint(b == mCurveBand.load() ? index : nearestPoint(c, anchor), x, y);
-      });
-      curveChanged();
-   }
-
-   void curveRemovePoint(int module, int band, int index) override {
-      (void)band;
-      ensureStageForEdit(module);
-      const Curve &selected = mCurves.curve[module][mCurveBand.load()];
-      const float anchor = selected.point(index).x;
-      forEditedBands([&](int b) {
-         Curve &c = mCurves.curve[module][b];
-         c.removePoint(b == mCurveBand.load() ? index : nearestPoint(c, anchor));
-      });
-      curveChanged();
-   }
-
-   void curveSetWeight(int module, int band, int index, int weight, bool all) override {
-      (void)band;
-      ensureStageForEdit(module);
-      const float anchor = mCurves.curve[module][mCurveBand.load()].point(index).x;
-      forEditedBands([&](int b) {
-         Curve &c = mCurves.curve[module][b];
-         if (all) {
-            for (int i = 0; i < c.count(); ++i)
-               c.setWeight(i, static_cast<uint8_t>(weight));
-         } else {
-            c.setWeight(b == mCurveBand.load() ? index : nearestPoint(c, anchor),
-                        static_cast<uint8_t>(weight));
-         }
-      });
-      curveChanged();
-   }
-
-   void curveSetFlat(int module, int band, float y) override {
-      // A flat reset is not a request to hear the stage: switching a drive on
-      // over a neutral curve would colour the sound the user just cleared.
-      (void)band;
-      forEditedBands([&](int b) { mCurves.curve[module][b].setFlat(y); });
-      curveChanged();
-   }
-
-   void curveSetBend(int module, int band, int index, float bend) override {
-      (void)band;
-      ensureStageForEdit(module);
-      const float anchor = mCurves.curve[module][mCurveBand.load()].point(index).x;
-      forEditedBands([&](int b) {
-         Curve &c = mCurves.curve[module][b];
-         c.setBend(b == mCurveBand.load() ? index : nearestPoint(c, anchor), bend);
-      });
-      curveChanged();
-   }
-
-   void curveSetStep(int module, int band, int step, int steps, float y) override {
-      (void)band;
-      ensureStageForEdit(module);
-      forEditedBands(
-         [&](int b) { mCurves.curve[module][b].setStep(step, steps, y); });
-      curveChanged();
-   }
-
-   void curveFillSteps(int module, int band, int steps) override {
-      // Switching the editor into step mode converts the drawing; that is a
-      // view change, not a reason to switch a stage on.
-      (void)band;
-      forEditedBands([&](int b) { mCurves.curve[module][b].fillSteps(steps); });
-      curveChanged();
-   }
-
-   int curveTriggerMode(int module) const override {
-      return enumValue(triggerParam(std::clamp(module, 0, kNumModules - 1)));
-   }
-   bool curveTriggerLoop(int module) const override {
-      return switched(loopParam(std::clamp(module, 0, kNumModules - 1)));
-   }
-   float curveEnd(int module) const override {
-      return static_cast<float>(realValue(endParam(std::clamp(module, 0, kNumModules - 1))));
-   }
-   void curveBeginEnd(int module) override {
-      guiBeginEdit(endParam(std::clamp(module, 0, kNumModules - 1)));
-   }
-   void curveSetEnd(int module, float end) override {
-      guiSetParam(endParam(std::clamp(module, 0, kNumModules - 1)), end);
-   }
-   void curveFinishEnd(int module) override {
-      guiEndEdit(endParam(std::clamp(module, 0, kNumModules - 1)));
-   }
-
-   bool curveSnap() const override { return mSnap.load(); }
-   void curveToggleSnap() override { mSnap.store(!mSnap.load()); }
-
-   bool curveStepMode() const override { return mStepMode.load(); }
-   void curveSetStepMode(bool on) override { mStepMode.store(on); }
-
-   static int nearestPoint(const Curve &curve, float x) {
-      int best = 0;
-      float distance = 2.0f;
-      for (int i = 0; i < curve.count(); ++i) {
-         const float d = std::fabs(curve.point(i).x - x);
-         if (d < distance) {
-            distance = d;
-            best = i;
-         }
-      }
-      return best;
-   }
-
-   template <typename F> void forEditedBands(F apply) {
-      if (mEditAllBands.load()) {
-         for (int b = 0; b < kNumBands; ++b)
-            apply(b);
-      } else {
-         apply(mCurveBand.load());
-      }
-   }
-
-   static uint32_t onParamForModule(int module) {
-      switch (module) {
-      case kModuleVolume:
-         return kParamVolOn;
-      case kModuleFilter:
-         return kParamFltOn;
-      case kModuleDrive:
-         return kParamDrvOn;
-      case kModuleTime:
-         return kParamTimOn;
-      case kModuleCrush:
-         return kParamCrsOn;
-      case kModulePan:
-         return kParamPanOn;
-      case kModuleWidth:
-         return kParamWidOn;
-      default:
-         return kParamVolOn;
-      }
-   }
-
-   // Drawing a shape into a stage that is switched off is a request to hear
-   // it. It also switches on the bands being edited, so a shape drawn on the
-   // low band while the low band is bypassed is not silent for a reason the
-   // drawing gives no clue about.
-   void ensureStageForEdit(int module) {
-      const uint32_t on = onParamForModule(module);
-      if (!switched(on))
-         guiSetParam(on, 1.0);
-      forEditedBands([&](int b) {
-         const uint32_t bandOn = kParamBandLow + b;
-         if (!switched(bandOn))
-            guiSetParam(bandOn, 1.0);
-      });
+   // The shapes, the chain or the editor's view changed, from wherever: the
+   // web editor gets them again with its next poll.
+   void curvesShown() {
+#if SHAPEAU_WEBVIEW
+      if (++mWebCurveSerial == 0)
+         mWebCurveSerial = 1;
+#endif
    }
 
    // ----------------------------------------------------------- gui extension
@@ -1412,6 +1131,312 @@ private:
    }
 #endif // SHAPEAU_WITH_GUI
 
+#if SHAPEAU_WEBVIEW
+   // ------------------------------------------------------------ the webview
+   //
+   // The window is the host's webview showing the bundle's page; sizes are
+   // logical pixels (no set_scale with the webview API). The page zooms the
+   // editor to whatever size it gets, keeping its proportions.
+
+   static constexpr double kWebMinScale = 0.5;
+   static constexpr double kWebMaxScale = 4.0;
+
+   static bool guiIsApiSupported(const clap_plugin_t *, const char *api, bool isFloating) {
+      return !isFloating && api && std::strcmp(api, CLAP_WINDOW_API_WEBVIEW) == 0;
+   }
+   static bool guiGetPreferredApi(const clap_plugin_t *, const char **api, bool *isFloating) {
+      *api = CLAP_WINDOW_API_WEBVIEW;
+      *isFloating = false;
+      return true;
+   }
+   static bool guiCreate(const clap_plugin_t *p, const char *api, bool isFloating) {
+      return guiIsApiSupported(p, api, isFloating);
+   }
+   static void guiDestroy(const clap_plugin_t *) {}
+   static bool guiSetScale(const clap_plugin_t *, double) { return false; }
+   static bool guiGetSize(const clap_plugin_t *p, uint32_t *width, uint32_t *height) {
+      *width = self(p)->mWebW;
+      *height = self(p)->mWebH;
+      return true;
+   }
+   static bool guiCanResize(const clap_plugin_t *) { return true; }
+   static bool guiGetResizeHints(const clap_plugin_t *, clap_gui_resize_hints_t *hints) {
+      hints->can_resize_horizontally = true;
+      hints->can_resize_vertically = true;
+      hints->preserve_aspect_ratio = true;
+      hints->aspect_ratio_width = web::kDesignW;
+      hints->aspect_ratio_height = web::kDesignH;
+      return true;
+   }
+   static bool guiAdjustSize(const clap_plugin_t *, uint32_t *width, uint32_t *height) {
+      const double s = std::clamp(std::min(*width / static_cast<double>(web::kDesignW),
+                                           *height / static_cast<double>(web::kDesignH)),
+                                  kWebMinScale, kWebMaxScale);
+      *width = static_cast<uint32_t>(web::kDesignW * s + 0.5);
+      *height = static_cast<uint32_t>(web::kDesignH * s + 0.5);
+      return true;
+   }
+   static bool guiSetSize(const clap_plugin_t *p, uint32_t width, uint32_t height) {
+      self(p)->mWebW = width;
+      self(p)->mWebH = height;
+      return true;
+   }
+   static bool guiSetParent(const clap_plugin_t *, const clap_window_t *) { return true; }
+   static bool guiSetTransient(const clap_plugin_t *, const clap_window_t *) { return false; }
+   static void guiSuggestTitle(const clap_plugin_t *, const char *) {}
+   static bool guiShow(const clap_plugin_t *) { return true; }
+   static bool guiHide(const clap_plugin_t *) { return true; }
+
+   static int32_t webviewGetUri(const clap_plugin_t *, char *uri, uint32_t capacity) {
+      static const char page[] = "/index.html";
+      if (uri && capacity > 0)
+         std::snprintf(uri, capacity, "%s", page);
+      return static_cast<int32_t>(sizeof(page));
+   }
+   // The host serves the bundle's files (index.html, ui.wasm, fonts) itself.
+   static bool webviewGetResource(const clap_plugin_t *, const char *, char *, uint32_t,
+                                  const clap_ostream_t *) {
+      return false;
+   }
+   static bool webviewReceive(const clap_plugin_t *p, const void *data, uint32_t size) {
+      return self(p)->webReceive(static_cast<const uint8_t *>(data), size);
+   }
+
+   const clap_host_webview_t *hostWebview() {
+      if (!mHostWebview && mHost)
+         mHostWebview = static_cast<const clap_host_webview_t *>(
+            mHost->get_extension(mHost, CLAP_EXT_WEBVIEW));
+      return mHostWebview;
+   }
+
+   // The end of one edit in the page: one undo step in a host that takes a
+   // state save as one, for everything the page changed since the last.
+   void webCommit() {
+      if (!mWebPending)
+         return;
+      mWebPending = false;
+      if (!mHost)
+         return;
+      auto *state =
+         static_cast<const clap_host_state_t *>(mHost->get_extension(mHost, CLAP_EXT_STATE));
+      if (state && state->mark_dirty)
+         state->mark_dirty(mHost);
+   }
+
+   // The scope while a page polls: switched on by a poll, off again once none
+   // has come for a second of audio.
+   void webScopeAlive(uint32_t frames) {
+      if (!mGuiOpen.load(std::memory_order_relaxed))
+         return;
+      mWebSilence += frames;
+      if (mWebSilence > static_cast<uint64_t>(mSampleRate)) {
+         mGuiOpen.store(false);
+         updateScopeTarget();
+      }
+   }
+
+   bool webReceive(const uint8_t *data, uint32_t size) {
+      if (!data || size < 4)
+         return false;
+      web::Reader in{data, size};
+      in.pos = 4;
+      switch (data[0]) {
+      case web::PagePoll: {
+         const uint32_t valueSerial = in.u32();
+         const uint32_t curveSerial = in.u32();
+         const uint32_t scopeGen = in.u32();
+         const uint32_t editCount = in.u32();
+         if (!in.ok)
+            return false;
+         mWebSilence = 0;
+         if (!mGuiOpen.load()) {
+            mGuiOpen.store(true);
+            updateScopeTarget();
+         }
+         webSendStatus(valueSerial, curveSerial, scopeGen, editCount);
+         return true;
+      }
+      case web::PageBegin:
+      case web::PageSet:
+      case web::PageEnd: {
+         const uint32_t id = in.u32();
+         const double value = data[0] == web::PageSet ? in.f64() : 0.0;
+         if (!in.ok || id >= kNumParams)
+            return false;
+         if (data[0] == web::PageBegin) {
+            guiBeginEdit(id);
+         } else if (data[0] == web::PageSet) {
+            guiSetParam(id, value);
+            mWebPending = true;
+         } else {
+            guiEndEdit(id);
+            webCommit();
+         }
+         return true;
+      }
+      case web::PageCurves: {
+         // Read into a copy, so a malformed message changes nothing.
+         mWebScratch = mCurves;
+         for (int i = 0; i < data[1]; ++i)
+            if (!web::getCurve(in, mWebScratch) || !in.ok)
+               return false;
+         std::memcpy(mCurves.curve, mWebScratch.curve, sizeof(mCurves.curve));
+         curveChanged();
+         mWebPending = true;
+         return true;
+      }
+      case web::PageChain: {
+         mWebScratch = mCurves;
+         web::getChain(in, mWebScratch);
+         if (!in.ok)
+            return false;
+         std::memcpy(mCurves.chain, mWebScratch.chain, sizeof(mCurves.chain));
+         mCurves.chainCount = mWebScratch.chainCount;
+         curveChanged();
+         mWebPending = true;
+         return true;
+      }
+      case web::PageView:
+         mCurveModule.store(std::clamp<int>(data[1], 0, kNumModules - 1));
+         mCurveBand.store(std::clamp<int>(data[2], 0, kNumBands - 1));
+         mEditAllBands.store((data[3] & web::kViewAllBands) != 0);
+         mSnap.store((data[3] & web::kViewSnap) != 0);
+         mStepMode.store((data[3] & web::kViewStepMode) != 0);
+         modelViewChanged();
+         return true;
+      case web::PagePreset: {
+         const uint32_t length = in.u32();
+         if (!in.need(length))
+            return false;
+         PresetData preset;
+         std::string error;
+         if (!parsePreset(reinterpret_cast<const char *>(data + in.pos), length, preset,
+                          mWebScratch, error))
+            return false;
+         applyPreset(preset, mWebScratch);
+         mPresetEdited.store(false);
+         mWebPending = true;
+         webCommit();
+         return true;
+      }
+      case web::PageCommit:
+         webCommit();
+         return true;
+      case web::PageResize: {
+         uint32_t w = in.u32(), h = in.u32();
+         if (!in.ok || !w || !h)
+            return false;
+         guiAdjustSize(&mPlugin, &w, &h);
+         auto *gui =
+            mHost ? static_cast<const clap_host_gui_t *>(mHost->get_extension(mHost, CLAP_EXT_GUI))
+                  : nullptr;
+         if (gui && gui->request_resize && gui->request_resize(mHost, w, h)) {
+            mWebW = w;
+            mWebH = h;
+         }
+         return true;
+      }
+      default:
+         return false;
+      }
+   }
+
+   // Bins that changed since the last poll get a new generation; a page is
+   // sent the bins newer than the generation it has seen, as runs.
+   void webScopeScan() {
+      const Scope &scope = mEngine.scope();
+      bool changed = false;
+      for (int k = 0; k < Scope::kBins; ++k) {
+         const int16_t v[web::kScopeFields] = {
+            web::scopeEncode(scope.inLo[k].load(std::memory_order_relaxed), false),
+            web::scopeEncode(scope.inHi[k].load(std::memory_order_relaxed), false),
+            web::scopeEncode(scope.outLo[k].load(std::memory_order_relaxed), false),
+            web::scopeEncode(scope.outHi[k].load(std::memory_order_relaxed), false),
+            web::scopeEncode(scope.sideLo[k].load(std::memory_order_relaxed), false),
+            web::scopeEncode(scope.sideHi[k].load(std::memory_order_relaxed), false),
+            web::scopeEncode(scope.trace[k].load(std::memory_order_relaxed), true)};
+         if (std::memcmp(v, mScopeShadow[k], sizeof(v)) != 0) {
+            std::memcpy(mScopeShadow[k], v, sizeof(v));
+            mScopeStamp[k] = mScopeGen + 1;
+            changed = true;
+         }
+      }
+      if (changed)
+         ++mScopeGen;
+   }
+
+   void webSendStatus(uint32_t pageValues, uint32_t pageCurves, uint32_t pageScope,
+                      uint32_t editCount) {
+      const clap_host_webview_t *webview = hostWebview();
+      if (!webview)
+         return;
+      bool changed = mWebSent.size() != kNumParams;
+      for (uint32_t i = 0; i < kNumParams && !changed; ++i)
+         changed = mWebSent[i] != rawValue(i);
+      if (changed) {
+         mWebSent.resize(kNumParams);
+         for (uint32_t i = 0; i < kNumParams; ++i)
+            mWebSent[i] = rawValue(i);
+         if (++mWebValueSerial == 0)
+            mWebValueSerial = 1;
+      }
+      const bool withValues = pageValues != mWebValueSerial;
+      const bool withCurves = pageCurves != mWebCurveSerial;
+      webScopeScan();
+      if (pageScope > mScopeGen)
+         pageScope = 0; // a page that saw an earlier instance
+
+      const Scope &scope = mEngine.scope();
+      std::vector<uint8_t> &m = mWebOut;
+      m.clear();
+      web::put8(m, web::PluginStatus);
+      web::put8(m, static_cast<uint8_t>((withValues ? web::kStatusValues : 0) |
+                                        (withCurves ? web::kStatusCurves : 0)));
+      web::put16(m, static_cast<uint16_t>(kNumParams));
+      web::put32(m, mWebValueSerial);
+      web::put32(m, mWebCurveSerial);
+      web::put32(m, editCount);
+      web::put32(m, mScopeGen);
+      web::put32(m, scope.blocks.load(std::memory_order_relaxed));
+      web::put32(m, scope.triggers.load(std::memory_order_relaxed));
+      web::putF32(m, scope.playhead.load(std::memory_order_relaxed));
+      web::put32(m, 0); // the run count, filled in below
+      if (withValues)
+         for (uint32_t i = 0; i < kNumParams; ++i)
+            web::putF64(m, mWebSent[i]);
+      if (withCurves) {
+         web::put8(m, static_cast<uint8_t>(mCurveModule.load()));
+         web::put8(m, static_cast<uint8_t>(mCurveBand.load()));
+         web::put8(m, static_cast<uint8_t>((mEditAllBands.load() ? web::kViewAllBands : 0) |
+                                           (mSnap.load() ? web::kViewSnap : 0) |
+                                           (mStepMode.load() ? web::kViewStepMode : 0)));
+         web::putChain(m, mCurves);
+         for (int mod = 0; mod < kNumModules; ++mod)
+            for (int b = 0; b < kNumBands; ++b)
+               web::putCurve(m, mod, b, mCurves.curve[mod][b]);
+      }
+      uint32_t runs = 0;
+      for (int k = 0; k < Scope::kBins;) {
+         if (mScopeStamp[k] <= pageScope) {
+            ++k;
+            continue;
+         }
+         int end = k;
+         while (end < Scope::kBins && mScopeStamp[end] > pageScope)
+            ++end;
+         web::put16(m, static_cast<uint16_t>(k));
+         web::put16(m, static_cast<uint16_t>(end - k));
+         for (int j = k; j < end; ++j)
+            for (int f = 0; f < web::kScopeFields; ++f)
+               web::put16(m, static_cast<uint16_t>(mScopeShadow[j][f]));
+         ++runs;
+         k = end;
+      }
+      web::at32(m, 32, runs);
+      webview->send(mHost, m.data(), static_cast<uint32_t>(m.size()));
+   }
+#endif // SHAPEAU_WEBVIEW
+
    // --------------------------------------------------------------- extensions
 
    const void *getExtension(const char *id) const {
@@ -1423,13 +1448,23 @@ private:
       static const clap_plugin_state_t kStateExt = {stateSave, stateLoad};
       static const clap_plugin_tail_t kTailExt = {tailGet};
       static const clap_plugin_preset_load_t kPresetLoadExt = {presetLoadFromLocation};
-#ifdef SHAPEAU_WITH_GUI
+#if defined(SHAPEAU_WITH_GUI) || SHAPEAU_WEBVIEW
       static const clap_plugin_gui_t kGuiExt = {
          guiIsApiSupported, guiGetPreferredApi, guiCreate,    guiDestroy,
          guiSetScale,       guiGetSize,         guiCanResize, guiGetResizeHints,
          guiAdjustSize,     guiSetSize,         guiSetParent, guiSetTransient,
          guiSuggestTitle,   guiShow,            guiHide};
+#endif
+#ifdef SHAPEAU_WITH_GUI
       static const clap_plugin_timer_support_t kTimerExt = {guiOnTimer};
+#endif
+#if SHAPEAU_WEBVIEW
+      static const clap_plugin_webview_t kWebviewExt = {webviewGetUri, webviewGetResource,
+                                                        webviewReceive};
+      if (std::strcmp(id, CLAP_EXT_GUI) == 0)
+         return &kGuiExt;
+      if (std::strcmp(id, CLAP_EXT_WEBVIEW) == 0)
+         return &kWebviewExt;
 #endif
       if (std::strcmp(id, CLAP_EXT_PARAMS) == 0)
          return &kParamsExt;
@@ -1464,18 +1499,10 @@ private:
    std::atomic<double> mValues[kNumParams];
    std::atomic<bool> mParamsDirty{true};
 
-   CurveSet mCurves;
-   std::atomic<int> mCurveModule{0};
-   std::atomic<int> mCurveBand{1};
-   // All three bands are edited by default: a shape on the mid band alone is
-   // only heard by the mid band, which is not what drawing a volume stutter
-   // across the graph looks like it should do.
-   std::atomic<bool> mEditAllBands{true};
-   std::atomic<bool> mStepMode{false};
+   // The shapes, the chain and the editor's view are CurveModel's members.
    // Whether a window is showing, which is the only time the scope is worth
    // the audio thread's time.
    std::atomic<bool> mGuiOpen{false};
-   std::atomic<bool> mSnap{true};
 
    Engine mEngine;
 
@@ -1491,6 +1518,22 @@ private:
    int mCurrentPreset = -1;
    bool mPresetsScanned = false;
    std::vector<GuiPreset> mPresets;
+
+#if SHAPEAU_WEBVIEW
+   const clap_host_webview_t *mHostWebview = nullptr;
+   uint32_t mWebW = web::kDesignW, mWebH = web::kDesignH;
+   std::vector<double> mWebSent;
+   uint32_t mWebValueSerial = 0;
+   uint32_t mWebCurveSerial = 1;
+   bool mWebPending = false;  // the page changed something since its last commit
+   uint64_t mWebSilence = 0;  // samples since the page last polled
+   // The scope as last sent, encoded, and the generation each bin changed in.
+   int16_t mScopeShadow[Scope::kBins][web::kScopeFields] = {};
+   uint32_t mScopeStamp[Scope::kBins] = {};
+   uint32_t mScopeGen = 0;
+   std::vector<uint8_t> mWebOut;
+   CurveSet mWebScratch; // what a message is read into, off wasm's small stack
+#endif
 
 #ifdef SHAPEAU_WITH_GUI
    Gui *mGui = nullptr;

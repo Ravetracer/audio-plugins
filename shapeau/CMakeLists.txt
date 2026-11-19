@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.16)
-project(Shapeau VERSION 0.4.0 LANGUAGES CXX)
+project(Shapeau VERSION 0.5.0 LANGUAGES CXX)
 
 # Shapeau builds as a CLAP and as a VST3, for Linux and for Windows.
 #
@@ -17,7 +17,12 @@ if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
    set(CMAKE_BUILD_TYPE Release CACHE STRING "Build type" FORCE)
 endif()
 
-if(NOT CMAKE_SYSTEM_NAME STREQUAL "Linux" AND NOT CMAKE_SYSTEM_NAME STREQUAL "Windows")
+# WASI is the WCLAP build: the plugin compiled to WebAssembly for browser hosts
+# (openDAW), with its editor as a second module for the page. See
+# cmake/wclap.cmake.
+if(CMAKE_SYSTEM_NAME STREQUAL "WASI")
+   set(SHAPEAU_WASM ON)
+elseif(NOT CMAKE_SYSTEM_NAME STREQUAL "Linux" AND NOT CMAKE_SYSTEM_NAME STREQUAL "Windows")
    message(FATAL_ERROR
       "Shapeau builds for Linux and for Windows. Nothing in it is specific to either "
       "beyond the window, which has a backend for both -- but it has never been built "
@@ -80,6 +85,11 @@ add_custom_command(
 )
 add_custom_target(shapeau_presets DEPENDS "${SHAPEAU_GENERATED_HEADER}")
 
+if(SHAPEAU_WASM)
+   include(cmake/wclap.cmake)
+   return()
+endif()
+
 # ------------------------------------------------------------------- gui deps
 set(SHAPEAU_GUI_SOURCES "")
 if(SHAPEAU_BUILD_GUI AND CMAKE_SYSTEM_NAME STREQUAL "Windows")
@@ -130,7 +140,9 @@ add_library(Shapeau-impl STATIC
    src/plugin.cpp
    src/preset_provider.cpp
    src/preset.cpp
+   src/presetlibrary.cpp
    src/params.cpp
+   src/gui/curvemodel.cpp
    src/dsp/curve.cpp
    src/dsp/engine.cpp
    ${SHAPEAU_GUI_SOURCES}

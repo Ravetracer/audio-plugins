@@ -83,6 +83,12 @@ public:
    std::string format() const;
    bool parse(const std::string &text);
 
+   // The same curve from its points, exactly: what the WCLAP's editor and
+   // plugin hand each other (web/protocol.h), where the text form's four
+   // decimals would move a point a little on every round trip. Refused, as in
+   // parse(), when the points could not be a curve.
+   bool assign(const CurvePoint *points, int count);
+
 private:
    void sortMiddle();
    void removeRange(float lo, float hi);

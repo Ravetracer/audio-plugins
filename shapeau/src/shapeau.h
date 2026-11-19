@@ -21,7 +21,7 @@ constexpr char kPluginName[] = "Shapeau";
 // a path, even when the two happen to agree today.
 constexpr char kPluginDirName[] = "Shapeau";
 constexpr char kPluginVendor[] = "Ravetracer";
-constexpr char kPluginVersion[] = "0.4.0";
+constexpr char kPluginVersion[] = "0.5.0";
 
 // Nothing else keeps the two version sites in step, and drift here is quiet.
 // The build fails if the version here and the one in CMakeLists.txt disagree.

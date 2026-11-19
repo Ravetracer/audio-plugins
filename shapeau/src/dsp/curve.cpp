@@ -293,6 +293,28 @@ bool Curve::parse(const std::string &text) {
    return true;
 }
 
+bool Curve::assign(const CurvePoint *points, int count) {
+   if (count < 2 || count > kMaxCurvePoints)
+      return false;
+   Curve assigned;
+   assigned.mCount = 0;
+   for (int i = 0; i < count; ++i) {
+      CurvePoint p = points[i];
+      if (!(p.x >= 0.0f && p.x <= 1.0f && p.y >= 0.0f && p.y <= 1.0f))
+         return false;
+      p.weight = p.weight > 2 ? 2 : p.weight;
+      p.bend = p.bend < -1.0f ? -1.0f : (p.bend > 1.0f ? 1.0f : p.bend);
+      if (!(p.bend == p.bend))
+         p.bend = 0.0f;
+      assigned.mPoints[assigned.mCount++] = p;
+   }
+   assigned.sortMiddle();
+   assigned.mPoints[0].x = 0.0f;
+   assigned.mPoints[assigned.mCount - 1].x = 1.0f;
+   *this = assigned;
+   return true;
+}
+
 float neutralValue(int module) {
    // Pan's middle is the centre and width's middle is the plain image; every
    // other module does nothing at the top of its travel.

@@ -1,7 +1,7 @@
 # Shapeau — status
 
-Version 0.4.0. Linux and Windows, CLAP and VST3. 83 parameters, 10 factory
-presets.
+Version 0.5.0. Linux and Windows, CLAP and VST3, and a WCLAP for browser hosts
+(openDAW). 83 parameters, 10 factory presets.
 
 Builds clean on Linux and cross-built for Windows in the repository's build
 container (`./devbox.sh`). `shapeau-render --selftest` passes all 58 checks on
@@ -12,6 +12,58 @@ nothing has been listened to -- the user tests on another machine.
 `docs/PLAN.md` is the plan: four phases towards the shape-based effects rack it
 is modelled on. Phase 1 was 0.3.0; 0.4.0 pulls the triggers forward from
 phase 3.
+
+## 0.5.0 -- the WCLAP
+
+- **A WebAssembly build for browser hosts**, openDAW first, with the whole
+  editor: the shape editor, the chain, the scope behind the shape, the
+  triggers and End markers, the panels and the preset browser, drawn by the
+  same window code as on the desktop. `cmake/wclap.cmake` builds it with
+  wasi-sdk (`-DCMAKE_TOOLCHAIN_FILE=<wasi-sdk>/share/cmake/wasi-sdk-p1.cmake`)
+  into `build-wasm/shapeau.wclap.tar.gz`: `module.wasm` (the plugin, WASI
+  imports only), `ui.wasm` (the editor), the page and Noto Sans (OFL), the
+  face the desktop draws "sans-serif" with.
+- **Two modules.** openDAW runs the plugin, the page's messages included, in
+  its audio worklet, where nothing can be drawn; so the editor runs in the
+  page and reaches the plugin only through clap.webview messages
+  (`src/web/protocol.h`). The page polls at 30 Hz and the plugin answers: the
+  parameter values when they changed, the shapes, chain and view when they
+  changed (both by serial), and the scope bins that changed since the page's
+  last answer, sixteen bits a value. A quiet answer is 36 bytes; a whole scope
+  is 6.8 KB, once; a 1/4 cycle playing is about 25 bins (400 bytes) per poll.
+  Edits go the other way as messages: parameter gestures, the shapes that
+  changed (exact floats, not the text form), the chain, the view, a preset's
+  text. An answer written before the page's latest edit reached the plugin is
+  recognised by the edit count it echoes and is not applied, so nothing jumps
+  back during a drag.
+- **One undo step per gesture.** The plugin calls `mark_dirty` at the end of a
+  parameter gesture, and for a shape drag, a chain edit or a preset at the
+  page's commit after the pointer is released -- once, however many points
+  moved.
+- **The editing rules are shared.** What an edit in the shape editor does --
+  ALL bands, switching a stage on, the chain edits -- moved from the plugin
+  into `CurveModel` (`src/gui/curvemodel.*`), which the plugin and the web
+  editor's stand-in both are. The preset library scan moved into
+  `src/presetlibrary.*` for the same reason. Native renders of every preset
+  at 48 and 44.1 kHz are bit-identical to 0.4.0's, the native window is
+  pixel-identical outside the version label and the live scope, and
+  `shapeau-render --selftest` passes all 58 checks.
+- **Verified:** `shapeau-wclap-selftest.wasm` (node, through `clap_entry`):
+  the page protocol including a shape edit and a chain edit reaching the
+  audio, the scope, a preset from the page and a state round trip of
+  parameters, shapes, chain and view, 42 checks. The editor offscreen
+  (`wclap-ui-snapshot.mjs`) against the native window: the same picture, the
+  only differences in text antialiasing. In a headless browser in
+  open-webclap's test host: a preset loads and reaches the DSP, a knob drag
+  and a shape point drag reach the DSP, the scope shows a saw fed into the
+  input, and a state save and load restores the parameters and the shape.
+  Every factory preset costs 16-46 us per 128-frame block in node (a block is
+  2667 us); `-msimd128` measured no different from scalar and stays on.
+- **Not done:** openDAW's device panel (176 px) and `clap.param-hovered`. The
+  editor keeps the desktop's gestures -- double-click and right-click reset a
+  knob, the wheel steps one -- which openDAW would otherwise claim for its own
+  menu and value entry. User presets are kept in the browser's storage for the
+  page, not in the project.
 
 ## 0.4.0 -- triggers and the sidechain
 
@@ -175,6 +227,9 @@ deliberate: the filter drive in front of it is meant to be able to excite it.
 
 ## What is not verified
 
+- **openDAW has not loaded the WCLAP.** It has run in node and in
+  open-webclap's test host (a headless browser), which runs the module in an
+  audio worklet as openDAW does but is not openDAW.
 - **No DAW has routed a sidechain or MIDI into it.** The sidechain is a
   second CLAP input port and the VST3 build maps it to an aux bus through the
   clap-wrapper; both are exercised only by the self-test and the GUI host.
